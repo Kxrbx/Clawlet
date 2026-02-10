@@ -186,18 +186,81 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
 def dashboard(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to run on"),
+    frontend_port: int = typer.Option(5173, "--frontend-port", "-f", help="Frontend dev server port"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser automatically"),
 ):
-    """Start the Clawlet dashboard."""
+    """Start the Clawlet dashboard.
+    
+    Starts both the API server and shows the dashboard URL.
+    The React frontend needs to be started separately with: cd dashboard && npm run dev
+    """
     workspace_path = workspace or get_workspace_path()
     
+    api_url = f"http://localhost:{port}"
+    frontend_url = f"http://localhost:{frontend_port}"
+    
     console.print(Panel.fit(
-        f"🦞 [bold cyan]Starting Clawlet Dashboard[/bold cyan]\n"
-        f"Workspace: [dim]{workspace_path}[/dim]\n"
-        f"Port: [dim]{port}[/dim]"
+        f"🦞 [bold cyan]Clawlet Dashboard[/bold cyan]\n"
+        f"API: [link={api_url}]{api_url}[/link]\n"
+        f"Frontend: [link={frontend_url}]{frontend_url}[/link]"
     ))
     
-    console.print("[yellow]Dashboard coming soon![/yellow]")
-    console.print("For now, use 'clawlet agent' to run your agent.")
+    console.print()
+    console.print("[bold]Dashboard URLs:[/bold]")
+    console.print(f"  API Server:    [cyan][link={api_url}]{api_url}[/link][/cyan]")
+    console.print(f"  Frontend:      [cyan][link={frontend_url}]{frontend_url}[/link][/cyan]")
+    console.print(f"  API Docs:      [cyan][link={api_url}/docs]{api_url}/docs[/link][/cyan]")
+    console.print()
+    
+    # Check if frontend is built
+    dashboard_dir = Path(__file__).parent.parent.parent / "dashboard"
+    if dashboard_dir.exists():
+        console.print(f"[dim]Dashboard directory: {dashboard_dir}[/dim]")
+        
+        # Check for node_modules
+        if not (dashboard_dir / "node_modules").exists():
+            console.print()
+            console.print("[yellow]Frontend not installed. Run:[/yellow]")
+            console.print(f"  [cyan]cd {dashboard_dir} && npm install[/cyan]")
+            console.print()
+    else:
+        console.print("[yellow]Dashboard directory not found.[/yellow]")
+    
+    console.print()
+    console.print("[bold]To start the frontend (in a new terminal):[/bold]")
+    console.print(f"  [cyan]cd dashboard && npm run dev[/cyan]")
+    console.print()
+    
+    # Open browser if requested
+    if open_browser:
+        import webbrowser
+        console.print(f"[dim]Opening browser...[/dim]")
+        webbrowser.open(frontend_url)
+    
+    # Start the API server
+    console.print(Panel(
+        f"[bold green]Starting API server on port {port}...[/bold green]\n"
+        f"[dim]Press Ctrl+C to stop[/dim]",
+        style="green",
+    ))
+    console.print()
+    
+    try:
+        import uvicorn
+        from clawlet.dashboard.api import app
+        
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    except ImportError:
+        console.print("[red]Error: Dashboard dependencies not installed.[/red]")
+        console.print()
+        console.print("Install with:")
+        console.print("  [cyan]pip install -e '.[dashboard]'[/cyan]")
+        console.print()
+        console.print("Or:")
+        console.print("  [cyan]pip install fastapi uvicorn[/cyan]")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Dashboard stopped.[/yellow]")
 
 
 @app.command()
