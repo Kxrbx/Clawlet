@@ -11,16 +11,42 @@ from clawlet.agent.memory import MemoryManager
 from clawlet.config import Config, load_config
 from clawlet.health import HealthChecker, quick_health_check
 from clawlet.rate_limit import RateLimiter, RateLimit
+from clawlet.exceptions import (
+    ClawletError,
+    ProviderError,
+    ProviderConnectionError,
+    ProviderAuthError,
+    ProviderRateLimitError,
+    StorageError,
+    ChannelError,
+    ConfigError,
+    AgentError,
+)
 
 __all__ = [
+    # Core
     "IdentityLoader",
     "AgentLoop", 
     "MemoryManager",
+    # Config
     "Config",
     "load_config",
+    # Health
     "HealthChecker",
     "quick_health_check",
+    # Rate limiting
     "RateLimiter",
     "RateLimit",
+    # Exceptions
+    "ClawletError",
+    "ProviderError",
+    "ProviderConnectionError",
+    "ProviderAuthError",
+    "ProviderRateLimitError",
+    "StorageError",
+    "ChannelError",
+    "ConfigError",
+    "AgentError",
+    # Meta
     "__version__",
 ]
