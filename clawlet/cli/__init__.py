@@ -46,11 +46,11 @@ def init(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
 ):
-    """Initialize a new Clawlet workspace."""
+    """Initialize a new Clawlet workspace (quick setup)."""
     workspace_path = workspace or get_workspace_path()
     
     console.print(Panel.fit(
-        "🦞 [bold cyan]Clawlet Setup[/bold cyan]",
+        "🦞 [bold cyan]Clawlet Quick Setup[/bold cyan]",
         subtitle="Creating your workspace..."
     ))
     
@@ -91,6 +91,20 @@ def init(
         f"  4. Run [cyan]clawlet agent[/cyan] to start!",
         title="🎉 Done",
     ))
+
+
+@app.command()
+def onboard():
+    """Interactive onboarding with guided setup (recommended for first-time users)."""
+    try:
+        from clawlet.cli.onboard import run_onboarding
+        asyncio.run(run_onboarding())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Setup cancelled.[/yellow]")
+    except ImportError as e:
+        console.print(f"[red]Error loading onboarding: {e}[/red]")
+        console.print("[yellow]Try running 'pip install questionary' first.[/yellow]")
+        raise typer.Exit(1)
 
 
 @app.command()
