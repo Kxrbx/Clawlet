@@ -51,6 +51,10 @@ class AgentLoop:
     5. Sends responses back
     """
     
+    # History limits
+    MAX_HISTORY = 100  # Maximum messages to keep
+    CONTEXT_WINDOW = 20  # Messages to include in LLM context
+    
     def __init__(
         self,
         bus: "MessageBus",
@@ -130,6 +134,9 @@ class AgentLoop:
         
         # Add to history
         self._history.append(Message(role="user", content=user_message))
+        
+        # Trim history periodically
+        self._trim_history()
         
         # Iterative tool calling loop
         iteration = 0
@@ -261,12 +268,28 @@ class AgentLoop:
         system_prompt = self.identity.build_system_prompt(tools=tools_list)
         messages.append({"role": "system", "content": system_prompt})
         
-        # Add recent history
-        recent = self._history[-20:]  # Last 20 messages
+        # Add recent history (limited by CONTEXT_WINDOW)
+        recent = self._history[-self.CONTEXT_WINDOW:]
         for msg in recent:
             messages.append(msg.to_dict())
         
         return messages
+    
+    def _trim_history(self) -> None:
+        """Trim history to prevent unbounded growth."""
+        if len(self._history) > self.MAX_HISTORY:
+            # Keep the most recent messages
+            self._history = self._history[-self.MAX_HISTORY:]
+            logger.debug(f"Trimmed history to {len(self._history)} messages")
+    
+    def clear_history(self) -> None:
+        """Clear all history."""
+        self._history.clear()
+        logger.info("Agent history cleared")
+    
+    def get_history_length(self) -> int:
+        """Get current history length."""
+        return len(self._history)
     
     async def close(self):
         """Clean up resources."""

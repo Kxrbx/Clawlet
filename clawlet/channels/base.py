@@ -2,8 +2,11 @@
 Base channel interface.
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional
+
+from loguru import logger
 
 from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
 
@@ -45,6 +48,10 @@ class BaseChannel(ABC):
         """Send a message to the platform."""
         pass
     
+    async def _publish_inbound(self, msg: InboundMessage) -> None:
+        """Publish an inbound message to the bus."""
+        await self.bus.publish_inbound(msg)
+    
     async def _run_outbound_loop(self) -> None:
         """Consume outbound messages and send them."""
         while self._running:
@@ -63,7 +70,3 @@ class BaseChannel(ABC):
             except Exception as e:
                 logger.error(f"Error in outbound loop for {self.name}: {e}")
                 await asyncio.sleep(1)
-
-
-import asyncio
-from loguru import logger

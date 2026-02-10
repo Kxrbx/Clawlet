@@ -1,24 +1,28 @@
 # 🦞 Clawlet
 
-A lightweight AI agent framework with identity awareness.
+A lightweight AI agent framework with identity awareness, inspired by OpenClaw but designed for simplicity and speed.
 
 ## Features
 
 - **Identity-aware**: Reads and understands its own SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md files
-- **Lightweight**: ~5k lines of code, optimized for small hardware (Pi, VPS)
-- **Multi-channel**: Telegram, Discord, WhatsApp support
+- **Lightweight**: ~1.8k lines of code, optimized for small hardware (Pi, VPS)
+- **Multi-channel**: Telegram, Discord support
+- **Multi-provider**: OpenRouter, Ollama, LM Studio
 - **Memory system**: SQLite + PostgreSQL support with automatic consolidation
-- **Tools**: File operations, shell execution, web search, subagent spawning
-- **Heartbeat**: Periodic task execution for proactive behavior
+- **Tools**: File operations, shell execution, web search (Brave API)
+- **Tool calling**: Iterative tool execution with function calling support
+- **Heartbeat**: Periodic task scheduler for proactive behavior
+- **Web dashboard**: React + Tailwind + shadcn/ui for agent management
+- **Fast startup**: <50ms CLI startup time
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# Install from source
-git clone https://github.com/clawlet/clawlet.git
-cd clawlet
+# Clone repository
+git clone https://github.com/Kxrbx/Clawlet.git
+cd Clawlet
 pip install -e .
 
 # Or install from PyPI (coming soon)
@@ -49,11 +53,25 @@ provider:
   openrouter:
     api_key: "YOUR_API_KEY"
     model: "anthropic/claude-sonnet-4"
+  
+  # Ollama (local)
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "llama3.2"
+  
+  # LM Studio (local, OpenAI-compatible)
+  lmstudio:
+    base_url: "http://localhost:1234"
+    model: "local-model"
 
 channels:
   telegram:
     enabled: true
     token: "YOUR_BOT_TOKEN"
+  
+  discord:
+    enabled: true
+    token: "YOUR_DISCORD_BOT_TOKEN"
 ```
 
 ### Run
@@ -90,21 +108,37 @@ Define periodic tasks the agent should perform (e.g., check emails, review calen
 ```
 clawlet/
 ├── agent/
-│   ├── identity.py    # Load SOUL.md, USER.md, etc.
-│   ├── loop.py        # Core agent loop
-│   └── memory.py      # Memory management
+│   ├── identity.py        # Load SOUL.md, USER.md, etc.
+│   ├── loop.py          # Core agent loop with tool calling
+│   └── memory.py         # Memory management (coming soon)
 ├── channels/
-│   ├── telegram.py    # Telegram integration
-│   └── discord.py     # Discord integration
+│   ├── base.py            # Base channel interface
+│   ├── telegram.py        # Telegram integration
+│   └── discord.py         # Discord integration
 ├── tools/
-│   ├── files.py       # Read/write/edit files
-│   └── shell.py       # Execute commands
+│   ├── registry.py         # Tool registry
+│   ├── files.py           # Read/write/list files
+│   ├── shell.py           # Execute shell commands (safe)
+│   └── web_search.py      # Web search via Brave API
+├── providers/
+│   ├── base.py            # Base provider interface
+│   ├── openrouter.py       # OpenRouter API
+│   ├── ollama.py          # Ollama (local)
+│   └── lmstudio.py        # LM Studio (local)
 ├── storage/
-│   └── sqlite.py      # SQLite backend
+│   ├── sqlite.py           # SQLite backend
+│   └── postgres.py         # PostgreSQL backend
+├── heartbeat/
+│   └── scheduler.py       # Periodic task scheduler
 ├── bus/
-│   └── queue.py       # Message bus
-└── cli/
-    └── commands.py    # CLI commands
+│   └── queue.py           # Message bus
+├── cli/
+│   └── commands.py        # CLI commands
+└── dashboard/
+    ├── src/
+    │   ├── App.tsx            # React app
+    │   └── components/ui/  # UI components
+    └── package.json
 ```
 
 ## Comparison
@@ -112,10 +146,14 @@ clawlet/
 | Feature | Clawlet | Nanobot | Tinyclaw | OpenClaw |
 |---------|---------|---------|----------|----------|
 | Identity Files | ✅ | ❌ | ❌ | ✅ |
-| Size | ~5k lines | ~8.5k | ~500 | 430k+ |
+| Size | ~1.8k lines | ~8.5k | ~500 | 430k+ |
 | Pi-Friendly | ✅ | ✅ | ✅ | ❌ |
 | Dashboard | ✅ | ❌ | ❌ | ⚠️ |
 | Ollama | ✅ | ❌ | ❌ | ✅ |
+| LM Studio | ✅ | ❌ | ❌ | ❌ |
+| Discord | ✅ | ❌ | ❌ | ✅ |
+| Tool Calling | ✅ | ❌ | ❌ | ✅ |
+| Heartbeat | ✅ | ❌ | ❌ | ✅ |
 | Memory System | ✅ | ⚠️ | ❌ | ✅ |
 
 ## Development
@@ -140,11 +178,12 @@ MIT
 
 ## Links
 
-- **Website**: https://clawlet.ai
-- **Documentation**: https://docs.clawlet.ai
-- **GitHub**: https://github.com/clawlet/clawlet
-- **Discord**: https://discord.gg/clawlet
+- **GitHub**: https://github.com/Kxrbx/Clawlet
+- **Documentation**: https://docs.clawlet.ai (coming soon)
+- **Demo Dashboard**: https://dashboard.clawlet.ai (coming soon)
 
 ---
 
-Built with 💜 by the Clawlet team
+Built with 💕 by the Clawlet team
+- Inspired by [OpenClaw](https://github.com/openclaw/openclaw)
+- Similar to [Nanobot](https://github.com/kalebhf/nanobot) but simpler

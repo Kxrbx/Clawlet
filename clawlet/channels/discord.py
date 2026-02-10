@@ -3,7 +3,7 @@ Discord channel integration.
 """
 
 import asyncio
-from typing import Optional, Callable, Any
+from typing import Optional
 
 from loguru import logger
 
@@ -13,10 +13,12 @@ try:
     DISCORD_AVAILABLE = True
 except ImportError:
     DISCORD_AVAILABLE = False
-    logger.warning("discord.py not installed. Discord channel unavailable.")
+    # Create dummy types for type hints
+    discord = None
+    commands = None
 
 from clawlet.channels.base import BaseChannel
-from clawlet.bus.queue import InboundMessage, OutboundMessage
+from clawlet.bus.queue import InboundMessage, OutboundMessage, MessageBus
 
 
 class DiscordChannel(BaseChannel):
@@ -30,37 +32,34 @@ class DiscordChannel(BaseChannel):
     - Slash commands (optional)
     """
     
-    def __init__(
-        self,
-        token: str,
-        command_prefix: str = "!",
-        intents: Optional[discord.Intents] = None,
-    ):
+    def __init__(self, bus: MessageBus, config: dict):
         """
         Initialize Discord channel.
         
         Args:
-            token: Discord bot token
-            command_prefix: Prefix for text commands
-            intents: Discord intents (default: all message intents)
+            bus: Message bus for publishing/consuming
+            config: Configuration dict with 'token' and optional 'command_prefix'
         """
         if not DISCORD_AVAILABLE:
             raise RuntimeError("discord.py not installed. Run: pip install discord.py")
         
-        self.token = token
-        self.command_prefix = command_prefix
+        super().__init__(bus, config)
+        
+        self.token = config.get("token", "")
+        self.command_prefix = config.get("command_prefix", "!")
+        
+        if not self.token:
+            raise ValueError("Discord token is required in config")
         
         # Set up intents
-        if intents is None:
-            intents = discord.Intents.default()
-            intents.message_content = True
-            intents.members = True
-        
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
         self.intents = intents
         
         # Create bot
         self.bot = commands.Bot(
-            command_prefix=command_prefix,
+            command_prefix=self.command_prefix,
             intents=intents,
             description="Clawlet AI Assistant",
         )
@@ -68,10 +67,7 @@ class DiscordChannel(BaseChannel):
         # Set up event handlers
         self._setup_handlers()
         
-        # Message handler
-        self._message_handler: Optional[Callable[[InboundMessage], Any]] = None
-        
-        logger.info(f"DiscordChannel initialized with prefix '{command_prefix}'")
+        logger.info(f"DiscordChannel initialized with prefix '{self.command_prefix}'")
     
     @property
     def name(self) -> str:
@@ -108,23 +104,33 @@ class DiscordChannel(BaseChannel):
             
             logger.info(f"Discord message from {message.author}: {message.content[:50]}...")
             
-            # Call handler if set
-            if self._message_handler:
-                await self._message_handler(inbound)
+            # Publish to message bus (this is the fix!)
+            await self._publish_inbound(inbound)
     
     async def start(self) -> None:
-        """Start the Discord bot."""
-        logger.info("Starting Discord bot...")
-        await self.bot.start(self.token)
+        """Start the Discord bot and outbound loop."""
+        self._running = True
+        
+        # Start outbound loop as background task
+        outbound_task = asyncio.create_task(self._run_outbound_loop())
+        
+        # Start bot (this blocks until stopped)
+        try:
+            logger.info("Starting Discord bot...")
+            await self.bot.start(self.token)
+        finally:
+            self._running = False
+            outbound_task.cancel()
+            try:
+                await outbound_task
+            except asyncio.CancelledError:
+                pass
     
     async def stop(self) -> None:
         """Stop the Discord bot."""
+        self._running = False
         logger.info("Stopping Discord bot...")
         await self.bot.close()
-    
-    def on_message(self, handler: Callable[[InboundMessage], Any]) -> None:
-        """Register message handler."""
-        self._message_handler = handler
     
     async def send(self, msg: OutboundMessage) -> bool:
         """
