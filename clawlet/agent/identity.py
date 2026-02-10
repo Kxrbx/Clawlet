@@ -1,0 +1,159 @@
+"""
+Identity loader for reading SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md files.
+"""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from loguru import logger
+
+
+@dataclass
+class Identity:
+    """Represents the agent's identity loaded from markdown files."""
+    
+    soul: str = ""
+    user: str = ""
+    memory: str = ""
+    heartbeat: str = ""
+    
+    # Parsed metadata
+    agent_name: str = "Clawlet"
+    user_name: str = "Human"
+    timezone: str = "UTC"
+    
+    def build_context(self) -> str:
+        """Build identity context for system prompt."""
+        parts = []
+        
+        if self.soul:
+            parts.append("## Who You Are\n\n" + self.soul)
+        
+        if self.user:
+            parts.append("## Who You Help\n\n" + self.user)
+        
+        if self.memory:
+            parts.append("## Your Memories\n\n" + self.memory)
+        
+        return "\n\n---\n\n".join(parts)
+    
+    def build_heartbeat_context(self) -> str:
+        """Build heartbeat context for periodic tasks."""
+        if self.heartbeat:
+            return f"## Periodic Tasks\n\n{self.heartbeat}"
+        return ""
+
+
+class IdentityLoader:
+    """Loads and manages identity files from the workspace."""
+    
+    def __init__(self, workspace: Path):
+        self.workspace = workspace
+        self._identity: Optional[Identity] = None
+        
+    def load_all(self) -> Identity:
+        """Load all identity files."""
+        identity = Identity()
+        
+        # Load SOUL.md
+        soul_path = self.workspace / "SOUL.md"
+        if soul_path.exists():
+            identity.soul = soul_path.read_text()
+            identity.agent_name = self._extract_name(identity.soul, "Clawlet")
+            logger.info(f"Loaded SOUL.md for {identity.agent_name}")
+        else:
+            logger.warning(f"SOUL.md not found at {soul_path}")
+        
+        # Load USER.md
+        user_path = self.workspace / "USER.md"
+        if user_path.exists():
+            identity.user = user_path.read_text()
+            identity.user_name = self._extract_name(identity.user, "Human")
+            identity.timezone = self._extract_timezone(identity.user)
+            logger.info(f"Loaded USER.md for {identity.user_name}")
+        else:
+            logger.warning(f"USER.md not found at {user_path}")
+        
+        # Load MEMORY.md
+        memory_path = self.workspace / "MEMORY.md"
+        if memory_path.exists():
+            identity.memory = memory_path.read_text()
+            logger.info("Loaded MEMORY.md")
+        else:
+            logger.warning(f"MEMORY.md not found at {memory_path}")
+        
+        # Load HEARTBEAT.md
+        heartbeat_path = self.workspace / "HEARTBEAT.md"
+        if heartbeat_path.exists():
+            identity.heartbeat = heartbeat_path.read_text()
+            logger.info("Loaded HEARTBEAT.md")
+        else:
+            logger.warning(f"HEARTBEAT.md not found at {heartbeat_path}")
+        
+        self._identity = identity
+        return identity
+    
+    def reload(self) -> Identity:
+        """Reload all identity files (hot reload)."""
+        logger.info("Reloading identity files...")
+        return self.load_all()
+    
+    @property
+    def identity(self) -> Identity:
+        """Get loaded identity, loading if necessary."""
+        if self._identity is None:
+            self._identity = self.load_all()
+        return self._identity
+    
+    def _extract_name(self, content: str, default: str) -> str:
+        """Extract name from markdown content."""
+        lines = content.split("\n")
+        for line in lines:
+            line = line.strip()
+            if line.startswith("## Name"):
+                # Look for name in next line
+                idx = lines.index(line) + 1
+                if idx < len(lines):
+                    name_line = lines[idx].strip()
+                    if name_line and not name_line.startswith("#"):
+                        return name_line
+            if line.startswith("## What to call you"):
+                idx = lines.index(line) + 1
+                if idx < len(lines):
+                    name_line = lines[idx].strip()
+                    if name_line and not name_line.startswith("#"):
+                        return name_line
+        return default
+    
+    def _extract_timezone(self, content: str) -> str:
+        """Extract timezone from markdown content."""
+        lines = content.split("\n")
+        for i, line in enumerate(lines):
+            if line.strip().startswith("## Timezone"):
+                if i + 1 < len(lines):
+                    tz = lines[i + 1].strip()
+                    if tz and not tz.startswith("#"):
+                        return tz
+        return "UTC"
+    
+    def build_system_prompt(self) -> str:
+        """Build full system prompt from identity files."""
+        identity = self.identity
+        
+        prompt = f"""# Identity
+
+You are {identity.agent_name}, an AI assistant.
+
+{identity.build_context()}
+
+# Instructions
+
+- Be helpful, honest, and harmless
+- Use the information above to personalize your responses
+- Remember what you learn about {identity.user_name}
+- Stay in character as {identity.agent_name}
+
+Current timezone: {identity.timezone}
+"""
+        return prompt
