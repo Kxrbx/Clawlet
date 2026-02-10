@@ -2,7 +2,10 @@
 Tools module - Agent capabilities.
 
 Available tools:
-- FileTool: Read, write, list files
+- ReadFileTool: Read file contents
+- WriteFileTool: Write file contents
+- EditFileTool: Edit files with search/replace
+- ListDirTool: List directory contents
 - ShellTool: Execute shell commands (safe)
 - WebSearchTool: Search the web via Brave API
 """
@@ -12,14 +15,39 @@ from clawlet.tools.registry import (
     ToolRegistry,
     ToolResult,
 )
-from clawlet.tools.files import FileTool
+from clawlet.tools.files import (
+    ReadFileTool,
+    WriteFileTool,
+    EditFileTool,
+    ListDirTool,
+)
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.web_search import WebSearchTool
+
+# Convenience alias for all file operations
+class FileTool:
+    """Composite tool providing all file operations."""
+    
+    def __init__(self, allowed_dir=None):
+        """Initialize all file tools."""
+        self.read = ReadFileTool(allowed_dir)
+        self.write = WriteFileTool(allowed_dir)
+        self.edit = EditFileTool(allowed_dir)
+        self.list = ListDirTool(allowed_dir)
+    
+    @property
+    def tools(self) -> list:
+        """Get all file tools."""
+        return [self.read, self.write, self.edit, self.list]
 
 __all__ = [
     "BaseTool",
     "ToolRegistry",
     "ToolResult",
+    "ReadFileTool",
+    "WriteFileTool",
+    "EditFileTool",
+    "ListDirTool",
     "FileTool",
     "ShellTool",
     "WebSearchTool",
