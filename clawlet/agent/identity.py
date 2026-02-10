@@ -137,7 +137,7 @@ class IdentityLoader:
                         return tz
         return "UTC"
     
-    def build_system_prompt(self) -> str:
+    def build_system_prompt(self, tools: list = None) -> str:
         """Build full system prompt from identity files."""
         identity = self.identity
         
@@ -156,4 +156,24 @@ You are {identity.agent_name}, an AI assistant.
 
 Current timezone: {identity.timezone}
 """
+        
+        # Add tool documentation if provided
+        if tools:
+            tool_docs = "\n\n# Available Tools\n\n"
+            tool_docs += "You have access to the following tools. Use them by including a tool call in your response:\n\n"
+            tool_docs += "```json\n{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}\n```\n\n"
+            
+            for tool in tools:
+                tool_docs += f"## {tool.name}\n\n{tool.description}\n\n"
+                if tool.parameters_schema:
+                    params = tool.parameters_schema.get("properties", {})
+                    if params:
+                        tool_docs += "**Parameters:**\n"
+                        for param_name, param_info in params.items():
+                            desc = param_info.get("description", "No description")
+                            tool_docs += f"- `{param_name}`: {desc}\n"
+                    tool_docs += "\n"
+            
+            prompt += tool_docs
+        
         return prompt
