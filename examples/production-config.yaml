@@ -1,0 +1,41 @@
+# Production-ready config example
+
+provider:
+  primary: openrouter
+  openrouter:
+    api_key: "${OPENROUTER_API_KEY}"
+    model: "anthropic/claude-sonnet-4"
+    
+  # Fallback to local if API fails
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "llama3.2"
+
+channels:
+  telegram:
+    enabled: true
+    token: "${TELEGRAM_BOT_TOKEN}"
+  
+  discord:
+    enabled: false
+    token: "${DISCORD_BOT_TOKEN}"
+    command_prefix: "!"
+
+storage:
+  backend: postgres
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "clawlet_prod"
+    user: "clawlet"
+    password: "${POSTGRES_PASSWORD}"
+
+agent:
+  max_iterations: 20
+  context_window: 20
+  temperature: 0.7
+
+heartbeat:
+  interval_minutes: 120
+  quiet_hours_start: 2
+  quiet_hours_end: 9

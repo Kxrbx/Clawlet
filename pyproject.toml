@@ -37,6 +37,13 @@ dependencies = [
     "psutil>=5.9.0",
 ]
 
+# Dashboard dependencies
+[project.optional-dependencies]
+dashboard = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
