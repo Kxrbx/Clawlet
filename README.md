@@ -15,7 +15,7 @@ A lightweight AI agent framework with identity awareness. Built as an alternativ
 
 ## Quick Start
 
-### Installation
+### Option 1: Interactive Onboarding (Recommended)
 
 ```bash
 # Clone the repo
@@ -25,22 +25,27 @@ cd Clawlet
 # Install with pip
 pip install -e .
 
-# Or with uv (faster)
-uv pip install -e .
+# Run interactive onboarding
+clawlet onboard
 ```
 
-### Initialize Workspace
+This guides you through:
+- Choosing your AI provider
+- Setting up API keys or local models
+- Configuring messaging channels
+- Customizing your agent's personality
+
+### Option 2: Quick Init
 
 ```bash
-# Create a new workspace with default files
+# Initialize with defaults
 clawlet init
 
-# This creates ~/.clawlet/ with:
-# - SOUL.md (agent personality)
-# - USER.md (your info)
-# - MEMORY.md (long-term memory)
-# - HEARTBEAT.md (periodic tasks)
-# - config.yaml (configuration)
+# Edit config
+~/.clawlet/config.yaml
+
+# Start agent
+clawlet agent
 ```
 
 ### Configure Provider

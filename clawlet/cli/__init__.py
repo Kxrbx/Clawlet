@@ -46,8 +46,18 @@ def init(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
 ):
-    """Initialize a new Clawlet workspace (quick setup)."""
+    """Initialize a new Clawlet workspace (quick setup).
+    
+    For guided setup with all options, use 'clawlet onboard' instead.
+    """
     workspace_path = workspace or get_workspace_path()
+    
+    # If workspace doesn't exist, suggest onboard
+    if not workspace_path.exists():
+        console.print()
+        console.print("[dim]💡 Tip: For a guided setup experience, try:[/dim]")
+        console.print("[cyan]    clawlet onboard[/cyan]")
+        console.print()
     
     console.print(Panel.fit(
         "🦞 [bold cyan]Clawlet Quick Setup[/bold cyan]",
