@@ -7,6 +7,8 @@ import functools
 from typing import Callable, Type, Tuple
 from loguru import logger
 
+from clawlet.exceptions import CircuitBreakerOpen
+
 
 def retry_with_backoff(
     max_retries: int = 3,
@@ -155,8 +157,3 @@ class CircuitBreaker:
         except self.expected_exception as e:
             self.record_failure()
             raise
-
-
-class CircuitBreakerOpen(Exception):
-    """Circuit breaker is open, requests are blocked."""
-    pass

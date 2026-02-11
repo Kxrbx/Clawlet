@@ -168,3 +168,13 @@ class MaxIterationsError(AgentError):
             f"Agent exceeded maximum iterations ({max_iterations})",
             {"max_iterations": max_iterations}
         )
+
+
+# Circuit breaker errors
+
+class CircuitBreakerOpen(ClawletError):
+    """Circuit breaker is open, requests are blocked."""
+    
+    def __init__(self, message: str, retry_after: float = None):
+        details = {"retry_after": retry_after} if retry_after else {}
+        super().__init__(message, details)
