@@ -261,46 +261,15 @@ clawlet/
 | Storage | SQLite + PostgreSQL | SQLite + PostgreSQL | SQLite |
 | Interactive Onboarding | ✅ | ✅ | ❌ |
 
-## 🧪 Development
-
-### Running Tests
-
-```bash
-pytest                           # Run all tests
-pytest --cov=clawlet             # With coverage
-pytest tests/test_shell_security.py  # Specific file
-```
-
-### Code Quality
-
-```bash
-black clawlet tests              # Format
-isort clawlet tests              # Sort imports
-mypy clawlet                     # Type check
-```
-
-### Test Coverage
-
-- **45 Python files**, ~5,200 lines of code
-- **9 test files**, ~1,400 lines of tests
-- **~26% coverage** (focused on critical paths)
-
-## 📚 Documentation
-
-- [QUICKSTART.md](QUICKSTART.md) - Detailed getting started guide
-- [CHANGELOG.md](CHANGELOG.md) - Release history
-- [Examples](examples/) - Config examples and scripts
-
 ## 🤝 Contributing
 
 Contributions welcome!
 
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feature/amazing`)
-3. Add tests for new features
-4. Commit (`git commit -m 'Add amazing feature'`)
-5. Push (`git push origin feature/amazing`)
-6. Open a Pull Request
+3. Commit (`git commit -m 'Add amazing feature'`)
+4. Push (`git push origin feature/amazing`)
+5. Open a Pull Request
 
 ## 📄 License
 

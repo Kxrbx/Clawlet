@@ -56,10 +56,7 @@ All notable changes to Clawlet will be documented in this file.
 ### Planned
 - Dashboard real-time agent management
 - More channels (WhatsApp, Slack, Signal)
-- Additional tools (web scraping, code execution)
-- Skill system for extensions
 - Vector database integration
 - Multi-agent orchestration
-- Streaming responses in CLI
+- Streaming responses
 - Better error recovery
-- More test coverage (target 80%)
