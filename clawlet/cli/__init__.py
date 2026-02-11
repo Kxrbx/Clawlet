@@ -8,7 +8,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
+from rich.text import Text
 from rich.table import Table
 
 from clawlet import __version__
@@ -34,25 +34,81 @@ def get_workspace_path() -> Path:
 def print_sakura_banner():
     """Print ASCII art banner."""
     console.print("""
-[cyan]   ██████╗██╗      ██████╗ ██╗   ██╗██████╗  █████╗ ██╗    ██╗
-  ██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗██╔══██╗██║    ██║
-  ██║     ██║     ██║   ██║██║   ██║██║  ██║███████║██║ █╗ ██║
-  ██║     ██║     ██║   ██║██║   ██║██║  ██║██╔══██║██║███╗██║
-  ╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝██║  ██║╚███╔███╔╝
-   ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚═╝  ╚═╝ ╚══╝╚══╝[/cyan]
+[bold magenta]     *  . 　　 　　　✦ 　　 　 ‍ ‍ ‍ ‍ 　. 　　　　 　　　[/bold magenta]
+[bold cyan]
+   ██████╗██╗      █████╗ ██╗     ██╗     ████████╗███████╗██████╗ ███╗   ███╗
+  ██╔════╝██║     ██╔══██╗██║     ██║     ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║
+  ██║     ██║     ███████║██║     ██║        ██║   █████╗  ██████╔╝██╔████╔██║
+  ██║     ██║     ██╔══██║██║     ██║        ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║
+  ╚██████╗███████╗██║  ██║███████╗███████╗   ██║   ███████╗██║  ██║██║ ╚═╝ ██║
+   ╚═════╝╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝
+[/bold cyan]
 [bold magenta]🌸 A lightweight AI agent framework with identity awareness[/bold magenta]
 """)
 
 
-@app.callback()
+def print_section(title: str, subtitle: str = None):
+    """Print a section header with sakura styling."""
+    console.print()
+    text = Text()
+    text.append("┌─ ", style=f"bold {SAKURA_PINK}")
+    text.append(title, style=f"bold {SAKURA_LIGHT}")
+    console.print(text)
+    
+    if subtitle:
+        console.print(f"│  [dim]{subtitle}[/dim]")
+
+
+def print_command(name: str, description: str, shortcut: str = None):
+    """Print a command in menu style."""
+    if shortcut:
+        console.print(f"│  [bold {SAKURA_PINK}]{name:15}[/bold {SAKURA_PINK}] {description} [dim]({shortcut})[/dim]")
+    else:
+        console.print(f"│  [bold {SAKURA_PINK}]{name:15}[/bold {SAKURA_PINK}] {description}")
+
+
+def print_footer():
+    """Print footer line."""
+    console.print("│")
+    console.print(f"└─ {'─' * 50}")
+
+
+def print_main_menu():
+    """Print the main menu when clawlet is invoked without args."""
+    print_sakura_banner()
+    
+    print_section("Commands", "What would you like to do?")
+    
+    print_command("onboard", "Interactive setup wizard (recommended)", "clawlet onboard")
+    print_command("init", "Quick workspace initialization", "clawlet init")
+    print_command("agent", "Start your AI agent", "clawlet agent")
+    print_command("dashboard", "Launch web dashboard", "clawlet dashboard")
+    print_command("status", "Check workspace status", "clawlet status")
+    print_command("health", "Run health checks", "clawlet health")
+    print_command("validate", "Validate configuration", "clawlet validate")
+    print_command("config", "View/edit configuration", "clawlet config")
+    
+    print_footer()
+    
+    console.print()
+    console.print(f"[dim]🌸 Run 'clawlet <command> --help' for more info[/dim]")
+    console.print(f"[dim]🌸 Version: {__version__} | https://github.com/Kxrbx/Clawlet[/dim]")
+    console.print()
+
+
+@app.callback(invoke_without_command=True)
 def main(
-    version: bool = typer.Option(
-        False, "--version", "-v", help="Show version and exit"
-    )
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-v", help="Show version and exit"),
 ):
     """🌸 Clawlet - A lightweight AI agent framework with identity awareness."""
     if version:
         console.print(f"[magenta]🌸 clawlet version {__version__}[/magenta]")
+        raise typer.Exit()
+    
+    # If no command provided, show custom menu
+    if ctx.invoked_subcommand is None:
+        print_main_menu()
         raise typer.Exit()
 
 
@@ -63,22 +119,20 @@ def init(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
 ):
-    """Initialize a new Clawlet workspace (quick setup).
+    """🌸 Quick workspace initialization.
     
-    For guided setup with all options, use 'clawlet onboard' instead.
+    For guided setup, use 'clawlet onboard' instead.
     """
     workspace_path = workspace or get_workspace_path()
     
     # If workspace doesn't exist, suggest onboard
     if not workspace_path.exists():
-        console.print()
-        console.print("[dim]💡 Tip: For a guided setup experience, try:[/dim]")
-        console.print(f"[{SAKURA_PINK}]    clawlet onboard[/{SAKURA_PINK}]")
-        console.print()
+        print_section("Quick Setup", "Creating workspace with defaults")
+        console.print("│  [dim]💡 For guided setup, use: clawlet onboard[/dim]")
+    else:
+        print_section("Quick Setup", f"Updating {workspace_path}")
     
-    print_sakura_banner()
-    console.print()
-    console.print(f"[{SAKURA_LIGHT}]Creating your workspace...[/{SAKURA_LIGHT}]")
+    console.print("│")
     
     # Create workspace directory
     workspace_path.mkdir(parents=True, exist_ok=True)
@@ -95,28 +149,27 @@ def init(
     for filename, content in identity_files.items():
         file_path = workspace_path / filename
         if file_path.exists() and not force:
-            console.print(f"  [yellow]⏭️  {filename} already exists, skipping[/yellow]")
+            console.print(f"│  [yellow]→[/yellow] {filename} [dim](exists, skipped)[/dim]")
         else:
             file_path.write_text(content)
-            console.print(f"  [green]✓ Created {filename}[/green]")
+            console.print(f"│  [green]✓[/green] {filename}")
     
     # Create config file
     config_path = workspace_path / "config.yaml"
     if not config_path.exists() or force:
         config_path.write_text(get_config_template())
-        console.print(f"  [green]✓ Created config.yaml[/green]")
+        console.print(f"│  [green]✓[/green] config.yaml")
+    
+    print_footer()
     
     console.print()
-    console.print(Panel(
-        f"[bold green]🌸 Workspace initialized![/bold green]\n\n"
-        f"Location: [{SAKURA_PINK}]{workspace_path}[/{SAKURA_PINK}]\n\n"
-        f"Next steps:\n"
-        f"  1. Edit [{SAKURA_PINK}]{workspace_path}/SOUL.md[/{SAKURA_PINK}] to define who your agent is\n"
-        f"  2. Edit [{SAKURA_PINK}]{workspace_path}/USER.md[/{SAKURA_PINK}] with your info\n"
-        f"  3. Add your API keys to [{SAKURA_PINK}]{workspace_path}/config.yaml[/{SAKURA_PINK}]\n"
-        f"  4. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start!",
-        title="🎉 Done",
-    ))
+    console.print(f"[bold green]✓ Workspace ready![/bold green]")
+    console.print(f"  Location: [{SAKURA_PINK}]{workspace_path}[/{SAKURA_PINK}]")
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print(f"  1. Edit [{SAKURA_PINK}]config.yaml[/{SAKURA_PINK}] to add API keys")
+    console.print(f"  2. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start")
+    console.print()
 
 
 @app.command()
@@ -200,50 +253,44 @@ def dashboard(
     api_url = f"http://localhost:{port}"
     frontend_url = f"http://localhost:{frontend_port}"
     
-    console.print(Panel.fit(
-        f"🌸 [bold {SAKURA_PINK}]Clawlet Dashboard[/bold {SAKURA_PINK}]\n"
-        f"API: [link={api_url}]{api_url}[/link]\n"
-        f"Frontend: [link={frontend_url}]{frontend_url}[/link]"
-    ))
-    
-    console.print()
-    console.print("[bold]Dashboard URLs:[/bold]")
-    console.print(f"  API Server:    [cyan][link={api_url}]{api_url}[/link][/cyan]")
-    console.print(f"  Frontend:      [cyan][link={frontend_url}]{frontend_url}[/link][/cyan]")
-    console.print(f"  API Docs:      [cyan][link={api_url}/docs]{api_url}/docs[/link][/cyan]")
-    console.print()
+    print_section("Clawlet Dashboard", "Web UI for your AI agent")
+    console.print("│")
+    console.print(f"│  [bold]URLs:[/bold]")
+    console.print(f"│    API:      [cyan][link={api_url}]{api_url}[/link][/cyan]")
+    console.print(f"│    Frontend: [cyan][link={frontend_url}]{frontend_url}[/link][/cyan]")
+    console.print(f"│    Docs:     [cyan][link={api_url}/docs]{api_url}/docs[/link][/cyan]")
     
     # Check if frontend is built
     dashboard_dir = Path(__file__).parent.parent.parent / "dashboard"
     if dashboard_dir.exists():
-        console.print(f"[dim]Dashboard directory: {dashboard_dir}[/dim]")
+        console.print("│")
+        console.print(f"│  [dim]Dashboard directory: {dashboard_dir}[/dim]")
         
         # Check for node_modules
         if not (dashboard_dir / "node_modules").exists():
-            console.print()
-            console.print("[yellow]Frontend not installed. Run:[/yellow]")
-            console.print(f"  [{SAKURA_PINK}]cd {dashboard_dir} && npm install[/{SAKURA_PINK}]")
-            console.print()
+            console.print("│")
+            console.print("│  [yellow]! Frontend not installed[/yellow]")
+            console.print(f"│    Run: [{SAKURA_PINK}]cd {dashboard_dir} && npm install[/{SAKURA_PINK}]")
     else:
-        console.print("[yellow]Dashboard directory not found.[/yellow]")
+        console.print("│")
+        console.print("│  [yellow]! Dashboard directory not found[/yellow]")
     
-    console.print()
-    console.print("[bold]To start the frontend (in a new terminal):[/bold]")
-    console.print(f"  [{SAKURA_PINK}]cd dashboard && npm run dev[/{SAKURA_PINK}]")
-    console.print()
+    console.print("│")
+    console.print("│  [bold]To start the frontend (new terminal):[/bold]")
+    console.print(f"│    [{SAKURA_PINK}]cd dashboard && npm run dev[/{SAKURA_PINK}]")
+    
+    print_footer()
     
     # Open browser if requested
     if open_browser:
         import webbrowser
-        console.print(f"[dim]Opening browser...[/dim]")
+        console.print("[dim]Opening browser...[/dim]")
         webbrowser.open(frontend_url)
     
     # Start the API server
-    console.print(Panel(
-        f"[bold green]🌸 Starting API server on port {port}...[/bold green]\n"
-        f"[dim]Press Ctrl+C to stop[/dim]",
-        style="green",
-    ))
+    console.print()
+    console.print(f"[bold green]🌸 Starting API server on port {port}...[/bold green]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
     console.print()
     
     try:
@@ -266,44 +313,167 @@ def dashboard(
 
 @app.command()
 def status():
-    """🌸 Show Clawlet status."""
+    """🌸 Show Clawlet workspace status."""
     workspace_path = get_workspace_path()
     
-    table = Table(title=f"🌸 Clawlet Status")
-    table.add_column("Item", style=f"{SAKURA_PINK}")
-    table.add_column("Status", style="green")
+    print_section("Workspace Status", f"Checking {workspace_path}")
     
     # Check workspace
     if workspace_path.exists():
-        table.add_row("Workspace", f"✓ {workspace_path}")
+        console.print(f"│  [green]✓[/green] Workspace [dim]{workspace_path}[/dim]")
     else:
-        table.add_row("Workspace", "✗ Not initialized")
+        console.print(f"│  [red]✗[/red] Workspace [dim]not initialized[/dim]")
     
     # Check identity files
     for filename in ["SOUL.md", "USER.md", "MEMORY.md", "HEARTBEAT.md"]:
         file_path = workspace_path / filename
         if file_path.exists():
-            table.add_row(filename, "✓ Present")
+            console.print(f"│  [green]✓[/green] {filename}")
         else:
-            table.add_row(filename, "✗ Missing")
+            console.print(f"│  [red]✗[/red] {filename} [dim]missing[/dim]")
     
     # Check config
     config_path = workspace_path / "config.yaml"
     if config_path.exists():
-        table.add_row("Config", "✓ Present")
+        console.print(f"│  [green]✓[/green] config.yaml")
     else:
-        table.add_row("Config", "✗ Missing")
+        console.print(f"│  [red]✗[/red] config.yaml [dim]missing[/dim]")
     
-    console.print(table)
+    print_footer()
     
     # Show version
-    console.print(f"\n[dim]🌸 Version: {__version__}[/dim]")
+    console.print()
+    console.print(f"[dim]🌸 Version: {__version__}[/dim]")
+    console.print()
 
 
 @app.command()
 def health():
     """🌸 Run health checks on all components."""
-    console.print(Panel.fit(
+    print_section("Health Checks", "Checking system components")
+    
+    import asyncio
+    from clawlet.health import quick_health_check
+    
+    async def run_checks():
+        result = await quick_health_check()
+        return result
+    
+    result = asyncio.run(run_checks())
+    
+    # Display results
+    for check in result.get("checks", []):
+        status = check["status"]
+        if status == "healthy":
+            console.print(f"│  [green]✓[/green] {check['name']}: {check['message']}")
+        elif status == "degraded":
+            console.print(f"│  [yellow]![/yellow] {check['name']}: {check['message']}")
+        else:
+            console.print(f"│  [red]✗[/red] {check['name']}: {check['message']}")
+    
+    print_footer()
+    
+    # Overall status
+    overall = result.get("status", "unknown")
+    console.print()
+    if overall == "healthy":
+        console.print("[green]✓ All systems operational[/green]")
+    elif overall == "degraded":
+        console.print("[yellow]! Some systems degraded[/yellow]")
+    else:
+        console.print("[red]✗ Some systems unhealthy[/red]")
+    console.print()
+
+
+@app.command()
+def validate(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """🌸 Validate configuration file."""
+    workspace_path = workspace or get_workspace_path()
+    config_path = workspace_path / "config.yaml"
+    
+    print_section("Config Validation", f"Checking {config_path}")
+    
+    if not config_path.exists():
+        console.print(f"│  [red]✗[/red] Config file not found")
+        console.print("│")
+        console.print("│  [dim]Run 'clawlet init' to create a config file[/dim]")
+        print_footer()
+        raise typer.Exit(1)
+    
+    try:
+        from clawlet.config import Config
+        
+        config = Config.from_yaml(config_path)
+        
+        console.print(f"│  [green]✓[/green] Configuration is valid")
+        console.print("│")
+        console.print(f"│  [bold]Settings:[/bold]")
+        console.print(f"│    Provider: [{SAKURA_PINK}]{config.provider.primary}[/{SAKURA_PINK}]")
+        if config.provider.openrouter:
+            console.print(f"│    Model: [{SAKURA_PINK}]{config.provider.openrouter.model}[/{SAKURA_PINK}]")
+        console.print(f"│    Storage: [{SAKURA_PINK}]{config.storage.backend}[/{SAKURA_PINK}]")
+        console.print(f"│    Max Iterations: [{SAKURA_PINK}]{config.agent.max_iterations}[/{SAKURA_PINK}]")
+        
+        print_footer()
+        console.print()
+        
+    except Exception as e:
+        console.print(f"│  [red]✗[/red] Configuration error: {e}")
+        print_footer()
+        raise typer.Exit(1)
+
+
+@app.command()
+def config(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    key: Optional[str] = typer.Argument(None, help="Config key to show"),
+):
+    """🌸 View or manage configuration."""
+    workspace_path = workspace or get_workspace_path()
+    config_path = workspace_path / "config.yaml"
+    
+    if not config_path.exists():
+        console.print(f"[red]Config file not found: {config_path}[/red]")
+        raise typer.Exit(1)
+    
+    import yaml
+    
+    with open(config_path) as f:
+        config_data = yaml.safe_load(f)
+    
+    if key:
+        # Show specific key
+        keys = key.split(".")
+        value = config_data
+        for k in keys:
+            if isinstance(value, dict):
+                value = value.get(k)
+            else:
+                value = None
+                break
+        
+        if value is not None:
+            console.print(f"[{SAKURA_PINK}]{key}[/{SAKURA_PINK}]: {value}")
+        else:
+            console.print(f"[red]Key not found: {key}[/red]")
+    else:
+        # Show all config
+        print_section("Configuration", str(config_path))
+        console.print("│")
+        
+        def print_dict(d, indent=0):
+            for k, v in d.items():
+                prefix = "│  " + "  " * indent
+                if isinstance(v, dict):
+                    console.print(f"{prefix}[bold]{k}:[/bold]")
+                    print_dict(v, indent + 1)
+                else:
+                    console.print(f"{prefix}[{SAKURA_PINK}]{k}[/{SAKURA_PINK}]: {v}")
+        
+        print_dict(config_data)
+        print_footer()
         f"🌸 [bold {SAKURA_PINK}]Clawlet Health Check[/bold {SAKURA_PINK}]"
     ))
     
