@@ -1,98 +1,140 @@
 # 🦞 Clawlet
 
-A lightweight AI agent framework with identity awareness. Built as an alternative to OpenClaw/nanobot with a focus on simplicity, local-first support, and extensibility.
+<div align="center">
 
-## Features
+**A lightweight AI agent framework with identity awareness**
 
-- **Identity System** - Agents read SOUL.md, USER.md, MEMORY.md to understand who they are
-- **Multiple LLM Providers** - OpenRouter, Ollama, LM Studio support out of the box
-- **Local-First** - Works with local models via Ollama or LM Studio
-- **Multiple Channels** - Telegram, Discord integrations
-- **Persistent Memory** - SQLite (default) or PostgreSQL backends
-- **Health Checks** - Monitor provider, storage, and system health
-- **Rate Limiting** - Built-in protection against API overload
-- **Web Dashboard** - React + Tailwind UI for monitoring and management
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub release](https://img.shields.io/github/v/release/Kxrbx/Clawlet?include_prereleases)](https://github.com/Kxrbx/Clawlet/releases)
 
-## Quick Start
+*Build AI agents that know who they are*
 
-### Option 1: Interactive Onboarding (Recommended)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Examples](#-examples)
+
+</div>
+
+---
+
+## Why Clawlet?
+
+Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for developers who want:
+
+- 🏠 **Local-First** - Run Ollama or LM Studio, no cloud required
+- 🎭 **Identity Awareness** - Agents read SOUL.md, USER.md, MEMORY.md
+- 🔧 **Simple Setup** - Interactive onboarding in under 2 minutes
+- 📊 **Built-in Dashboard** - React UI for monitoring and management
+- 🔒 **Security-First** - Hardened shell tool, safe command execution
+
+## ✨ Features
+
+### Core
+- **Identity System** - Define your agent's personality, values, and memory
+- **Multiple LLM Providers** - OpenRouter, Ollama, LM Studio
+- **Persistent Memory** - SQLite (default) or PostgreSQL
+- **Tool System** - File ops, shell commands, web search
+
+### Infrastructure
+- **Health Checks** - Monitor providers, storage, channels
+- **Rate Limiting** - Sliding window + token bucket algorithms
+- **Config Validation** - Pydantic-based with environment variable support
+- **Retry Logic** - Exponential backoff with circuit breaker
+
+### Channels
+- **Telegram** - Bot integration
+- **Discord** - Bot integration
+
+### Dashboard
+- **React + Tailwind UI** - Modern, responsive design
+- **FastAPI Backend** - RESTful API with OpenAPI docs
+- **Real-time Monitoring** - Health, logs, agent status
+
+## 🚀 Quick Start
+
+### Install
 
 ```bash
-# Clone the repo
+# Clone
 git clone https://github.com/Kxrbx/Clawlet.git
 cd Clawlet
 
-# Install with pip
+# Install
 pip install -e .
 
-# Run interactive onboarding
+# Optional: Dashboard dependencies
+pip install -e ".[dashboard]"
+```
+
+### Interactive Setup (Recommended)
+
+```bash
 clawlet onboard
 ```
 
-This guides you through:
-- Choosing your AI provider
-- Setting up API keys or local models
-- Configuring messaging channels
-- Customizing your agent's personality
+This 5-step wizard guides you through:
+1. **Choose Provider** - OpenRouter, Ollama, or LM Studio
+2. **Configure** - API keys or local settings
+3. **Channels** - Telegram/Discord setup
+4. **Identity** - Name and personality
+5. **Create Workspace** - All files generated
 
-### Option 2: Quick Init
+### Or Quick Init
 
 ```bash
-# Initialize with defaults
 clawlet init
-
-# Edit config
-~/.clawlet/config.yaml
-
-# Start agent
-clawlet agent
+# Edit ~/.clawlet/config.yaml with your settings
 ```
 
-### Configure Provider
-
-Edit `~/.clawlet/config.yaml`:
-
-```yaml
-# For OpenRouter (recommended for best results)
-provider:
-  primary: openrouter
-  openrouter:
-    api_key: "your-openrouter-api-key"
-    model: "anthropic/claude-sonnet-4"
-
-# Or for local models with Ollama
-provider:
-  primary: ollama
-  ollama:
-    base_url: "http://localhost:11434"
-    model: "llama3.2"
-```
-
-### Start Agent
+### Start Your Agent
 
 ```bash
-# Start with Telegram
+# Start agent
 clawlet agent --channel telegram
 
-# Or Discord
-clawlet agent --channel discord
+# Or start dashboard
+clawlet dashboard
 ```
 
-## Configuration
+## 📋 CLI Commands
 
-### Providers
+| Command | Description |
+|---------|-------------|
+| `clawlet onboard` | Interactive guided setup ✨ |
+| `clawlet init` | Quick setup with defaults |
+| `clawlet agent` | Start the AI agent |
+| `clawlet dashboard` | Launch web dashboard |
+| `clawlet status` | Show workspace status |
+| `clawlet health` | Run health checks |
+| `clawlet validate` | Validate configuration |
+| `clawlet config [key]` | View configuration |
+| `clawlet --version` | Show version |
 
-#### OpenRouter
+## 📁 Project Structure
+
+```
+~/.clawlet/              # Your workspace
+├── config.yaml          # Main configuration
+├── SOUL.md              # Agent personality
+├── USER.md              # Your information
+├── MEMORY.md            # Long-term memory
+├── HEARTBEAT.md         # Periodic tasks
+└── memory/
+    └── clawlet.db       # SQLite database
+```
+
+## ⚙️ Configuration
+
+### OpenRouter (Cloud)
 
 ```yaml
 provider:
   primary: openrouter
   openrouter:
-    api_key: "${OPENROUTER_API_KEY}"  # Use env var
+    api_key: "${OPENROUTER_API_KEY}"
     model: "anthropic/claude-sonnet-4"
 ```
 
-#### Ollama (Local)
+### Ollama (Local - Free)
 
 ```yaml
 provider:
@@ -102,13 +144,13 @@ provider:
     model: "llama3.2"
 ```
 
-Make sure Ollama is running:
 ```bash
+# Start Ollama
 ollama serve
 ollama pull llama3.2
 ```
 
-#### LM Studio (Local)
+### LM Studio (Local - Free)
 
 ```yaml
 provider:
@@ -117,203 +159,164 @@ provider:
     base_url: "http://localhost:1234"
 ```
 
-Enable the local server in LM Studio (port 1234 by default).
+Enable the local server in LM Studio (port 1234).
 
-### Channels
+## 🎨 Customizing Your Agent
 
-#### Telegram
+### SOUL.md - Agent Personality
 
-1. Create a bot with [@BotFather](https://t.me/botfather)
-2. Get the bot token
-3. Add to config:
+```markdown
+# SOUL.md
 
-```yaml
-channels:
-  telegram:
-    enabled: true
-    token: "${TELEGRAM_BOT_TOKEN}"
+## Name
+MyAgent
+
+## Personality
+- Friendly and helpful
+- Good at explaining complex topics
+- Loves terrible puns
+
+## Values
+1. Helpfulness - Always try to be useful
+2. Honesty - Be clear about limitations
+3. Privacy - Respect user data
 ```
 
-#### Discord
+### USER.md - About You
 
-1. Create a bot in Discord Developer Portal
-2. Get the bot token
-3. Add to config:
+```markdown
+# USER.md
 
-```yaml
-channels:
-  discord:
-    enabled: true
-    token: "${DISCORD_BOT_TOKEN}"
+## Name
+Alex
+
+## Timezone
+America/New_York
+
+## Notes
+- Working on Python projects
+- Prefers concise answers
+- Coffee enthusiast
 ```
 
-### Storage
+## 📊 Dashboard
 
-#### SQLite (Default)
-
-```yaml
-storage:
-  backend: sqlite
-  sqlite:
-    path: "~/.clawlet/clawlet.db"
-```
-
-#### PostgreSQL
-
-```yaml
-storage:
-  backend: postgres
-  postgres:
-    host: "localhost"
-    port: 5432
-    database: "clawlet"
-    user: "clawlet"
-    password: "${POSTGRES_PASSWORD}"
-```
-
-## CLI Commands
+Launch the web dashboard:
 
 ```bash
-# Initialize workspace
-clawlet init
-
-# Start agent
-clawlet agent
-
-# Check status
-clawlet status
-
-# Run health checks
-clawlet health
-
-# Validate configuration
-clawlet validate
-
-# View config
-clawlet config
-
-# Show version
-clawlet --version
+clawlet dashboard
 ```
 
-## Architecture
+**URLs:**
+- Frontend: http://localhost:5173
+- API: http://localhost:8000
+- Docs: http://localhost:8000/docs
 
-```
-clawlet/
-├── agent/
-│   ├── identity.py    # Load SOUL.md, USER.md, MEMORY.md
-│   ├── loop.py        # Main agent loop with tool calling
-│   └── memory.py      # Memory management
-├── bus/
-│   └── queue.py       # Message bus for channels
-├── channels/
-│   ├── base.py        # Base channel interface
-│   ├── telegram.py    # Telegram integration
-│   └── discord.py     # Discord integration
-├── providers/
-│   ├── base.py        # Base provider interface
-│   ├── openrouter.py  # OpenRouter API
-│   ├── ollama.py      # Ollama local LLM
-│   └── lmstudio.py    # LM Studio local LLM
-├── storage/
-│   ├── sqlite.py      # SQLite backend
-│   └── postgres.py    # PostgreSQL backend
-├── tools/
-│   ├── registry.py    # Tool registry
-│   ├── files.py       # File operations
-│   ├── shell.py       # Shell commands (secured)
-│   └── web_search.py  # Brave search
-├── config.py          # Configuration with validation
-├── health.py          # Health check system
-├── rate_limit.py      # Rate limiting
-├── exceptions.py      # Custom exceptions
-└── retry.py           # Retry utilities
-```
-
-## Security
-
-The shell tool has multiple security layers:
-
-- **Pattern blocking** - Dangerous patterns (pipes, redirects, subshells) are blocked
-- **Safe execution** - Uses `create_subprocess_exec()` not `create_subprocess_shell()`
-- **Command parsing** - Uses `shlex.split()` for safe argument parsing
-
-Blocked patterns include: `|`, `>`, `<`, `$()`, `&&`, `||`, `;`, backticks, and more.
-
-## Dashboard
-
-The web dashboard provides monitoring and management:
-
-```bash
-cd dashboard
-npm install
-npm run dev
-```
-
-Features:
+**Features:**
 - System health overview
 - Agent management
 - Real-time console
 - Settings configuration
 
-## Development
+## 🔒 Security
 
-### Running Tests
+Clawlet takes security seriously:
 
-```bash
-# Run all tests
-pytest
+- **Shell Tool Hardening** - 15+ dangerous patterns blocked
+- **Safe Execution** - Uses `create_subprocess_exec()` not shell
+- **Command Parsing** - `shlex.split()` for safe arguments
+- **Rate Limiting** - Prevent API overload
+- **Config Validation** - Pydantic ensures safe configs
 
-# With coverage
-pytest --cov=clawlet
+Blocked patterns: `|`, `>`, `<`, `$()`, `&&`, `||`, `;`, backticks, and more.
 
-# Specific test file
-pytest tests/test_shell_security.py
+## 🏗️ Architecture
+
+```
+clawlet/
+├── agent/           # Identity, loop, memory
+├── bus/             # Message bus
+├── channels/        # Telegram, Discord
+├── providers/       # OpenRouter, Ollama, LM Studio
+├── storage/         # SQLite, PostgreSQL
+├── tools/           # Files, shell, web search
+├── dashboard/       # React + FastAPI
+├── config.py        # Pydantic validation
+├── health.py        # Health checks
+├── rate_limit.py    # Rate limiting
+├── exceptions.py    # Custom exceptions
+└── retry.py         # Retry + circuit breaker
 ```
 
-### Code Style
-
-We use:
-- **Black** for formatting
-- **isort** for import sorting
-- **mypy** for type checking
-
-```bash
-black clawlet tests
-isort clawlet tests
-mypy clawlet
-```
-
-## Comparison with OpenClaw/nanobot
+## 📈 Comparison
 
 | Feature | Clawlet | OpenClaw | nanobot |
 |---------|---------|----------|---------|
 | Language | Python | TypeScript | Python |
 | Local LLMs | ✅ Ollama, LM Studio | ❌ | ❌ |
-| Dashboard | ✅ React | ✅ | ❌ |
-| Identity System | ✅ | ✅ | ❌ |
+| Dashboard | ✅ React + FastAPI | ✅ | ❌ |
+| Identity System | ✅ SOUL/USER/MEMORY | ✅ | ❌ |
 | Health Checks | ✅ | ✅ | ❌ |
 | Rate Limiting | ✅ | ❌ | ❌ |
-| Postgres + SQLite | ✅ | ✅ | SQLite only |
+| Storage | SQLite + PostgreSQL | SQLite + PostgreSQL | SQLite |
+| Interactive Onboarding | ✅ | ✅ | ❌ |
 
-## License
+## 🧪 Development
 
-MIT License - see [LICENSE](LICENSE) file.
+### Running Tests
 
-## Contributing
+```bash
+pytest                           # Run all tests
+pytest --cov=clawlet             # With coverage
+pytest tests/test_shell_security.py  # Specific file
+```
 
-Contributions welcome! Please:
+### Code Quality
+
+```bash
+black clawlet tests              # Format
+isort clawlet tests              # Sort imports
+mypy clawlet                     # Type check
+```
+
+### Test Coverage
+
+- **45 Python files**, ~5,200 lines of code
+- **9 test files**, ~1,400 lines of tests
+- **~26% coverage** (focused on critical paths)
+
+## 📚 Documentation
+
+- [QUICKSTART.md](QUICKSTART.md) - Detailed getting started guide
+- [CHANGELOG.md](CHANGELOG.md) - Release history
+- [Examples](examples/) - Config examples and scripts
+
+## 🤝 Contributing
+
+Contributions welcome!
 
 1. Fork the repo
-2. Create a feature branch
+2. Create a feature branch (`git checkout -b feature/amazing`)
 3. Add tests for new features
-4. Submit a pull request
+4. Commit (`git commit -m 'Add amazing feature'`)
+5. Push (`git push origin feature/amazing`)
+6. Open a Pull Request
 
-## Support
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE)
+
+## 💬 Support
 
 - **Issues**: [GitHub Issues](https://github.com/Kxrbx/Clawlet/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/Kxrbx/Clawlet/discussions)
 
 ---
 
-Built with 💕 by the Clawlet team.
+<div align="center">
+
+Built with 💕 by the Clawlet team
+
+[⬆ Back to Top](#-clawlet)
+
+</div>
