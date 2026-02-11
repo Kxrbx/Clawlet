@@ -149,9 +149,9 @@ def agent(
     print_sakura_banner()
     console.print(f"\n[{SAKURA_LIGHT}]Starting agent with {channel} channel...[/{SAKURA_LIGHT}]")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
-        
+    
+    try:
         asyncio.run(run_agent(workspace_path, model, channel))
-        
     except KeyboardInterrupt:
         console.print("\n[yellow]Agent stopped.[/yellow]")
     except Exception as e:
