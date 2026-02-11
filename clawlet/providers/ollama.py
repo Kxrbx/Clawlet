@@ -3,6 +3,7 @@ Ollama provider for local LLM inference.
 """
 
 import asyncio
+import json
 from typing import Optional, AsyncIterator
 
 import httpx
@@ -162,7 +163,6 @@ class OllamaProvider(BaseProvider):
                     if not line.strip():
                         continue
                     
-                    import json
                     try:
                         data = json.loads(line)
                         if "message" in data:

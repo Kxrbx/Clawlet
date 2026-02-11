@@ -92,7 +92,6 @@ class DiscordChannel(BaseChannel):
                 chat_id=str(message.channel.id),
                 content=message.content,
                 user_id=str(message.author.id),
-                user_name=message.author.display_name,
                 metadata={
                     "guild_id": str(message.guild.id) if message.guild else None,
                     "channel_name": message.channel.name if hasattr(message.channel, 'name') else "DM",

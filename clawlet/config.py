@@ -193,7 +193,7 @@ def load_config(workspace: Optional[Path] = None) -> Config:
             provider=ProviderConfig(
                 primary="openrouter",
                 openrouter=OpenRouterConfig(
-                    api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+                    api_key=os.environ.get("OPENROUTER_API_KEY", "your_api_key_here"),
                 ),
             ),
         )

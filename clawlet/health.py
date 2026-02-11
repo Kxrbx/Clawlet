@@ -3,7 +3,7 @@ Health check system for monitoring agent status.
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 from enum import Enum
@@ -25,7 +25,7 @@ class HealthCheckResult:
     status: HealthStatus
     message: str
     latency_ms: Optional[float] = None
-    details: dict = None
+    details: dict = field(default_factory=dict)
     
     def to_dict(self) -> dict:
         return {

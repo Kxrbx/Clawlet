@@ -17,6 +17,7 @@ class InboundMessage:
     chat_id: str
     content: str
     user_id: Optional[str] = None
+    user_name: Optional[str] = None
     metadata: dict = None
     
     def __post_init__(self):

@@ -217,18 +217,26 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     from clawlet.agent.loop import AgentLoop
     from clawlet.agent.identity import IdentityLoader
     from clawlet.bus.queue import MessageBus
+    from clawlet.providers.openrouter import OpenRouterProvider
+    import os
     
     # Load identity
-    identity = IdentityLoader(workspace)
+    identity_loader = IdentityLoader(workspace)
+    identity = identity_loader.load_all()
     
     # Create message bus
     bus = MessageBus()
+    
+    # Create provider
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    provider = OpenRouterProvider(api_key=api_key)
     
     # Create agent loop
     agent = AgentLoop(
         bus=bus,
         workspace=workspace,
         identity=identity,
+        provider=provider,
         model=model,
     )
     
@@ -639,7 +647,7 @@ storage:
 # Agent Settings
 agent:
   max_iterations: 20
-  context_window: 128000
+  context_window: 20
   temperature: 0.7
 
 # Heartbeat Settings

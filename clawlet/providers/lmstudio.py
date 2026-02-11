@@ -3,6 +3,7 @@ LM Studio provider for local LLM inference.
 """
 
 import asyncio
+import json
 from typing import Optional, AsyncIterator
 
 import httpx
@@ -163,7 +164,6 @@ class LMStudioProvider(BaseProvider):
                     if data_str == "[DONE]":
                         break
                     
-                    import json
                     try:
                         data = json.loads(data_str)
                         delta = data.get("choices", [{}])[0].get("delta", {})

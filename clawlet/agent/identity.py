@@ -109,17 +109,22 @@ class IdentityLoader:
     def _extract_name(self, content: str, default: str) -> str:
         """Extract name from markdown content."""
         lines = content.split("\n")
-        for line in lines:
+        seen_indices = set()
+        for i, line in enumerate(lines):
             line = line.strip()
+            if i in seen_indices:
+                continue
             if line.startswith("## Name"):
+                seen_indices.add(i)
                 # Look for name in next line
-                idx = lines.index(line) + 1
+                idx = i + 1
                 if idx < len(lines):
                     name_line = lines[idx].strip()
                     if name_line and not name_line.startswith("#"):
                         return name_line
             if line.startswith("## What to call you"):
-                idx = lines.index(line) + 1
+                seen_indices.add(i)
+                idx = i + 1
                 if idx < len(lines):
                     name_line = lines[idx].strip()
                     if name_line and not name_line.startswith("#"):

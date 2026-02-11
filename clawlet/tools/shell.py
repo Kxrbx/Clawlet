@@ -10,6 +10,7 @@ SECURITY: This tool uses multiple layers of protection:
 import asyncio
 import shlex
 import re
+import shutil
 from typing import Optional
 from pathlib import Path
 
