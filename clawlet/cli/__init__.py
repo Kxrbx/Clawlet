@@ -20,7 +20,7 @@ SAKURA_LIGHT = "#FFB7C5"
 app = typer.Typer(
     name="clawlet",
     help="🌸 Clawlet - A lightweight AI agent framework",
-    no_args_is_help=True,
+    no_args_is_help=False,
 )
 
 console = Console()
@@ -106,7 +106,7 @@ def main(
         console.print(f"[magenta]🌸 clawlet version {__version__}[/magenta]")
         raise typer.Exit()
     
-    # If no command provided, show custom menu
+    # If no command provided, show custom sakura menu
     if ctx.invoked_subcommand is None:
         print_main_menu()
         raise typer.Exit()
