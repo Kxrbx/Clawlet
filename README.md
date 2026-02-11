@@ -1,4 +1,4 @@
-# 🦞 Clawlet
+# 🌸 Clawlet
 
 <div align="center">
 
@@ -10,7 +10,7 @@
 
 *Build AI agents that know who they are*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Examples](#-examples)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation)
 
 </div>
 

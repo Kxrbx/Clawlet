@@ -201,7 +201,7 @@ def dashboard(
     frontend_url = f"http://localhost:{frontend_port}"
     
     console.print(Panel.fit(
-        f"🦞 [bold cyan]Clawlet Dashboard[/bold cyan]\n"
+        f"🌸 [bold {SAKURA_PINK}]Clawlet Dashboard[/bold {SAKURA_PINK}]\n"
         f"API: [link={api_url}]{api_url}[/link]\n"
         f"Frontend: [link={frontend_url}]{frontend_url}[/link]"
     ))
