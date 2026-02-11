@@ -23,15 +23,20 @@ from loguru import logger
 from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig
 
 
-# Custom style for questionary
+# Sakura pink color scheme
+SAKURA_PINK = "#FF69B4"
+SAKURA_LIGHT = "#FFB7C5"
+SAKURA_DARK = "#DB7093"
+
+# Custom style for questionary - sakura theme
 CUSTOM_STYLE = Style([
-    ('qmark', 'fg:#673ab7 bold'),
+    ('qmark', f'fg:{SAKURA_PINK} bold'),
     ('question', 'bold'),
-    ('answer', 'fg:#f44336 bold'),
-    ('pointer', 'fg:#673ab7 bold'),
-    ('highlighted', 'fg:#673ab7 bold'),
-    ('selected', 'fg:#66bb6a'),
-    ('separator', 'fg:#cc5454'),
+    ('answer', f'fg:{SAKURA_DARK} bold'),
+    ('pointer', f'fg:{SAKURA_PINK} bold'),
+    ('highlighted', f'fg:{SAKURA_PINK} bold'),
+    ('selected', f'fg:{SAKURA_LIGHT}'),
+    ('separator', f'fg:{SAKURA_DARK}'),
     ('instruction', 'fg:#8d8d8d'),
     ('text', ''),
 ])
@@ -41,26 +46,27 @@ console = Console()
 
 
 def print_banner():
-    """Print the Clawlet welcome banner."""
+    """Print the Clawlet welcome banner with ASCII art."""
     banner = """
-    ╭───────────────────────────────────────────╮
-    │                                           │
-    │   🦞  C L A W L E T                       │
-    │                                           │
-    │   A lightweight AI agent framework        │
-    │   with identity awareness                 │
-    │                                           │
-    ╰───────────────────────────────────────────╯
-    """
-    console.print(Panel(banner, style="bold blue"))
+[cyan]
+   ██████╗██╗      ██████╗ ██╗   ██╗██████╗  █████╗ ██╗    ██╗
+  ██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗██╔══██╗██║    ██║
+  ██║     ██║     ██║   ██║██║   ██║██║  ██║███████║██║ █╗ ██║
+  ██║     ██║     ██║   ██║██║   ██║██║  ██║██╔══██║██║███╗██║
+  ╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝██║  ██║╚███╔███╔╝
+   ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚═╝  ╚═╝ ╚══╝╚══╝ 
+[/cyan]
+[bold magenta]🌸 A lightweight AI agent framework with identity awareness 🌸[/bold magenta]
+"""
+    console.print(banner)
 
 
 def print_step(step: int, total: int, title: str):
     """Print a step header."""
     console.print()
     console.print(Panel(
-        f"[bold cyan]Step {step}/{total}:[/bold cyan] {title}",
-        style="blue",
+        f"[bold magenta]Step {step}/{total}:[/bold magenta] {title}",
+        style=f"bold {SAKURA_LIGHT}",
     ))
 
 

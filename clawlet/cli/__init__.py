@@ -13,9 +13,13 @@ from rich.table import Table
 
 from clawlet import __version__
 
+# Sakura color scheme
+SAKURA_PINK = "#FF69B4"
+SAKURA_LIGHT = "#FFB7C5"
+
 app = typer.Typer(
     name="clawlet",
-    help="🦞 Clawlet - A lightweight AI agent framework",
+    help="🌸 Clawlet - A lightweight AI agent framework",
     no_args_is_help=True,
 )
 
@@ -27,15 +31,28 @@ def get_workspace_path() -> Path:
     return Path.home() / ".clawlet"
 
 
+def print_sakura_banner():
+    """Print ASCII art banner."""
+    console.print("""
+[cyan]   ██████╗██╗      ██████╗ ██╗   ██╗██████╗  █████╗ ██╗    ██╗
+  ██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗██╔══██╗██║    ██║
+  ██║     ██║     ██║   ██║██║   ██║██║  ██║███████║██║ █╗ ██║
+  ██║     ██║     ██║   ██║██║   ██║██║  ██║██╔══██║██║███╗██║
+  ╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝██║  ██║╚███╔███╔╝
+   ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚═╝  ╚═╝ ╚══╝╚══╝[/cyan]
+[bold magenta]🌸 A lightweight AI agent framework with identity awareness[/bold magenta]
+""")
+
+
 @app.callback()
 def main(
     version: bool = typer.Option(
         False, "--version", "-v", help="Show version and exit"
     )
 ):
-    """Clawlet - A lightweight AI agent framework with identity awareness."""
+    """🌸 Clawlet - A lightweight AI agent framework with identity awareness."""
     if version:
-        console.print(f"clawlet version {__version__}")
+        console.print(f"[magenta]🌸 clawlet version {__version__}[/magenta]")
         raise typer.Exit()
 
 
@@ -56,13 +73,12 @@ def init(
     if not workspace_path.exists():
         console.print()
         console.print("[dim]💡 Tip: For a guided setup experience, try:[/dim]")
-        console.print("[cyan]    clawlet onboard[/cyan]")
+        console.print(f"[{SAKURA_PINK}]    clawlet onboard[/{SAKURA_PINK}]")
         console.print()
     
-    console.print(Panel.fit(
-        "🦞 [bold cyan]Clawlet Quick Setup[/bold cyan]",
-        subtitle="Creating your workspace..."
-    ))
+    print_sakura_banner()
+    console.print()
+    console.print(f"[{SAKURA_LIGHT}]Creating your workspace...[/{SAKURA_LIGHT}]")
     
     # Create workspace directory
     workspace_path.mkdir(parents=True, exist_ok=True)
@@ -92,20 +108,20 @@ def init(
     
     console.print()
     console.print(Panel(
-        f"[bold green]Workspace initialized![/bold green]\n\n"
-        f"Location: [cyan]{workspace_path}[/cyan]\n\n"
+        f"[bold green]🌸 Workspace initialized![/bold green]\n\n"
+        f"Location: [{SAKURA_PINK}]{workspace_path}[/{SAKURA_PINK}]\n\n"
         f"Next steps:\n"
-        f"  1. Edit [cyan]{workspace_path}/SOUL.md[/cyan] to define who your agent is\n"
-        f"  2. Edit [cyan]{workspace_path}/USER.md[/cyan] with your info\n"
-        f"  3. Add your API keys to [cyan]{workspace_path}/config.yaml[/cyan]\n"
-        f"  4. Run [cyan]clawlet agent[/cyan] to start!",
+        f"  1. Edit [{SAKURA_PINK}]{workspace_path}/SOUL.md[/{SAKURA_PINK}] to define who your agent is\n"
+        f"  2. Edit [{SAKURA_PINK}]{workspace_path}/USER.md[/{SAKURA_PINK}] with your info\n"
+        f"  3. Add your API keys to [{SAKURA_PINK}]{workspace_path}/config.yaml[/{SAKURA_PINK}]\n"
+        f"  4. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start!",
         title="🎉 Done",
     ))
 
 
 @app.command()
 def onboard():
-    """Interactive onboarding with guided setup (recommended for first-time users)."""
+    """🌸 Interactive onboarding with guided setup (recommended for first-time users)."""
     try:
         from clawlet.cli.onboard import run_onboarding
         asyncio.run(run_onboarding())
@@ -123,31 +139,16 @@ def agent(
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
     channel: str = typer.Option("telegram", "--channel", "-c", help="Channel to use"),
 ):
-    """Start the Clawlet agent."""
+    """🌸 Start the Clawlet agent."""
     workspace_path = workspace or get_workspace_path()
     
     if not workspace_path.exists():
         console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
         raise typer.Exit(1)
     
-    console.print(Panel.fit(
-        f"🦞 [bold cyan]Starting Clawlet Agent[/bold cyan]\n"
-        f"Workspace: [dim]{workspace_path}[/dim]"
-    ))
-    
-    # Import and run the agent
-    from clawlet.agent.loop import AgentLoop
-    from clawlet.agent.identity import IdentityLoader
-    from clawlet.bus.queue import MessageBus
-    
-    try:
-        # Load identity
-        identity = IdentityLoader(workspace_path)
-        console.print(f"[green]✓ Loaded identity from {workspace_path}[/green]")
-        
-        # Start the agent loop
-        console.print(f"[cyan]Starting agent with {channel} channel...[/cyan]")
-        console.print("[dim]Press Ctrl+C to stop[/dim]")
+    print_sakura_banner()
+    console.print(f"\n[{SAKURA_LIGHT}]Starting agent with {channel} channel...[/{SAKURA_LIGHT}]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
         
         asyncio.run(run_agent(workspace_path, model, channel))
         
@@ -221,14 +222,14 @@ def dashboard(
         if not (dashboard_dir / "node_modules").exists():
             console.print()
             console.print("[yellow]Frontend not installed. Run:[/yellow]")
-            console.print(f"  [cyan]cd {dashboard_dir} && npm install[/cyan]")
+            console.print(f"  [{SAKURA_PINK}]cd {dashboard_dir} && npm install[/{SAKURA_PINK}]")
             console.print()
     else:
         console.print("[yellow]Dashboard directory not found.[/yellow]")
     
     console.print()
     console.print("[bold]To start the frontend (in a new terminal):[/bold]")
-    console.print(f"  [cyan]cd dashboard && npm run dev[/cyan]")
+    console.print(f"  [{SAKURA_PINK}]cd dashboard && npm run dev[/{SAKURA_PINK}]")
     console.print()
     
     # Open browser if requested
@@ -239,7 +240,7 @@ def dashboard(
     
     # Start the API server
     console.print(Panel(
-        f"[bold green]Starting API server on port {port}...[/bold green]\n"
+        f"[bold green]🌸 Starting API server on port {port}...[/bold green]\n"
         f"[dim]Press Ctrl+C to stop[/dim]",
         style="green",
     ))
@@ -254,10 +255,10 @@ def dashboard(
         console.print("[red]Error: Dashboard dependencies not installed.[/red]")
         console.print()
         console.print("Install with:")
-        console.print("  [cyan]pip install -e '.[dashboard]'[/cyan]")
+        console.print(f"  [{SAKURA_PINK}]pip install -e '.[dashboard]'[/{SAKURA_PINK}]")
         console.print()
         console.print("Or:")
-        console.print("  [cyan]pip install fastapi uvicorn[/cyan]")
+        console.print(f"  [{SAKURA_PINK}]pip install fastapi uvicorn[/{SAKURA_PINK}]")
         raise typer.Exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Dashboard stopped.[/yellow]")
@@ -265,11 +266,11 @@ def dashboard(
 
 @app.command()
 def status():
-    """Show Clawlet status."""
+    """🌸 Show Clawlet status."""
     workspace_path = get_workspace_path()
     
-    table = Table(title="🦞 Clawlet Status")
-    table.add_column("Item", style="cyan")
+    table = Table(title=f"🌸 Clawlet Status")
+    table.add_column("Item", style=f"{SAKURA_PINK}")
     table.add_column("Status", style="green")
     
     # Check workspace
@@ -296,14 +297,14 @@ def status():
     console.print(table)
     
     # Show version
-    console.print(f"\n[dim]Version: {__version__}[/dim]")
+    console.print(f"\n[dim]🌸 Version: {__version__}[/dim]")
 
 
 @app.command()
 def health():
-    """Run health checks on all components."""
+    """🌸 Run health checks on all components."""
     console.print(Panel.fit(
-        "🦞 [bold cyan]Clawlet Health Check[/bold cyan]"
+        f"🌸 [bold {SAKURA_PINK}]Clawlet Health Check[/bold {SAKURA_PINK}]"
     ))
     
     import asyncio
@@ -317,7 +318,7 @@ def health():
     
     # Display results
     table = Table(title="Health Check Results")
-    table.add_column("Check", style="cyan")
+    table.add_column("Check", style=f"{SAKURA_PINK}")
     table.add_column("Status", style="green")
     table.add_column("Message", style="dim")
     
@@ -347,12 +348,12 @@ def health():
 def validate(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
 ):
-    """Validate configuration file."""
+    """🌸 Validate configuration file."""
     workspace_path = workspace or get_workspace_path()
     config_path = workspace_path / "config.yaml"
     
     console.print(Panel.fit(
-        "🦞 [bold cyan]Validating Configuration[/bold cyan]"
+        f"🌸 [bold {SAKURA_PINK}]Validating Configuration[/bold {SAKURA_PINK}]"
     ))
     
     if not config_path.exists():
@@ -368,8 +369,8 @@ def validate(
         console.print("[green]✓ Configuration is valid![/green]")
         
         # Show config summary
-        table = Table(title="Configuration Summary")
-        table.add_column("Setting", style="cyan")
+        table = Table(title=f"🌸 Configuration Summary")
+        table.add_column("Setting", style=f"{SAKURA_PINK}")
         table.add_column("Value", style="green")
         
         table.add_row("Provider", config.provider.primary)
@@ -391,7 +392,7 @@ def config(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     key: Optional[str] = typer.Argument(None, help="Config key to show"),
 ):
-    """Show or manage configuration."""
+    """🌸 Show or manage configuration."""
     workspace_path = workspace or get_workspace_path()
     config_path = workspace_path / "config.yaml"
     
@@ -416,7 +417,7 @@ def config(
                 break
         
         if value is not None:
-            console.print(f"[cyan]{key}[/cyan]: {value}")
+            console.print(f"[{SAKURA_PINK}]{key}[/{SAKURA_PINK}]: {value}")
         else:
             console.print(f"[red]Key not found: {key}[/red]")
     else:
