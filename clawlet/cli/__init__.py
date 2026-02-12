@@ -3,8 +3,12 @@ Clawlet CLI commands.
 """
 
 import asyncio
+import os
+import subprocess
+import time
 from pathlib import Path
 from typing import Optional
+import getpass
 
 import typer
 from rich.console import Console
@@ -295,12 +299,16 @@ def dashboard(
     port: int = typer.Option(8000, "--port", "-p", help="Port to run on"),
     frontend_port: int = typer.Option(5173, "--frontend-port", "-f", help="Frontend dev server port"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser automatically"),
+    no_frontend: bool = typer.Option(False, "--no-frontend", help="Don't start frontend dev server"),
 ):
     """Start the Clawlet dashboard.
     
-    Starts both the API server and shows the dashboard URL.
-    The React frontend needs to be started separately with: cd dashboard && npm run dev
+    Starts both the API server and the React frontend dev server.
     """
+    import signal
+    import sys
+    import threading
+    
     workspace_path = workspace or get_workspace_path()
     
     api_url = f"http://localhost:{port}"
@@ -315,6 +323,8 @@ def dashboard(
     
     # Check if frontend is built
     dashboard_dir = Path(__file__).parent.parent.parent / "dashboard"
+    frontend_process = None
+    
     if dashboard_dir.exists():
         console.print("│")
         console.print(f"│  [dim]Dashboard directory: {dashboard_dir}[/dim]")
@@ -322,15 +332,99 @@ def dashboard(
         # Check for node_modules
         if not (dashboard_dir / "node_modules").exists():
             console.print("│")
-            console.print("│  [yellow]! Frontend not installed[/yellow]")
+            console.print("│  [yellow]! Frontend dependencies not installed[/yellow]")
             console.print(f"│    Run: [{SAKURA_PINK}]cd {dashboard_dir} && npm install[/{SAKURA_PINK}]")
+            console.print("│    Starting API server only...")
+            no_frontend = True
     else:
         console.print("│")
         console.print("│  [yellow]! Dashboard directory not found[/yellow]")
+        no_frontend = True
     
-    console.print("│")
-    console.print("│  [bold]To start the frontend (new terminal):[/bold]")
-    console.print(f"│    [{SAKURA_PINK}]cd dashboard && npm run dev[/{SAKURA_PINK}]")
+    def cleanup_processes():
+        """Clean up subprocesses on exit."""
+        if frontend_process and frontend_process.poll() is None:
+            console.print("\n[dim]Stopping frontend dev server...[/dim]")
+            frontend_process.terminate()
+            try:
+                frontend_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                frontend_process.kill()
+    
+    # Start frontend dev server
+    if not no_frontend and dashboard_dir.exists():
+        console.print("│")
+        console.print(f"│  [bold]Starting frontend dev server on port {frontend_port}...[/bold]")
+        
+        # Try to find npm or npx
+        npm_cmd = None
+        npx_cmd = None
+        
+        # Check common Windows npm locations
+        username = getpass.getuser()
+        npm_paths = [
+            "C:\\Program Files\\nodejs\\npm.cmd",
+            "C:\\Program Files\\nodejs\\npx.cmd",
+            "C:\\Program Files\\nodejs\\npm.exe",
+            "C:\\Program Files\\nodejs\\npx.exe",
+            f"C:\\Users\\{username}\\AppData\\Roaming\\npm\\npm.cmd",
+            f"C:\\Users\\{username}\\AppData\\Roaming\\npm\\npx.cmd",
+        ]
+        
+        # Try using shutil.which first (respects PATH)
+        import shutil
+        npm_path = shutil.which("npm")
+        npx_path = shutil.which("npx")
+        
+        if npx_path:
+            # Use npx to run the dev server (it will find npm internally)
+            npm_cmd = [npx_path, "npm", "run", "dev", "--", "--port", str(frontend_port)]
+        elif npm_path:
+            npm_cmd = [npm_path, "run", "dev", "--", "--port", str(frontend_port)]
+        else:
+            # Check common paths
+            for path in npm_paths:
+                if os.path.exists(path):
+                    npm_cmd = [path, "run", "dev", "--", "--port", str(frontend_port)]
+                    break
+        
+        if npm_cmd is None:
+            console.print("│  [yellow]! npm/npx not found, skipping frontend[/yellow]")
+            console.print("│    Make sure Node.js is installed and in your PATH")
+            console.print("│    Download from: https://nodejs.org")
+            no_frontend = True
+        else:
+            try:
+                # Start npm/npx dev server
+                frontend_process = subprocess.Popen(
+                    npm_cmd,
+                    cwd=dashboard_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                
+                # Give it time to start
+                time.sleep(3)
+                
+                if frontend_process.poll() is not None:
+                    # Process already exited - check for errors
+                    output = frontend_process.stdout.read() if frontend_process.stdout else ""
+                    console.print(f"│  [red]! Frontend failed to start[/red]")
+                    if output:
+                        console.print(f"│  [dim]Output: {output[:200]}[/dim]")
+                    no_frontend = True
+                else:
+                    console.print(f"│  [green]✓ Frontend dev server started (PID: {frontend_process.pid})[/green]")
+                    
+            except FileNotFoundError:
+                console.print("│  [yellow]! npm not found, skipping frontend[/yellow]")
+                console.print("│    Make sure Node.js is installed")
+                no_frontend = True
+            except Exception as e:
+                console.print(f"│  [yellow]! Frontend start error: {e}[/yellow]")
+                no_frontend = True
     
     print_footer()
     
@@ -346,13 +440,50 @@ def dashboard(
     console.print("[dim]Press Ctrl+C to stop[/dim]")
     console.print()
     
+    # Diagnostic info
+    import sys
+    console.print(f"[dim]Python: {sys.executable}[/dim]")
+    console.print(f"[dim]Python version: {sys.version.split()[0]}[/dim]")
+    
+    # Get pip location
     try:
-        import uvicorn
+        pip_path = subprocess.run([sys.executable, '-m', 'pip', '--version'], 
+                                   capture_output=True, text=True, timeout=10)
+        console.print(f"[dim]pip: {pip_path.stdout.strip()}[/dim]")
+    except Exception as e:
+        console.print(f"[dim]pip check failed: {e}[/dim]")
+    
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully."""
+        cleanup_processes()
+        console.print("\n[yellow]Dashboard stopped.[/yellow]")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        # Check which import fails
+        try:
+            import uvicorn
+            console.print("[dim]uvicorn: found[/dim]")
+        except ImportError as e:
+            console.print(f"[red]uvicorn: NOT FOUND - {e}[/red]")
+        
+        try:
+            import fastapi
+            console.print("[dim]fastapi: found[/dim]")
+        except ImportError as e:
+            console.print(f"[red]fastapi: NOT FOUND - {e}[/red]")
+        
         from clawlet.dashboard.api import app
         
         uvicorn.run(app, host="0.0.0.0", port=port)
-    except ImportError:
-        console.print("[red]Error: Dashboard dependencies not installed.[/red]")
+    except ImportError as e:
+        cleanup_processes()
+        console.print()
+        console.print(f"[red]Error: Dashboard dependencies not installed.[/red]")
+        console.print(f"[red]Import error: {e}[/red]")
         console.print()
         console.print("Install with:")
         console.print(f"  [{SAKURA_PINK}]pip install -e '.[dashboard]'[/{SAKURA_PINK}]")
@@ -361,6 +492,7 @@ def dashboard(
         console.print(f"  [{SAKURA_PINK}]pip install fastapi uvicorn[/{SAKURA_PINK}]")
         raise typer.Exit(1)
     except KeyboardInterrupt:
+        cleanup_processes()
         console.print("\n[yellow]Dashboard stopped.[/yellow]")
 
 
