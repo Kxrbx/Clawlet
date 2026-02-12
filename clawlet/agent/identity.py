@@ -43,6 +43,45 @@ class Identity:
         if self.heartbeat:
             return f"## Periodic Tasks\n\n{self.heartbeat}"
         return ""
+    
+    def build_system_prompt(self, tools: list = None) -> str:
+        """Build full system prompt from identity data."""
+        prompt = f"""# Identity
+
+You are {self.agent_name}, an AI assistant.
+
+{self.build_context()}
+
+# Instructions
+
+- Be helpful, honest, and harmless
+- Use the information above to personalize your responses
+- Remember what you learn about {self.user_name}
+- Stay in character as {self.agent_name}
+
+Current timezone: {self.timezone}
+"""
+        
+        # Add tool documentation if provided
+        if tools:
+            tool_docs = "\n\n# Available Tools\n\n"
+            tool_docs += "You have access to the following tools. Use them by including a tool call in your response:\n\n"
+            tool_docs += "```json\n{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}\n```\n\n"
+            
+            for tool in tools:
+                tool_docs += f"## {tool.name}\n\n{tool.description}\n\n"
+                if tool.parameters_schema:
+                    params = tool.parameters_schema.get("properties", {})
+                    if params:
+                        tool_docs += "**Parameters:**\n"
+                        for param_name, param_info in params.items():
+                            desc = param_info.get("description", "No description")
+                            tool_docs += f"- `{param_name}`: {desc}\n"
+                        tool_docs += "\n"
+            
+            prompt += tool_docs
+        
+        return prompt
 
 
 class IdentityLoader:
@@ -59,7 +98,7 @@ class IdentityLoader:
         # Load SOUL.md
         soul_path = self.workspace / "SOUL.md"
         if soul_path.exists():
-            identity.soul = soul_path.read_text()
+            identity.soul = soul_path.read_text(encoding="utf-8")
             identity.agent_name = self._extract_name(identity.soul, "Clawlet")
             logger.info(f"Loaded SOUL.md for {identity.agent_name}")
         else:

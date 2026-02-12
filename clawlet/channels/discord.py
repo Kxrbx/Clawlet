@@ -87,13 +87,14 @@ class DiscordChannel(BaseChannel):
                 return
             
             # Create inbound message
+            guild_id = str(message.guild.id) if message.guild else None
             inbound = InboundMessage(
                 channel="discord",
                 chat_id=str(message.channel.id),
                 content=message.content,
                 user_id=str(message.author.id),
                 metadata={
-                    "guild_id": str(message.guild.id) if message.guild else None,
+                    "guild_id": guild_id,
                     "channel_name": message.channel.name if hasattr(message.channel, 'name') else "DM",
                     "is_dm": isinstance(message.channel, discord.DMChannel),
                     "message_id": str(message.id),

@@ -53,6 +53,20 @@ class WebSearchTool(BaseTool):
         
         logger.info(f"WebSearchTool initialized (max_results={max_results})")
     
+    async def __aenter__(self) -> "WebSearchTool":
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit - cleanup resources."""
+        await self.close()
+    
+    async def close(self) -> None:
+        """Close the HTTP client."""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+    
     @property
     def name(self) -> str:
         return "web_search"

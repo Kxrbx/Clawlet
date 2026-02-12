@@ -164,7 +164,7 @@ class Config(BaseModel):
         """Save configuration to YAML file."""
         path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             yaml.dump(self.model_dump(mode='python'), f, default_flow_style=False)
         
         logger.info(f"Saved config to {path}")
@@ -193,7 +193,7 @@ def load_config(workspace: Optional[Path] = None) -> Config:
             provider=ProviderConfig(
                 primary="openrouter",
                 openrouter=OpenRouterConfig(
-                    api_key=os.environ.get("OPENROUTER_API_KEY", "your_api_key_here"),
+                    api_key=os.environ.get("OPENROUTER_API_KEY"),
                 ),
             ),
         )

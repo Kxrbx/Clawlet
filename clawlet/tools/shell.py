@@ -185,14 +185,24 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                     timeout=timeout
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass  # Process may already be terminated
                 logger.warning(f"Command timed out: {command}")
                 return ToolResult(
                     success=False,
                     output="",
                     error=f"Command timed out after {timeout}s"
                 )
+            finally:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                        await process.wait()
+                    except Exception:
+                        pass
             
             # Decode output
             stdout_text = stdout.decode("utf-8", errors="replace")

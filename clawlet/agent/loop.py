@@ -91,10 +91,13 @@ class AgentLoop:
                     timeout=1.0
                 )
                 
+                logger.info(f"Received message from bus: {msg.channel}/{msg.chat_id} - {msg.content[:50]}...")
+                
                 # Process it
                 try:
                     response = await self._process_message(msg)
                     if response:
+                        logger.info(f"Sending response: {response.content[:50]}...")
                         await self.bus.publish_outbound(response)
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")

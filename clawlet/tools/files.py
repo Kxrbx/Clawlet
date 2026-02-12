@@ -55,7 +55,7 @@ class ReadFileTool(BaseTool):
                     error=f"File not found: {path}"
                 )
             
-            content = file_path.read_text()
+            content = file_path.read_text(encoding="utf-8")
             return ToolResult(
                 success=True,
                 output=content,
@@ -112,7 +112,7 @@ class WriteFileTool(BaseTool):
             # Create parent directories
             file_path.parent.mkdir(parents=True, exist_ok=True)
             
-            file_path.write_text(content)
+            file_path.write_text(content, encoding="utf-8")
             return ToolResult(
                 success=True,
                 output=f"Successfully wrote {len(content)} bytes to {path}",

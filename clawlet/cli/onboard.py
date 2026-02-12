@@ -129,8 +129,8 @@ DEFAULT_OPENROUTER_MODELS = [
 ]
 
 
-async def _select_openrouter_model() -> str:
-    """Select OpenRouter model with dynamic fetching."""
+async def _select_openrouter_model(api_key: str = None) -> str:
+    """Select OpenRouter model with arrow key navigation and search."""
     print_section("Choose Model", "Fetching available models...")
     
     try:
@@ -143,15 +143,25 @@ async def _select_openrouter_model() -> str:
         ) as progress:
             task = progress.add_task("Connecting to OpenRouter...", total=100)
             
-            provider = OpenRouterProvider(api_key="")
+            # Use provided API key or try env var
+            key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+            
+            if not key:
+                console.print("  [yellow]! No API key provided, using default models[/yellow]")
+                return await _use_default_models()
+            
+            provider = OpenRouterProvider(api_key=key)
             models = await provider.list_models()
             progress.update(task, completed=100, description="Done!")
         
         if not models:
             console.print("  [yellow]! Failed to fetch models, using defaults[/yellow]")
-            return _use_default_models()
+            return await _use_default_models()
         
         console.print(f"\n  [green]✓[/green] Found {len(models)} models")
+        
+        # Extract model IDs
+        model_ids = [m.get("id", "Unknown") for m in models if m.get("id")]
         
         # Show top 10 popular models
         popular_patterns = [
@@ -164,101 +174,113 @@ async def _select_openrouter_model() -> str:
         ]
         
         popular = []
-        for model in models:
-            model_id = model.get("id", "")
+        for model_id in model_ids:
             if any(pattern in model_id.lower() for pattern in popular_patterns):
                 popular.append(model_id)
             if len(popular) >= 10:
                 break
         
-        print_option("s", "Search models", "Filter by name or provider")
-        print_option("a", "Show all", f"Show all {len(models)} models")
-        print_footer()
-        
+        # Create choices with search option
+        choices = ["🔍 Search models...", f"📋 Show all ({len(models)} models)"]
         if popular:
-            console.print()
-            console.print("  [dim]Popular models:[/dim]")
-            for i, model_id in enumerate(popular[:5], 1):
-                # Extract provider and model name for display
-                parts = model_id.split("/")
-                if len(parts) >= 2:
-                    provider_name = parts[0].title()
-                    model_name = "/".join(parts[1:])
-                    print_option(f"{i}", f"{model_name}", f"{provider_name}")
-                else:
-                    print_option(f"{i}", model_id, "")
+            choices.extend(popular[:5])
         
-        choice = Prompt.ask("\n  Select or search", default="1")
+        choice = await questionary.select(
+            "  Select a model:",
+            choices=choices,
+            style=CUSTOM_STYLE,
+        ).ask_async()
         
-        if choice.lower() == "s":
-            return await _search_models(models)
-        elif choice.lower() == "a":
-            return _show_all_models(models)
-        elif choice.isdigit() and 1 <= int(choice) <= len(popular):
-            return popular[int(choice) - 1]
+        if choice.startswith("🔍"):
+            return await _search_models(models, model_ids)
+        elif choice.startswith("📋"):
+            return await _show_all_models(models, model_ids)
+        elif choice in popular[:5]:
+            return choice
         else:
             # Default to first popular model
-            return popular[0] if popular else DEFAULT_OPENROUTER_MODELS[0]
+            return popular[0] if popular else model_ids[0] if model_ids else DEFAULT_OPENROUTER_MODELS[0]
             
     except Exception as e:
         logger.error(f"Failed to fetch models: {e}")
         console.print(f"  [yellow]! Using default models list[/yellow]")
-        return _use_default_models()
+        return await _use_default_models()
 
 
-async def _search_models(models: list) -> str:
-    """Search and select from available models."""
+async def _search_models(models: list, model_ids: list = None) -> str:
+    """Search and select from available models with arrow key navigation."""
+    if model_ids is None:
+        model_ids = [m.get("id", "Unknown") for m in models if m.get("id")]
+    
     console.print()
-    search_term = Prompt.ask("  Search for model (provider/name):", default="")
+    search_term = await questionary.text(
+        "  🔍 Search models (leave empty to browse all):",
+        style=CUSTOM_STYLE,
+    ).ask_async()
     
     if search_term:
-        filtered = [m for m in models if search_term.lower() in m.get("id", "").lower()]
+        # Filter models by search term (case-insensitive, partial match)
+        filtered = [m for m in model_ids if search_term.lower() in m.lower()]
+        
         if not filtered:
             console.print(f"  [yellow]! No models found matching '{search_term}'[/yellow]")
-            return DEFAULT_OPENROUTER_MODELS[0]
+            
+            # Offer to show all models instead
+            retry = await questionary.confirm(
+                "  Show all available models instead?",
+                default=True,
+                style=CUSTOM_STYLE,
+            ).ask_async()
+            
+            if retry:
+                return await _show_all_models(models, model_ids)
+            else:
+                return DEFAULT_OPENROUTER_MODELS[0]
         
-        console.print(f"\n  Found {len(filtered)} models:")
-        for i, model in enumerate(filtered[:10], 1):
-            print_option(f"{i}", model.get("id", "Unknown"), "")
+        console.print(f"\n  [green]✓[/green] [{len(filtered)} models found]")
         
-        if len(filtered) > 10:
-            console.print(f"  [dim]...and {len(filtered) - 10} more[/dim]")
+        # Use select with arrow key navigation
+        selected = await questionary.select(
+            "  Select a model:",
+            choices=filtered,
+            style=CUSTOM_STYLE,
+        ).ask_async()
         
-        choice = Prompt.ask("\n  Select", default="1")
-        if choice.isdigit() and 1 <= int(choice) <= min(len(filtered), 10):
-            return filtered[int(choice) - 1].get("id", DEFAULT_OPENROUTER_MODELS[0])
-        
-    return DEFAULT_OPENROUTER_MODELS[0]
+        return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
+    
+    # If no search term, show all models
+    return await _show_all_models(models, model_ids)
 
 
-def _show_all_models(models: list) -> str:
-    """Show all available models for selection."""
-    console.print(f"\n  All {len(models)} models:")
+async def _show_all_models(models: list, model_ids: list = None) -> str:
+    """Show all available models with arrow key navigation."""
+    if model_ids is None:
+        model_ids = [m.get("id", "Unknown") for m in models if m.get("id")]
     
-    # Show first 20 models
-    for i, model in enumerate(models[:20], 1):
-        print_option(f"{i}", model.get("id", "Unknown"), "")
+    console.print(f"\n  [[{len(model_ids)} models available]]")
     
-    if len(models) > 20:
-        console.print(f"  [dim]...and {len(models) - 20} more[/dim]")
+    # Use select with arrow key navigation for all models
+    selected = await questionary.select(
+        "  Select a model:",
+        choices=model_ids,
+        style=CUSTOM_STYLE,
+    ).ask_async()
     
-    choice = Prompt.ask("\n  Select", default="1")
-    if choice.isdigit() and 1 <= int(choice) <= min(len(models), 20):
-        return models[int(choice) - 1].get("id", DEFAULT_OPENROUTER_MODELS[0])
-    
-    return DEFAULT_OPENROUTER_MODELS[0]
+    return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
 
 
-def _use_default_models() -> str:
-    """Use default model selection with hardcoded options."""
+async def _use_default_models() -> str:
+    """Use default model selection with arrow key navigation."""
     print_section("Choose Model", "Using default models (API unavailable)")
     
-    for i, model in enumerate(DEFAULT_OPENROUTER_MODELS, 1):
-        print_option(f"{i}", model, "")
-    print_footer()
+    # Use select with arrow key navigation
+    selected = await questionary.select(
+        "  Select a model:",
+        choices=DEFAULT_OPENROUTER_MODELS,
+        style=CUSTOM_STYLE,
+    ).ask_async()
     
-    choice = Prompt.ask("\n  Select", choices=[str(i) for i in range(1, len(DEFAULT_OPENROUTER_MODELS) + 1)], default="1")
-    return DEFAULT_OPENROUTER_MODELS[int(choice) - 1]
+    return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
 
 
 async def run_onboarding(workspace: Optional[Path] = None) -> Config:
@@ -340,7 +362,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
         
         console.print()
-        model = await _select_openrouter_model()
+        model = await _select_openrouter_model(api_key=api_key)
         
         provider_config = ProviderConfig(
             primary="openrouter",
@@ -363,8 +385,8 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
                     client.get("http://localhost:11434/api/tags"),
                     timeout=2.0
                 )
-                if response.status_code == 200:
-                    console.print("│  [green]✓ Ollama is running[/green]")
+                response.raise_for_status()
+                console.print("│  [green]✓ Ollama is running[/green]")
         except:
             console.print("│  [yellow]! Could not connect to Ollama[/yellow]")
         
@@ -474,7 +496,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         (workspace / "memory").mkdir(exist_ok=True)
         progress.update(task, advance=1, description="Writing config...")
         
-        config = Config(provider=provider_config)
+        config = Config(provider=provider_config, channels={})
         config.to_yaml(workspace / "config.yaml")
         progress.update(task, advance=1, description="Creating identity files...")
         
@@ -549,66 +571,23 @@ def create_identity_files(
 ---
 🌸 _This file is yours to customize. Make your agent unique!_
 """
-    (workspace / "SOUL.md").write_text(soul_content)
+    (workspace / "SOUL.md").write_text(soul_content, encoding="utf-8")
     
     # USER.md
-    (workspace / "USER.md").write_text("""# USER.md - About Your Human
-
-## Name
-[Your name]
-
-## What to call you
-[Preferred name/nickname]
-
-## Timezone
-[Your timezone, e.g., UTC, America/New_York]
-
-## Notes
-- What do you care about?
-- What projects are you working on?
-- What makes you laugh?
-
----
-🌸 _The more your agent knows, the better it can help!_
-""")
+    (workspace / "USER.md").write_text("# USER.md - About Your Human\n\n## Name\n[Your name]\n\n## What to call you\n[Preferred name/nickname]\n\n## Timezone\n[Your timezone, e.g., UTC, America/New_York]\n\n## Notes\n- What do you care about?\n- What projects are you working on?\n- What makes you laugh?\n\n---\n🌸 _The more your agent knows, the better it can help!_\n", encoding="utf-8")
     
     # MEMORY.md
-    (workspace / "MEMORY.md").write_text("""# MEMORY.md - Long-Term Memory
-
-## Key Information
-- Add important facts here
-- Decisions made
-- Lessons learned
-
-## Recent Updates
-- [Date] Initial setup
-
----
-🌸 _Memories persist across sessions._
-""")
+    (workspace / "MEMORY.md").write_text("# MEMORY.md - Long-Term Memory\n\n## Key Information\n- Add important facts here\n- Decisions made\n- Lessons learned\n\n## Recent Updates\n- [Date] Initial setup\n\n---\n🌸 _Memories persist across sessions._\n", encoding="utf-8")
     
     # HEARTBEAT.md
-    (workspace / "HEARTBEAT.md").write_text("""# HEARTBEAT.md - Periodic Tasks
-
-## Check Interval
-Every 2 hours
-
-## Tasks
-- [ ] Check for important updates
-- [ ] Review recent activity
-## Quiet Hours
-2am - 9am UTC
-
----
-🌸 _Heartbeats help your agent stay proactive._
-""")
+    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md - Periodic Tasks\n\n## Check Interval\nEvery 2 hours\n\n## Tasks\n- [ ] Check for important updates\n- [ ] Review recent activity\n## Quiet Hours\n2am - 9am UTC\n\n---\n🌸 _Heartbeats help your agent stay proactive._\n", encoding="utf-8")
     
     # Update config with channel tokens
     if telegram_token or discord_token:
         import yaml
         config_path = workspace / "config.yaml"
         
-        with open(config_path) as f:
+        with open(config_path, encoding='utf-8') as f:
             config_data = yaml.safe_load(f)
         
         if "channels" not in config_data:

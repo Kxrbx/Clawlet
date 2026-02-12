@@ -59,7 +59,7 @@ class SQLiteStorage(StorageBackend):
         # Ensure directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        self._db = await aiosqlite.connect(self.db_path)
+        self._db = await aiosqlite.connect(self.db_path, timeout=30.0)
         
         # Create tables
         await self._db.execute("""

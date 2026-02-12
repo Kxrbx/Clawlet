@@ -76,14 +76,19 @@ class TelegramChannel(BaseChannel):
     
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message to Telegram."""
+        logger.info(f"Telegram send: to={msg.chat_id}, content={msg.content[:50]}...")
         try:
-            chat_id = int(msg.chat_id)
+            try:
+                chat_id = int(msg.chat_id)
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
+                return
             await self.app.bot.send_message(
                 chat_id=chat_id,
                 text=msg.content,
                 parse_mode="Markdown"
             )
-            logger.debug(f"Sent Telegram message to {chat_id}")
+            logger.info(f"Sent Telegram message to {chat_id}")
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
     

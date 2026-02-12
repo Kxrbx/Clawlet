@@ -40,6 +40,23 @@ class FileTool:
         """Get all file tools."""
         return [self.read, self.write, self.edit, self.list]
 
+def create_default_tool_registry(allowed_dir: str = None) -> ToolRegistry:
+    """Create a default tool registry with all standard tools."""
+    registry = ToolRegistry()
+    
+    # Add file tools
+    file_tool = FileTool(allowed_dir=allowed_dir)
+    for tool in file_tool.tools:
+        registry.register(tool)
+    
+    # Add shell tool
+    registry.register(ShellTool(allowed_dir=allowed_dir))
+    
+    # Add web search tool (requires BRAVE_API_KEY env var)
+    registry.register(WebSearchTool())
+    
+    return registry
+
 __all__ = [
     "BaseTool",
     "ToolRegistry",
@@ -51,4 +68,5 @@ __all__ = [
     "FileTool",
     "ShellTool",
     "WebSearchTool",
+    "create_default_tool_registry",
 ]

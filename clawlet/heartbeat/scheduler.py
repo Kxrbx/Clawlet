@@ -211,7 +211,7 @@ class HeartbeatScheduler:
             }
         }
         
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
         
         logger.debug(f"Saved heartbeat state to {path}")
@@ -219,7 +219,7 @@ class HeartbeatScheduler:
     def load_state(self, path: str) -> None:
         """Load scheduler state from file."""
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 state = json.load(f)
             
             for name, task_state in state.get("tasks", {}).items():

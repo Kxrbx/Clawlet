@@ -54,19 +54,24 @@ class BaseChannel(ABC):
     
     async def _run_outbound_loop(self) -> None:
         """Consume outbound messages and send them."""
+        logger.info(f"Outbound loop started for channel: {self.name}")
         while self._running:
             try:
                 msg = await asyncio.wait_for(
                     self.bus.consume_outbound(),
                     timeout=1.0
                 )
+                logger.debug(f"Outbound message received for {msg.channel}: {msg.content[:50]}...")
                 
                 # Only handle messages for this channel
                 if msg.channel == self.name:
+                    logger.debug(f"Sending message to {self.name} channel")
                     await self.send(msg)
                     
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
                 logger.error(f"Error in outbound loop for {self.name}: {e}")
+                if not self._running:
+                    break
                 await asyncio.sleep(1)

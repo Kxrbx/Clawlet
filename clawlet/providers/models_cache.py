@@ -59,7 +59,7 @@ class ModelsCache:
             return None
         
         try:
-            with open(self.cache_file) as f:
+            with open(self.cache_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             logger.warning(f"Failed to load models cache: {e}")
@@ -74,7 +74,7 @@ class ModelsCache:
             "models": models
         }
         
-        with open(self.cache_file, "w") as f:
+        with open(self.cache_file, "w", encoding="utf-8") as f:
             json.dump(cache_data, f, indent=2)
         
         self._cache = cache_data

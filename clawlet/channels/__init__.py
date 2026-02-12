@@ -9,16 +9,18 @@ Available channels:
 from clawlet.channels.base import BaseChannel
 
 # Lazy imports to avoid dependency issues
-def get_telegram():
+def get_telegram_channel():
+    """Get TelegramChannel class."""
     from clawlet.channels.telegram import TelegramChannel
     return TelegramChannel
 
-def get_discord():
+def get_discord_channel():
+    """Get DiscordChannel class."""
     from clawlet.channels.discord import DiscordChannel
     return DiscordChannel
 
 __all__ = [
     "BaseChannel",
-    "get_telegram",
-    "get_discord",
+    "get_telegram_channel",
+    "get_discord_channel",
 ]

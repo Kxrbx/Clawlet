@@ -19,6 +19,9 @@ DEFAULT_MODELS = [
     "meta-llama/llama-3.3-70b-instruct",
 ]
 
+# Placeholder API key used to detect unset configuration
+_API_KEY_PLACEHOLDER = "your_api_key_here"
+
 
 class OpenRouterProvider(BaseProvider):
     """OpenRouter API provider."""
@@ -31,6 +34,15 @@ class OpenRouterProvider(BaseProvider):
         default_model: str = "anthropic/claude-sonnet-4",
         base_url: Optional[str] = None,
     ):
+        # Strip whitespace/newlines from API key
+        api_key = api_key.strip() if api_key else ""
+        
+        if not api_key or api_key == _API_KEY_PLACEHOLDER:
+            raise ValueError(
+                "OpenRouter API key is required. Set it via:\n"
+                "  1. Environment variable: export OPENROUTER_API_KEY=your_key\n"
+                "  2. Or in ~/.clawlet/config.yaml under provider.openrouter.api_key"
+            )
         self.api_key = api_key
         self.default_model = default_model
         self.base_url = base_url or self.BASE_URL
@@ -80,10 +92,12 @@ class OpenRouterProvider(BaseProvider):
             **kwargs
         }
         
-        logger.debug(f"OpenRouter request: model={model}, messages={len(messages)}")
+        logger.info(f"OpenRouter request: model={model}, messages={len(messages)}")
         
         try:
+            logger.debug(f"Sending request to OpenRouter API...")
             response = await client.post("/chat/completions", json=payload)
+            logger.debug(f"OpenRouter response received: status={response.status_code}")
             response.raise_for_status()
             
             data = response.json()

@@ -5,6 +5,7 @@ Dashboard API server with FastAPI.
 from contextlib import asynccontextmanager
 from typing import Optional
 import asyncio
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -155,18 +156,34 @@ async def get_agent_status():
 @app.post("/agent/start")
 async def start_agent():
     """Start the agent."""
+    global agent_process
+    
     if agent_status["running"]:
         return {"success": False, "message": "Agent already running"}
     
-    # TODO: Implement actual agent start
-    agent_status["running"] = True
-    agent_status["uptime_seconds"] = 0
+    # Load config to get workspace
+    config = load_config()
     
-    # Start uptime counter
-    asyncio.create_task(update_uptime())
-    
-    logger.info("Agent started via API")
-    return {"success": True, "message": "Agent started"}
+    # Start agent as subprocess
+    import subprocess
+    try:
+        agent_process = subprocess.Popen(
+            ["python", "-m", "clawlet"],
+            cwd=config.workspace,
+            env={**os.environ, "CLAWLET_CONFIG": str(config.config_path)}
+        )
+        agent_status["running"] = True
+        agent_status["uptime_seconds"] = 0
+        agent_status["pid"] = agent_process.pid
+        
+        # Start uptime counter
+        asyncio.create_task(update_uptime())
+        
+        logger.info("Agent started via API")
+        return {"success": True, "message": f"Agent started (PID: {agent_process.pid})"}
+    except Exception as e:
+        logger.error(f"Failed to start agent: {e}")
+        return {"success": False, "message": str(e)}
 
 
 @app.post("/agent/stop")
@@ -213,7 +230,7 @@ async def update_settings(settings: SettingsUpdate):
     if settings.temperature:
         config.agent.temperature = settings.temperature
     
-    # TODO: Save to disk
+    config.to_yaml(config.config_path)
     logger.info(f"Settings updated: {settings}")
     
     return {"success": True, "message": "Settings updated"}
@@ -227,11 +244,8 @@ async def get_models(provider: str = "openrouter", force_refresh: bool = False):
     if provider == "openrouter":
         from clawlet.providers.openrouter import OpenRouterProvider
         
-        provider_instance = OpenRouterProvider(api_key="")
-        models = await provider_instance.list_models(force_refresh=force_refresh)
-        
         cache = get_models_cache()
-        cached = cache._load_cache()
+        models = cache.get_models(force_refresh=force_refresh)
         updated_at = cached.get("updated_at", "") if cached else ""
         
         return ModelsResponse(models=models, updated_at=updated_at)

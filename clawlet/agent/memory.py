@@ -240,7 +240,7 @@ class MemoryManager:
                 for entry in sorted(entries, key=lambda e: e.importance, reverse=True):
                     lines.append(f"- **{entry.key}**: {entry.value}\n")
             
-            memory_file.write_text("\n".join(lines))
+            memory_file.write_text("\n".join(lines), encoding="utf-8")
             logger.info(f"Saved {len(self._long_term)} memories to MEMORY.md")
             
         except Exception as e:

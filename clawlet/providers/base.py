@@ -49,6 +49,7 @@ class BaseProvider(ABC):
         """Stream a chat completion."""
         pass
     
+    @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
-        return "unknown"
+        pass

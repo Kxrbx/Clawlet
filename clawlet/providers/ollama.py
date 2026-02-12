@@ -48,6 +48,16 @@ class OllamaProvider(BaseProvider):
     def get_default_model(self) -> str:
         return self.default_model
     
+    async def __aenter__(self) -> "OllamaProvider":
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit - cleanup resources."""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+    
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:
