@@ -169,6 +169,18 @@ class Config(BaseModel):
         
         logger.info(f"Saved config to {path}")
 
+    def reload(self) -> None:
+        """Reload configuration from the original YAML file."""
+        if self.config_path and self.config_path.exists():
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            # Update self with new data
+            updated = Config(**data)
+            self.__dict__.update(updated.__dict__)
+            logger.info(f"Reloaded config from {self.config_path}")
+        else:
+            logger.warning("Cannot reload config: file not found")
+
 
 def load_config(workspace: Optional[Path] = None) -> Config:
     """
