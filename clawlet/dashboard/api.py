@@ -333,6 +333,12 @@ async def update_uptime():
         agent_status["uptime_seconds"] += 1
 
 
+async def start_dashboard_server(host: str = "0.0.0.0", port: int = 8000):
+    """Start the dashboard API server."""
+    import uvicorn
+    uvicorn.run(app, host=host, port=port)
+
+
 # Run server
 
 def run_server(port: int = 8000):
