@@ -3,11 +3,21 @@ OpenRouter provider implementation.
 """
 
 import asyncio
-from typing import Optional, AsyncIterator
+from typing import Optional, AsyncIterator, List
 import httpx
 from loguru import logger
 
 from clawlet.providers.base import BaseProvider, LLMResponse
+
+
+# Default models list (fallback when API is unavailable)
+DEFAULT_MODELS = [
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-3.5-sonnet",
+    "openai/gpt-4o",
+    "openai/gpt-4-turbo",
+    "meta-llama/llama-3.3-70b-instruct",
+]
 
 
 class OpenRouterProvider(BaseProvider):
@@ -155,3 +165,38 @@ class OpenRouterProvider(BaseProvider):
         if self._client:
             await self._client.aclose()
             self._client = None
+    
+    async def list_models(self, force_refresh: bool = False) -> List[dict]:
+        """List all available models from OpenRouter.
+        
+        Returns a list of model objects with id, name, and other metadata.
+        Results are cached and updated daily.
+        """
+        from clawlet.providers.models_cache import get_models_cache
+        
+        cache = get_models_cache()
+        return await cache.get_openrouter_models(force_refresh=force_refresh)
+    
+    async def get_popular_models(self, limit: int = 10) -> List[str]:
+        """Get a list of popular model IDs."""
+        models = await self.list_models()
+        
+        # Define popular model patterns
+        popular_patterns = [
+            "anthropic/claude",
+            "openai/gpt-4",
+            "openai/gpt-4o",
+            "meta-llama/llama",
+            "google/gemini",
+            "mistral/mistral",
+        ]
+        
+        popular = []
+        for model in models:
+            model_id = model.get("id", "")
+            if any(pattern in model_id.lower() for pattern in popular_patterns):
+                popular.append(model_id)
+            if len(popular) >= limit:
+                break
+        
+        return popular if popular else DEFAULT_MODELS[:limit]

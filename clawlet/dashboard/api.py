@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import List
 import uvicorn
 
 from loguru import logger
@@ -17,6 +18,7 @@ from loguru import logger
 from clawlet import Config, load_config
 from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
+from clawlet.providers.models_cache import get_models_cache
 
 
 # Pydantic models
@@ -52,6 +54,19 @@ class SettingsUpdate(BaseModel):
     model: Optional[str] = None
     max_iterations: Optional[int] = None
     temperature: Optional[float] = None
+
+
+class ModelsResponse(BaseModel):
+    """Models list response."""
+    models: List[dict]
+    updated_at: str
+
+
+class CacheInfoResponse(BaseModel):
+    """Cache info response."""
+    updated_at: Optional[str] = None
+    model_count: int
+    is_expired: bool
 
 
 # Global state
@@ -202,6 +217,45 @@ async def update_settings(settings: SettingsUpdate):
     logger.info(f"Settings updated: {settings}")
     
     return {"success": True, "message": "Settings updated"}
+
+
+# Models endpoints
+
+@app.get("/models", response_model=ModelsResponse)
+async def get_models(provider: str = "openrouter", force_refresh: bool = False):
+    """Get available models for a provider."""
+    if provider == "openrouter":
+        from clawlet.providers.openrouter import OpenRouterProvider
+        
+        provider_instance = OpenRouterProvider(api_key="")
+        models = await provider_instance.list_models(force_refresh=force_refresh)
+        
+        cache = get_models_cache()
+        cached = cache._load_cache()
+        updated_at = cached.get("updated_at", "") if cached else ""
+        
+        return ModelsResponse(models=models, updated_at=updated_at)
+    else:
+        raise HTTPException(status_code=400, detail=f"Provider {provider} not supported")
+
+
+@app.get("/models/cache-info", response_model=CacheInfoResponse)
+async def get_cache_info(provider: str = "openrouter"):
+    """Get models cache information."""
+    if provider == "openrouter":
+        cache = get_models_cache()
+        info = cache.get_cache_info()
+        
+        if info is None:
+            return CacheInfoResponse(model_count=0, is_expired=True)
+        
+        return CacheInfoResponse(
+            updated_at=info.get("updated_at"),
+            model_count=info.get("model_count", 0),
+            is_expired=info.get("is_expired", False),
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Provider {provider} not supported")
 
 
 # Logs endpoint

@@ -119,6 +119,148 @@ def print_footer():
     console.print(f"└─ {'─' * 50}")
 
 
+# Default models for fallback
+DEFAULT_OPENROUTER_MODELS = [
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-3.5-sonnet",
+    "openai/gpt-4o",
+    "openai/gpt-4-turbo",
+    "meta-llama/llama-3.3-70b-instruct",
+]
+
+
+async def _select_openrouter_model() -> str:
+    """Select OpenRouter model with dynamic fetching."""
+    print_section("Choose Model", "Fetching available models...")
+    
+    try:
+        from clawlet.providers.openrouter import OpenRouterProvider
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Connecting to OpenRouter...", total=100)
+            
+            provider = OpenRouterProvider(api_key="")
+            models = await provider.list_models()
+            progress.update(task, completed=100, description="Done!")
+        
+        if not models:
+            console.print("  [yellow]! Failed to fetch models, using defaults[/yellow]")
+            return _use_default_models()
+        
+        console.print(f"\n  [green]✓[/green] Found {len(models)} models")
+        
+        # Show top 10 popular models
+        popular_patterns = [
+            "anthropic/claude",
+            "openai/gpt-4",
+            "openai/gpt-4o",
+            "meta-llama/llama",
+            "google/gemini",
+            "mistral/mistral",
+        ]
+        
+        popular = []
+        for model in models:
+            model_id = model.get("id", "")
+            if any(pattern in model_id.lower() for pattern in popular_patterns):
+                popular.append(model_id)
+            if len(popular) >= 10:
+                break
+        
+        print_option("s", "Search models", "Filter by name or provider")
+        print_option("a", "Show all", f"Show all {len(models)} models")
+        print_footer()
+        
+        if popular:
+            console.print()
+            console.print("  [dim]Popular models:[/dim]")
+            for i, model_id in enumerate(popular[:5], 1):
+                # Extract provider and model name for display
+                parts = model_id.split("/")
+                if len(parts) >= 2:
+                    provider_name = parts[0].title()
+                    model_name = "/".join(parts[1:])
+                    print_option(f"{i}", f"{model_name}", f"{provider_name}")
+                else:
+                    print_option(f"{i}", model_id, "")
+        
+        choice = Prompt.ask("\n  Select or search", default="1")
+        
+        if choice.lower() == "s":
+            return await _search_models(models)
+        elif choice.lower() == "a":
+            return _show_all_models(models)
+        elif choice.isdigit() and 1 <= int(choice) <= len(popular):
+            return popular[int(choice) - 1]
+        else:
+            # Default to first popular model
+            return popular[0] if popular else DEFAULT_OPENROUTER_MODELS[0]
+            
+    except Exception as e:
+        logger.error(f"Failed to fetch models: {e}")
+        console.print(f"  [yellow]! Using default models list[/yellow]")
+        return _use_default_models()
+
+
+async def _search_models(models: list) -> str:
+    """Search and select from available models."""
+    console.print()
+    search_term = Prompt.ask("  Search for model (provider/name):", default="")
+    
+    if search_term:
+        filtered = [m for m in models if search_term.lower() in m.get("id", "").lower()]
+        if not filtered:
+            console.print(f"  [yellow]! No models found matching '{search_term}'[/yellow]")
+            return DEFAULT_OPENROUTER_MODELS[0]
+        
+        console.print(f"\n  Found {len(filtered)} models:")
+        for i, model in enumerate(filtered[:10], 1):
+            print_option(f"{i}", model.get("id", "Unknown"), "")
+        
+        if len(filtered) > 10:
+            console.print(f"  [dim]...and {len(filtered) - 10} more[/dim]")
+        
+        choice = Prompt.ask("\n  Select", default="1")
+        if choice.isdigit() and 1 <= int(choice) <= min(len(filtered), 10):
+            return filtered[int(choice) - 1].get("id", DEFAULT_OPENROUTER_MODELS[0])
+        
+    return DEFAULT_OPENROUTER_MODELS[0]
+
+
+def _show_all_models(models: list) -> str:
+    """Show all available models for selection."""
+    console.print(f"\n  All {len(models)} models:")
+    
+    # Show first 20 models
+    for i, model in enumerate(models[:20], 1):
+        print_option(f"{i}", model.get("id", "Unknown"), "")
+    
+    if len(models) > 20:
+        console.print(f"  [dim]...and {len(models) - 20} more[/dim]")
+    
+    choice = Prompt.ask("\n  Select", default="1")
+    if choice.isdigit() and 1 <= int(choice) <= min(len(models), 20):
+        return models[int(choice) - 1].get("id", DEFAULT_OPENROUTER_MODELS[0])
+    
+    return DEFAULT_OPENROUTER_MODELS[0]
+
+
+def _use_default_models() -> str:
+    """Use default model selection with hardcoded options."""
+    print_section("Choose Model", "Using default models (API unavailable)")
+    
+    for i, model in enumerate(DEFAULT_OPENROUTER_MODELS, 1):
+        print_option(f"{i}", model, "")
+    print_footer()
+    
+    choice = Prompt.ask("\n  Select", choices=[str(i) for i in range(1, len(DEFAULT_OPENROUTER_MODELS) + 1)], default="1")
+    return DEFAULT_OPENROUTER_MODELS[int(choice) - 1]
+
+
 async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     """
     Run interactive onboarding flow with unique UI.
@@ -198,22 +340,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
         
         console.print()
-        print_section("Choose Model", "Which AI model should power your agent?")
-        print_option("1", "claude-sonnet-4", "Recommended - Fast and capable")
-        print_option("2", "claude-3.5-sonnet", "Previous generation")
-        print_option("3", "gpt-4-turbo", "OpenAI's best")
-        print_option("4", "llama-3.3-70b", "Meta's open model")
-        print_footer()
-        
-        model_choice = Prompt.ask("\n  Select", choices=["1", "2", "3", "4"], default="1")
-        models = {
-            "1": "anthropic/claude-sonnet-4",
-            "2": "anthropic/claude-3.5-sonnet",
-            "3": "openai/gpt-4-turbo",
-            "4": "meta-llama/llama-3.3-70b-instruct",
-        }
-        model = models[model_choice]
-        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        model = await _select_openrouter_model()
         
         provider_config = ProviderConfig(
             primary="openrouter",

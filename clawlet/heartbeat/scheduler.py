@@ -233,3 +233,32 @@ class HeartbeatScheduler:
             logger.debug(f"No heartbeat state file at {path}")
         except Exception as e:
             logger.warning(f"Failed to load heartbeat state: {e}")
+
+
+# Model cache update task
+
+async def update_models_cache():
+    """Update models cache daily."""
+    from clawlet.providers.models_cache import get_models_cache
+    
+    logger.info("Updating models cache...")
+    try:
+        cache = get_models_cache()
+        models = await cache.get_openrouter_models(force_refresh=True)
+        logger.info(f"Models cache updated with {len(models)} models")
+        return f"Updated {len(models)} models"
+    except Exception as e:
+        logger.error(f"Failed to update models cache: {e}")
+        return f"ERROR: {e}"
+
+
+def register_models_cache_task(scheduler: HeartbeatScheduler) -> None:
+    """Register the models cache update task with the scheduler."""
+    # Update models cache daily (86400 seconds = 24 hours)
+    scheduler.register(
+        name="update_models_cache",
+        callback=update_models_cache,
+        interval_seconds=86400,  # Daily
+        priority=HeartbeatPriority.LOW,
+    )
+    logger.info("Registered models cache update task (daily)")

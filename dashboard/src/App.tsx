@@ -25,6 +25,17 @@ interface AgentStatus {
   uptime_seconds: number
 }
 
+interface ModelInfo {
+  id: string
+  name?: string
+  description?: string
+}
+
+interface ModelsResponse {
+  models: ModelInfo[]
+  updated_at: string
+}
+
 // Mock data for demo
 const mockHealth: HealthStatus = {
   status: 'healthy',
@@ -49,6 +60,10 @@ export default function App() {
   const [health, setHealth] = useState<HealthStatus>(mockHealth)
   const [agent, setAgent] = useState<AgentStatus>(mockAgent)
   const [loading, setLoading] = useState(false)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [selectedModel, setSelectedModel] = useState(agent.model)
+  const [cacheInfo, setCacheInfo] = useState<{ updated_at?: string; model_count: number; is_expired: boolean } | null>(null)
 
   const tabs = [
     { id: 'overview', label: 'Overview', icon: Activity },
@@ -67,6 +82,29 @@ export default function App() {
       setLoading(false)
     }, 500)
   }
+
+  const fetchModels = async (refresh: boolean = false) => {
+    setLoadingModels(true)
+    try {
+      const res = await fetch(`/models?provider=openrouter&force_refresh=${refresh}`)
+      if (res.ok) {
+        const data: ModelsResponse = await res.json()
+        setModels(data.models)
+        setCacheInfo({ updated_at: data.updated_at, model_count: data.models.length, is_expired: false })
+      }
+    } catch (e) {
+      console.error('Failed to fetch models:', e)
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  // Fetch models when settings tab is active
+  useEffect(() => {
+    if (activeTab === 'settings') {
+      fetchModels()
+    }
+  }, [activeTab])
 
   const formatUptime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600)
@@ -325,11 +363,41 @@ export default function App() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Model
                 </label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  defaultValue="anthropic/claude-sonnet-4"
-                />
+                {loadingModels ? (
+                  <div className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-500">
+                    Loading models...
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                    >
+                      <option value="">Select a model</option>
+                      {models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.id}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fetchModels(true)}
+                        className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Refresh models
+                      </button>
+                      {cacheInfo && (
+                        <span className="text-xs text-gray-500">
+                          {cacheInfo.model_count} models • Updated: {cacheInfo.updated_at ? new Date(cacheInfo.updated_at).toLocaleDateString() : 'Never'}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
