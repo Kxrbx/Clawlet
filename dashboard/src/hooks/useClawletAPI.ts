@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
-import type { HealthStatus, AgentStatus } from '@/lib/api'
-import { fetchHealth, fetchHealthHistory, fetchAgentStatus, fetchLogs, fetchConsole, type ConsoleResponse } from '@/lib/api'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import type { HealthStatus, AgentStatus, SettingsResponse } from '@/lib/api'
+import { fetchHealth, fetchHealthHistory, fetchAgentStatus, fetchLogs, fetchConsole, fetchSettings, updateSettings, type ConsoleResponse } from '@/lib/api'
 
 export function useHealth() {
   return useQuery<HealthStatus>({
@@ -44,5 +44,24 @@ export function useConsole() {
     queryFn: fetchConsole,
     refetchInterval: 3000,
     staleTime: 1500,
+  })
+}
+
+export function useSettings() {
+  return useQuery<SettingsResponse>({
+    queryKey: ['settings'],
+    queryFn: fetchSettings,
+    staleTime: 10000,
+  })
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: updateSettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      queryClient.invalidateQueries({ queryKey: ['agent-status'] })
+    },
   })
 }

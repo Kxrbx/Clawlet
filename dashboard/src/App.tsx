@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { 
   Activity, MessageSquare, Terminal, Heart, Settings, Zap,
   RefreshCw, Play, Square
 } from 'lucide-react'
-import { useHealth, useHealthHistory, useAgentStatus } from '@/hooks/useClawletAPI'
+import { useHealth, useHealthHistory, useAgentStatus, useSettings, useUpdateSettings } from '@/hooks/useClawletAPI'
 import type { HealthCheck } from '@/lib/api'
 import { StatusBadge } from '@/components/status-badge'
 import { HealthChart } from '@/components/HealthChart'
@@ -29,6 +29,8 @@ export default function App() {
   const healthQuery = useHealth()
   const historyQuery = useHealthHistory(50)
   const agentQuery = useAgentStatus()
+  const settingsQuery = useSettings()
+  const updateSettingsMutation = useUpdateSettings()
 
   const refreshAll = () => {
     healthQuery.refetch()
@@ -62,6 +64,49 @@ export default function App() {
       agentQuery.refetch()
     } catch (e) {
       alert('Failed to stop agent')
+    }
+  }
+
+  // Settings form state
+  const [provider, setProvider] = useState(settingsQuery.data?.provider || 'openrouter')
+  const [model, setModel] = useState(settingsQuery.data?.model || '')
+  const [maxIterations, setMaxIterations] = useState(settingsQuery.data?.max_iterations || 10)
+  const [temperature, setTemperature] = useState(settingsQuery.data?.temperature || 0.7)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  // Sync settings when data loads
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setProvider(settingsQuery.data.provider)
+      setModel(settingsQuery.data.model)
+      setMaxIterations(settingsQuery.data.max_iterations)
+      setTemperature(settingsQuery.data.temperature)
+    }
+  }, [settingsQuery.data])
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaveStatus('saving')
+    try {
+      await updateSettingsMutation.mutateAsync({
+        provider,
+        model,
+        max_iterations: maxIterations,
+        temperature,
+      })
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } catch (err) {
+      setSaveStatus('error')
+    }
+  }
+
+  const handleReset = () => {
+    if (settingsQuery.data) {
+      setProvider(settingsQuery.data.provider)
+      setModel(settingsQuery.data.model)
+      setMaxIterations(settingsQuery.data.max_iterations)
+      setTemperature(settingsQuery.data.temperature)
     }
   }
 
@@ -292,82 +337,103 @@ export default function App() {
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-semibold mb-4">Settings</h3>
             <p className="text-gray-500 mb-6">Configure Clawlet preferences. Changes are saved to your config.yaml.</p>
-            <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); /* TODO: Save */ }}>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Workspace Directory
-                </label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50"
-                  defaultValue="~/.clawlet"
-                  disabled
-                />
-                <p className="text-xs text-gray-500 mt-1">Set via CLAWLET_WORKSPACE environment variable.</p>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  LLM Provider
-                </label>
-                <select className="w-full px-3 py-2 border border-gray-300 rounded-md">
-                  <option>openrouter</option>
-                  <option>ollama</option>
-                  <option>lmstudio</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Model
-                </label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  defaultValue="anthropic/claude-sonnet-4"
-                  placeholder="e.g., openai/gpt-4o, meta-llama/llama-3.3-70b"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  See <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="text-sakura-pink hover:underline">OpenRouter models</a> for available options.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Max Iterations
-                </label>
-                <input
-                  type="number"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  defaultValue="10"
-                  min="1"
-                  max="100"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Temperature
-                </label>
-                <input
-                  type="range"
-                  className="w-full"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  defaultValue="0.7"
-                />
-                <div className="flex justify-between text-xs text-gray-500">
-                  <span>Precise</span>
-                  <span>Creative</span>
+            
+            {settingsQuery.isLoading ? (
+              <div className="text-center py-8 text-gray-500">Loading settings...</div>
+            ) : settingsQuery.error ? (
+              <div className="text-center py-8 text-red-500">Failed to load settings.</div>
+            ) : (
+              <form className="space-y-6" onSubmit={handleSaveSettings}>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Workspace Directory
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50"
+                    value="~/.clawlet"
+                    disabled
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Set via CLAWLET_WORKSPACE environment variable.</p>
                 </div>
-              </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    LLM Provider
+                  </label>
+                  <select 
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value)}
+                  >
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="lmstudio">LM Studio</option>
+                  </select>
+                </div>
 
-              <div className="pt-4 border-t">
-                <Button type="button">Save Changes</Button>
-                <Button type="button" variant="outline" className="ml-2">Reset to Defaults</Button>
-              </div>
-            </form>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Model
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="e.g., openai/gpt-4o, meta-llama/llama-3.3-70b"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    See <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="text-sakura-pink hover:underline">OpenRouter models</a> for available options.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Max Iterations
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    value={maxIterations}
+                    onChange={(e) => setMaxIterations(Number(e.target.value))}
+                    min="1"
+                    max="100"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Temperature
+                  </label>
+                  <input
+                    type="range"
+                    className="w-full"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={temperature}
+                    onChange={(e) => setTemperature(Number(e.target.value))}
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>Precise ({temperature})</span>
+                    <span>Creative</span>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t flex items-center gap-2">
+                  <Button type="submit" disabled={updateSettingsMutation.isPending}>
+                    {updateSettingsMutation.isPending ? 'Saving...' : 'Save Changes'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={handleReset}>Reset to Defaults</Button>
+                  {saveStatus && (
+                    <span className={`text-sm ${saveStatus === 'saved' ? 'text-green-600' : 'text-red-600'}`}>
+                      {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'error' ? '✗ Error' : ''}
+                    </span>
+                  )}
+                </div>
+              </form>
+            )}
           </div>
         )}
       </main>
