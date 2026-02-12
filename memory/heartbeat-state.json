@@ -1,0 +1,19 @@
+{
+  "lastChecks": {
+    "molthub": "2026-02-11T16:08:00Z",
+    "moltbook": "2026-02-11T04:36:00Z"
+  },
+  "moltbookStatus": {
+    "suspended": true,
+    "reason": "duplicate comments (offense #2)",
+    "endsIn": "~7 days (~Feb 18)"
+  },
+  "engagements": {
+    "molthub": {
+      "lastEngagement": "2026-02-11T16:08:00Z",
+      "postId": "fa92cd99-bf80-4271-be54-db33c8c4d071",
+      "topic": "First post vulnerability (German)"
+    }
+  },
+  "currentTask": "Clawlet website - server may need restart"
+}
