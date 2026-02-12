@@ -146,11 +146,11 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     if existing:
         console.print()
         console.print(f"[yellow]! Workspace already exists at {workspace}[/yellow]")
-        overwrite = questionary.confirm(
+        overwrite = await questionary.confirm(
             "Overwrite existing configuration?",
             default=False,
             style=CUSTOM_STYLE,
-        ).ask()
+        ).ask_async()
         if not overwrite:
             console.print("[dim]Keeping existing configuration.[/dim]")
             return Config.from_yaml(workspace / "config.yaml")
@@ -186,10 +186,10 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         print_section("OpenRouter API Key", "Get your key at openrouter.ai/keys")
         console.print("│")
         
-        api_key = questionary.password(
+        api_key = await questionary.password(
             "  Enter your API key:",
             style=CUSTOM_STYLE,
-        ).ask()
+        ).ask_async()
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
@@ -286,20 +286,20 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     if channel_choice in ["t", "b"]:
         console.print()
         console.print("  [dim]Create a bot with @BotFather on Telegram[/dim]")
-        telegram_token = questionary.password(
+        telegram_token = await questionary.password(
             "  Telegram bot token:",
             style=CUSTOM_STYLE,
-        ).ask()
+        ).ask_async()
         if telegram_token:
             console.print("  [green]✓[/green] Telegram configured")
     
     if channel_choice in ["d", "b"]:
         console.print()
         console.print("  [dim]Create a bot in Discord Developer Portal[/dim]")
-        discord_token = questionary.password(
+        discord_token = await questionary.password(
             "  Discord bot token:",
             style=CUSTOM_STYLE,
-        ).ask()
+        ).ask_async()
         if discord_token:
             console.print("  [green]✓[/green] Discord configured")
     
@@ -318,10 +318,10 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     console.print("│  [dim]e.g., 'friendly helper with a dry sense of humor'[/dim]")
     console.print("│")
     
-    personality = questionary.text(
+    personality = await questionary.text(
         "  Personality:",
         style=CUSTOM_STYLE,
-    ).ask()
+    ).ask_async()
     
     if personality:
         console.print(f"  [green]✓[/green] Custom personality set")
