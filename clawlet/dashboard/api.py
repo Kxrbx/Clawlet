@@ -125,9 +125,35 @@ async def get_health():
     """Get system health status."""
     try:
         result = await quick_health_check()
+        # Record to history file
+        try:
+            from pathlib import Path
+            history_file = Path.home() / ".clawlet" / "health_history.jsonl"
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            import json
+            with open(history_file, "a") as f:
+                f.write(json.dumps(result) + "\n")
+        except Exception as e:
+            logger.debug(f"Failed to write health history: {e}")
         return HealthResponse(**result)
     except Exception as e:
         logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health/history")
+async def get_health_history(limit: int = 50):
+    """Get recent health history."""
+    try:
+        from pathlib import Path
+        history_file = Path.home() / ".clawlet" / "health_history.jsonl"
+        if not history_file.exists():
+            return {"history": []}
+        lines = history_file.read_text().strip().split("\n")[-limit:]
+        history = [json.loads(line) for line in lines if line.strip()]
+        return {"history": list(reversed(history))}
+    except Exception as e:
+        logger.error(f"Health history read failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -234,6 +260,37 @@ async def update_settings(settings: SettingsUpdate):
     logger.info(f"Settings updated: {settings}")
     
     return {"success": True, "message": "Settings updated"}
+
+
+@app.get("/config/yaml")
+async def get_config_yaml():
+    """Get full config.yaml content."""
+    if config is None:
+        raise HTTPException(status_code=503, detail="Config not loaded")
+    try:
+        yaml_content = config.config_path.read_text()
+        return {"content": yaml_content}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/config/yaml")
+async def update_config_yaml(content: dict):
+    """Update config.yaml entirely."""
+    if config is None:
+        raise HTTPException(status_code=503, detail="Config not loaded")
+    try:
+        new_yaml = content.get("content", "")
+        if not new_yaml:
+            raise HTTPException(status_code=400, detail="Missing content")
+        config.config_path.write_text(new_yaml)
+        # Reload config
+        global reload_config
+        config.reload()
+        logger.info("Config.yaml updated via API")
+        return {"success": True, "message": "Config updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Models endpoints
