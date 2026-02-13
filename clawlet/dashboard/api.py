@@ -5,7 +5,9 @@ Dashboard API server with FastAPI.
 from contextlib import asynccontextmanager
 from typing import Optional
 import asyncio
+import json
 import os
+import subprocess
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,12 +75,14 @@ class CacheInfoResponse(BaseModel):
 # Global state
 config: Optional[Config] = None
 health_checker: Optional[HealthChecker] = None
+agent_process: Optional[subprocess.Popen] = None
 agent_status: dict = {
     "running": False,
     "provider": "openrouter",
     "model": "anthropic/claude-sonnet-4",
     "messages_processed": 0,
     "uptime_seconds": 0,
+    "pid": None,
 }
 
 
@@ -86,7 +90,7 @@ agent_status: dict = {
 async def lifespan(app: FastAPI):
     """Lifespan context manager."""
     # Startup
-    global config, health_checker
+    global config, health_checker, agent_process
     
     try:
         config = load_config()
@@ -191,7 +195,6 @@ async def start_agent():
     config = load_config()
     
     # Start agent as subprocess
-    import subprocess
     try:
         agent_process = subprocess.Popen(
             ["python", "-m", "clawlet"],

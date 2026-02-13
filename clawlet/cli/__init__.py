@@ -376,16 +376,24 @@ def dashboard(
         npm_path = shutil.which("npm")
         npx_path = shutil.which("npx")
         
+        console.print(f"[dim]npm path: {npm_path}[/dim]")
+        console.print(f"[dim]npx path: {npx_path}[/dim]")
+        
         if npx_path:
             # Use npx to run the dev server (it will find npm internally)
             npm_cmd = [npx_path, "npm", "run", "dev", "--", "--port", str(frontend_port)]
+            console.print(f"[dim]Using npx: {npm_cmd}[/dim]")
         elif npm_path:
             npm_cmd = [npm_path, "run", "dev", "--", "--port", str(frontend_port)]
+            console.print(f"[dim]Using npm: {npm_cmd}[/dim]")
         else:
             # Check common paths
+            npm_cmd = None
             for path in npm_paths:
+                console.print(f"[dim]Checking: {path}[/dim]")
                 if os.path.exists(path):
                     npm_cmd = [path, "run", "dev", "--", "--port", str(frontend_port)]
+                    console.print(f"[dim]Found at: {path}[/dim]")
                     break
         
         if npm_cmd is None:
@@ -402,20 +410,43 @@ def dashboard(
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1
+                    bufsize=0  # Unbuffered
                 )
                 
-                # Give it time to start
-                time.sleep(3)
+                # Wait for frontend to be ready (poll for a few seconds)
+                console.print("[dim]Waiting for frontend to start...[/dim]")
+                max_wait = 15
+                started = False
+                for i in range(max_wait):
+                    time.sleep(1)
+                    
+                    # Check if process exited
+                    if frontend_process.poll() is not None:
+                        # Process exited - check for errors
+                        output = frontend_process.stdout.read() if frontend_process.stdout else ""
+                        console.print(f"│  [red]! Frontend failed to start[/red]")
+                        if output:
+                            lines = output.strip().split('\n')[-15:]
+                            for line in lines:
+                                if line.strip():
+                                    console.print(f"│  [dim]  {line}[/dim]")
+                        no_frontend = True
+                        break
+                    
+                    # Read any available output
+                    if frontend_process.stdout:
+                        try:
+                            output = frontend_process.stdout.readline()
+                            if output:
+                                console.print(f"│  [dim]npm: {output.strip()}[/dim]")
+                                # Check for Local: URL (might have ANSI codes)
+                                if "http://localhost:" in output:
+                                    started = True
+                                    break
+                        except:
+                            pass
                 
-                if frontend_process.poll() is not None:
-                    # Process already exited - check for errors
-                    output = frontend_process.stdout.read() if frontend_process.stdout else ""
-                    console.print(f"│  [red]! Frontend failed to start[/red]")
-                    if output:
-                        console.print(f"│  [dim]Output: {output[:200]}[/dim]")
-                    no_frontend = True
-                else:
+                if not started and frontend_process.poll() is None:
                     console.print(f"│  [green]✓ Frontend dev server started (PID: {frontend_process.pid})[/green]")
                     
             except FileNotFoundError:
@@ -428,11 +459,16 @@ def dashboard(
     
     print_footer()
     
-    # Open browser if requested
-    if open_browser:
+    # Open browser if requested and frontend is running
+    if open_browser and frontend_process and no_frontend == False:
         import webbrowser
-        console.print("[dim]Opening browser...[/dim]")
+        console.print(f"[dim]Opening browser to {frontend_url}...[/dim]")
+        # Give frontend a moment to be fully ready
+        time.sleep(2)
         webbrowser.open(frontend_url)
+        console.print(f"[dim]Browser should be open at {frontend_url}[/dim]")
+    elif open_browser:
+        console.print("[dim]Frontend not running, skipping browser open[/dim]")
     
     # Start the API server
     console.print()
