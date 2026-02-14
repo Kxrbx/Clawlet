@@ -10,7 +10,7 @@
 
 *Build AI agents that know who they are*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers)
 
 </div>
 
@@ -25,14 +25,16 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - 🔧 **Simple Setup** - Interactive onboarding in under 2 minutes
 - 📊 **Built-in Dashboard** - React UI for monitoring and management
 - 🔒 **Security-First** - Hardened shell tool, safe command execution
+- 🌐 **Web Search** - Brave Search API integration for up-to-date information
 
 ## ✨ Features
 
 ### Core
 - **Identity System** - Define your agent's personality, values, and memory
-- **Multiple LLM Providers** - OpenRouter, Ollama, LM Studio
+- **18+ LLM Providers** - Cloud and local options for every budget
 - **Persistent Memory** - SQLite (default) or PostgreSQL
 - **Tool System** - File ops, shell commands, web search
+- **Models Cache** - Daily auto-updating cache with disk persistence
 
 ### Infrastructure
 - **Health Checks** - Monitor providers, storage, channels
@@ -45,9 +47,13 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - **Discord** - Bot integration
 
 ### Dashboard
-- **React + Tailwind UI** - Modern, responsive design
+- **React + Tailwind UI** - Modern Sakura-themed design
 - **FastAPI Backend** - RESTful API with OpenAPI docs
-- **Real-time Monitoring** - Health, logs, agent status
+- **Real-time Monitoring** - Health history charts, console logs
+- **Agent Management** - Start/stop agents, view status
+- **Settings UI** - Full config editor with models browser
+
+---
 
 ## 🚀 Quick Start
 
@@ -72,7 +78,7 @@ clawlet onboard
 ```
 
 This 5-step wizard guides you through:
-1. **Choose Provider** - OpenRouter, Ollama, or LM Studio
+1. **Choose Provider** - 18+ providers available
 2. **Configure** - API keys or local settings
 3. **Channels** - Telegram/Discord setup
 4. **Identity** - Name and personality
@@ -95,6 +101,8 @@ clawlet agent --channel telegram
 clawlet dashboard
 ```
 
+---
+
 ## 📋 CLI Commands
 
 | Command | Description |
@@ -109,32 +117,71 @@ clawlet dashboard
 | `clawlet config [key]` | View configuration |
 | `clawlet --version` | Show version |
 
-## 📁 Project Structure
+---
 
-```
-~/.clawlet/              # Your workspace
-├── config.yaml          # Main configuration
-├── SOUL.md              # Agent personality
-├── USER.md              # Your information
-├── MEMORY.md            # Long-term memory
-├── HEARTBEAT.md         # Periodic tasks
-└── memory/
-    └── clawlet.db       # SQLite database
-```
+## 🤖 LLM Providers
 
-## ⚙️ Configuration
+Clawlet supports **18+ LLM providers** giving you flexibility in choice and pricing.
 
-### OpenRouter (Cloud)
+### Cloud Providers
+
+| Provider | API | Description |
+|----------|-----|-------------|
+| **OpenRouter** | [openrouter.ai](https://openrouter.ai) | Aggregates 100+ models, pay-as-you-go |
+| **OpenAI** | [openai.com](https://openai.com) | GPT-4o, GPT-4o mini, o1 series |
+| **Anthropic** | [anthropic.com](https://anthropic.com) | Claude 4 (Sonnet, Haiku) |
+| **Google Gemini** | [ai.google](https://ai.google.dev) | Gemini 2.0 Flash, Pro |
+| **MiniMax** | [minimax.chat](https://www.minimax.chat) | Chinese AI, competitive pricing |
+| **Moonshot (Kimi)** | [moonshot.ai](https://www.moonshot.ai) | Kimi k2.5, strong reasoning |
+| **Qwen (Alibaba)** | [qwen.ai](https://qwen.ai) | Open-source friendly |
+| **Z.AI (GLM)** | [zhipuai.cn](https://www.zhipuai.cn) | ChatGLM series |
+| **GitHub Copilot** | [github.com](https://github.com/features/copilot) | Code-focused models |
+| **Vercel AI** | [vercel.com](https://vercel.com/ai) | AI SDK Gateway |
+| **OpenCode Zen** | [opencode.com](https://opencode.com) | Code generation |
+| **Xiaomi** | [xiaomi.ai](https://xiaomi.ai) | Mi AI |
+| **Synthetic AI** | [synthetic.ai](https://synthetic.ai) | Specialized models |
+| **Venice AI** | [venice.ai](https://venice.ai) | Uncensored models |
+
+### Local Providers (Free)
+
+| Provider | Description |
+|----------|-------------|
+| **Ollama** | Run llama3.2, mistral, codellama locally |
+| **LM Studio** | Desktop app for loading GGUF models |
+
+### Example Configuration
+
+#### OpenRouter (Recommended for variety)
 
 ```yaml
 provider:
   primary: openrouter
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"
-    model: "anthropic/claude-sonnet-4"
+    model: "anthropic/claude-sonnet-4-20250514"
 ```
 
-### Ollama (Local - Free)
+#### OpenAI (Direct)
+
+```yaml
+provider:
+  primary: openai
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"
+```
+
+#### Anthropic (Claude)
+
+```yaml
+provider:
+  primary: anthropic
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    model: "claude-sonnet-5-20260203"
+```
+
+#### Ollama (Local - Free)
 
 ```yaml
 provider:
@@ -150,7 +197,7 @@ ollama serve
 ollama pull llama3.2
 ```
 
-### LM Studio (Local - Free)
+#### LM Studio (Local - Free)
 
 ```yaml
 provider:
@@ -160,6 +207,37 @@ provider:
 ```
 
 Enable the local server in LM Studio (port 1234).
+
+---
+
+## 🌐 Web Search
+
+Clawlet integrates with **Brave Search API** for web search capabilities:
+
+```yaml
+web_search:
+  api_key: "${BRAVE_SEARCH_API_KEY}"
+  enabled: true
+```
+
+Get your API key at [brave.com/search/api](https://brave.com/search/api/).
+
+---
+
+## 📁 Project Structure
+
+```
+~/.clawlet/              # Your workspace
+├── config.yaml          # Main configuration
+├── SOUL.md              # Agent personality
+├── USER.md              # Your information
+├── MEMORY.md            # Long-term memory
+├── HEARTBEAT.md         # Periodic tasks
+└── memory/
+    └── clawlet.db       # SQLite database
+```
+
+---
 
 ## 🎨 Customizing Your Agent
 
@@ -199,6 +277,8 @@ America/New_York
 - Coffee enthusiast
 ```
 
+---
+
 ## 📊 Dashboard
 
 Launch the web dashboard:
@@ -213,10 +293,14 @@ clawlet dashboard
 - Docs: http://localhost:8000/docs
 
 **Features:**
-- System health overview
-- Agent management
-- Real-time console
-- Settings configuration
+- System health overview with history charts
+- Real-time agent management
+- Live console logs
+- Settings configuration UI
+- Full config.yaml editor
+- Models browser with cache info
+
+---
 
 ## 🔒 Security
 
@@ -230,6 +314,8 @@ Clawlet takes security seriously:
 
 Blocked patterns: `|`, `>`, `<`, `$()`, `&&`, `||`, `;`, backticks, and more.
 
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -237,7 +323,7 @@ clawlet/
 ├── agent/           # Identity, loop, memory
 ├── bus/             # Message bus
 ├── channels/        # Telegram, Discord
-├── providers/       # OpenRouter, Ollama, LM Studio
+├── providers/       # 18+ LLM providers
 ├── storage/         # SQLite, PostgreSQL
 ├── tools/           # Files, shell, web search
 ├── dashboard/       # React + FastAPI
@@ -248,18 +334,25 @@ clawlet/
 └── retry.py         # Retry + circuit breaker
 ```
 
+---
+
 ## 📈 Comparison
 
 | Feature | Clawlet | OpenClaw | nanobot |
 |---------|---------|----------|---------|
 | Language | Python | TypeScript | Python |
+| LLM Providers | 18+ | 5 | 3 |
 | Local LLMs | ✅ Ollama, LM Studio | ❌ | ❌ |
 | Dashboard | ✅ React + FastAPI | ✅ | ❌ |
 | Identity System | ✅ SOUL/USER/MEMORY | ✅ | ❌ |
 | Health Checks | ✅ | ✅ | ❌ |
 | Rate Limiting | ✅ | ❌ | ❌ |
 | Storage | SQLite + PostgreSQL | SQLite + PostgreSQL | SQLite |
+| Web Search | ✅ Brave API | ❌ | ❌ |
+| Models Cache | ✅ | ❌ | ❌ |
 | Interactive Onboarding | ✅ | ✅ | ❌ |
+
+---
 
 ## 🤝 Contributing
 
@@ -271,9 +364,13 @@ Contributions welcome!
 4. Push (`git push origin feature/amazing`)
 5. Open a Pull Request
 
+---
+
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE)
+
+---
 
 ## 💬 Support
 

@@ -2,10 +2,18 @@
 
 All notable changes to Clawlet will be documented in this file.
 
-## [Unreleased]
+## [0.2.0] - 2026-02-14
 
 ### Added
 - **Brave Search API Support**: Added optional Brave Search API integration for web searches. Users can now enable web search during onboarding or add it later via settings. Configure via `web_search.api_key` in config.yaml or `BRAVE_SEARCH_API_KEY` environment variable.
+- **Interactive AI Model Selection**: Added interactive AI model selection and management command for easier model switching.
+- **Dynamic OpenRouter Model Selection**: Enhanced OpenRouter model selection with caching for better performance.
+- **Dashboard API Abstraction Layer**: Added API abstraction layer and connected Settings persistence.
+
+### Improved
+- **Sakura Theme Dashboard**: Major UI/UX improvements with Sakura theme, real-time API integration, health history chart, live console, and React Query.
+- **CLI Enhancements**: Automatically start frontend dev server with dashboard command.
+- **Error Handling**: Resolved asyncio.run conflict in async onboarding and moved CircuitBreakerOpen exception to dedicated exceptions module.
 
 ## [0.1.1] - 2026-02-13
 
@@ -93,12 +101,4 @@ All notable changes to Clawlet will be documented in this file.
 - Security notes
 - Comparison with OpenClaw/nanobot
 
-## [Unreleased]
 
-### Planned
-- Dashboard real-time agent management
-- More channels (WhatsApp, Slack, Signal)
-- Vector database integration
-- Multi-agent orchestration
-- Streaming responses
-- Better error recovery

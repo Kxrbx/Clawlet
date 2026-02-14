@@ -1,5 +1,9 @@
 # Quick Start Guide
 
+Get up and running with Clawlet in minutes.
+
+---
+
 ## First Time Setup
 
 ### Option 1: Interactive Onboarding (Recommended)
@@ -11,7 +15,7 @@ clawlet onboard
 ```
 
 This will guide you through:
-1. Choosing your AI provider
+1. Choosing your AI provider (18+ options)
 2. Configuring API keys or local models
 3. Setting up messaging channels
 4. Customizing your agent's personality
@@ -31,25 +35,159 @@ Then manually edit `~/.clawlet/config.yaml` to add your API keys.
 
 ## Provider Setup
 
-### OpenRouter (Cloud - Recommended)
+Clawlet supports **18+ LLM providers**. Choose what fits your needs:
+
+### Cloud Providers
+
+#### OpenRouter (Recommended - 100+ models)
 
 1. Get an API key at [openrouter.ai/keys](https://openrouter.ai/keys)
 2. Run `clawlet onboard` and select OpenRouter
 3. Paste your API key when prompted
 
-### Ollama (Local - Free)
+**Popular models:**
+- `anthropic/claude-sonnet-4-20250514`
+- `openai/gpt-4o`
+- `google/gemini-2.0-flash-exp`
+
+#### OpenAI
+
+1. Get an API key at [platform.openai.com](https://platform.openai.com/api-keys)
+2. Run `clawlet onboard` and select OpenAI
+3. Paste your API key
+
+**Popular models:**
+- `gpt-4o`
+- `gpt-4o-mini`
+- `o1-preview`
+
+#### Anthropic (Claude)
+
+1. Get an API key at [console.anthropic.com](https://console.anthropic.com)
+2. Run `clawlet onboard` and select Anthropic
+3. Paste your API key
+
+**Popular models:**
+- `claude-sonnet-5-20260203`
+- `claude-haiku-5-20250501`
+
+#### Google Gemini
+
+1. Get an API key at [aistudio.google.com](https://aistudio.google.com/app/apikey)
+2. Run `clawlet onboard` and select Google
+3. Paste your API key
+
+**Popular models:**
+- `gemini-2.0-flash-exp`
+- `gemini-1.5-pro`
+
+#### MiniMax
+
+1. Get an API key at [platform.minimax.chat](https://platform.minimax.chat)
+2. Run `clawlet onboard` and select MiniMax
+3. Paste your API key
+
+**Default model:** `abab7-preview`
+
+#### Moonshot (Kimi)
+
+1. Get an API key at [platform.moonshot.ai](https://platform.moonshot.ai)
+2. Run `clawlet onboard` and select Moonshot
+3. Paste your API key
+
+**Default model:** `kimi-k2.5`
+
+#### Qwen (Alibaba)
+
+1. Get an API key at [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com)
+2. Run `clawlet onboard` and select Qwen
+3. Paste your API key
+
+**Default model:** `qwen-turbo`
+
+#### Z.AI (GLM)
+
+1. Get an API key at [open.bigmodel.cn](https://open.bigmodel.cn)
+2. Run `clawlet onboard` and select Z.AI
+3. Paste your API key
+
+**Default model:** `glm-4`
+
+#### GitHub Copilot
+
+1. Get your token from [github.com/settings/tokens](https://github.com/settings/tokens)
+2. Run `clawlet onboard` and select Copilot
+3. Paste your token
+
+#### Vercel AI
+
+1. Get an API key at [vercel.com](https://vercel.com)
+2. Run `clawlet onboard` and select Vercel
+3. Paste your API key
+
+#### OpenCode Zen
+
+1. Get an API key at [opencode.com](https://opencode.com)
+2. Run `clawlet onboard` and select OpenCode Zen
+3. Paste your API key
+
+#### Xiaomi AI
+
+1. Get an API key from Xiaomi AI platform
+2. Run `clawlet onboard` and select Xiaomi
+3. Paste your API key
+
+#### Synthetic AI
+
+1. Get an API key at [synthetic.ai](https://synthetic.ai)
+2. Run `clawlet onboard` and select Synthetic
+3. Paste your API key
+
+#### Venice AI
+
+1. Get an API key at [venice.ai](https://venice.ai)
+2. Run `clawlet onboard` and select Venice AI
+3. Paste your API key
+
+**Note:** Venice AI provides uncensored models.
+
+---
+
+### Local Providers (Free)
+
+#### Ollama
 
 1. Install Ollama: [ollama.ai](https://ollama.ai)
 2. Pull a model: `ollama pull llama3.2`
 3. Start Ollama: `ollama serve`
 4. Run `clawlet onboard` and select Ollama
 
-### LM Studio (Local - Free)
+**Default model:** `llama3.2`
+
+#### LM Studio
 
 1. Install LM Studio: [lmstudio.ai](https://lmstudio.ai)
 2. Load a model in LM Studio
 3. Enable the local server (port 1234)
 4. Run `clawlet onboard` and select LM Studio
+
+---
+
+## Web Search Setup
+
+Enable Brave Search for web search capabilities:
+
+1. Get an API key at [brave.com/search/api](https://brave.com/search/api/)
+2. Run `clawlet onboard` and enable web search
+3. Paste your API key
+
+Or add manually to `config.yaml`:
+
+```yaml
+web_search:
+  api_key: "YOUR_BRAVE_SEARCH_API_KEY"
+  enabled: true
+```
 
 ---
 
@@ -83,7 +221,10 @@ clawlet agent --channel telegram
 clawlet agent --channel discord
 
 # Use a different model
-clawlet agent --model anthropic/claude-sonnet-4
+clawlet agent --model anthropic/claude-sonnet-4-20250514
+
+# Start dashboard
+clawlet dashboard
 ```
 
 ---
@@ -95,6 +236,7 @@ clawlet agent --model anthropic/claude-sonnet-4
 | `clawlet onboard` | Interactive guided setup |
 | `clawlet init` | Quick setup with defaults |
 | `clawlet agent` | Start the agent |
+| `clawlet dashboard` | Launch web dashboard |
 | `clawlet status` | Show workspace status |
 | `clawlet health` | Run health checks |
 | `clawlet validate` | Validate config |
@@ -180,6 +322,17 @@ clawlet config provider.openrouter.api_key
 Run health checks:
 ```bash
 clawlet health
+```
+
+### "Cannot connect to LM Studio"
+
+Make sure the local server is enabled in LM Studio (port 1234).
+
+### "Web search not working"
+
+Verify Brave Search API key is set:
+```bash
+clawlet config web_search.api_key
 ```
 
 ---

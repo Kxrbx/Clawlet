@@ -50,3 +50,4 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+.kilocode/mcp.json
