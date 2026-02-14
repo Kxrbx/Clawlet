@@ -239,14 +239,14 @@ Get your API key at [brave.com/search/api](https://brave.com/search/api/).
 
 ---
 
-## 🎨 Customizing Your Agent
+## 🎨 Exemples of Customizing Your Agent
 
 ### SOUL.md - Agent Personality
 
 ```markdown
 # SOUL.md
 
-## Name
+## Names
 MyAgent
 
 ## Personality
@@ -279,7 +279,7 @@ America/New_York
 
 ---
 
-## 📊 Dashboard
+## 📊 Dashboard (Work in Progress)
 
 Launch the web dashboard:
 
@@ -336,21 +336,20 @@ clawlet/
 
 ---
 
-## 📈 Comparison
+## 📈 Features Overview
 
-| Feature | Clawlet | OpenClaw | nanobot |
-|---------|---------|----------|---------|
-| Language | Python | TypeScript | Python |
-| LLM Providers | 18+ | 5 | 3 |
-| Local LLMs | ✅ Ollama, LM Studio | ❌ | ❌ |
-| Dashboard | ✅ React + FastAPI | ✅ | ❌ |
-| Identity System | ✅ SOUL/USER/MEMORY | ✅ | ❌ |
-| Health Checks | ✅ | ✅ | ❌ |
-| Rate Limiting | ✅ | ❌ | ❌ |
-| Storage | SQLite + PostgreSQL | SQLite + PostgreSQL | SQLite |
-| Web Search | ✅ Brave API | ❌ | ❌ |
-| Models Cache | ✅ | ❌ | ❌ |
-| Interactive Onboarding | ✅ | ✅ | ❌ |
+| Feature | Description |
+|---------|-------------|
+| LLM Providers | 18+ cloud and local providers |
+| Local LLMs | Ollama, LM Studio (free) |
+| Dashboard | React + FastAPI with Sakura theme |
+| Identity System | SOUL/USER/MEMORY files |
+| Health Checks | Monitor providers, storage, channels |
+| Rate Limiting | Sliding window + token bucket |
+| Storage | SQLite + PostgreSQL |
+| Web Search | Brave Search API |
+| Models Cache | Daily auto-updating with disk persistence |
+| Interactive Onboarding | 5-step guided setup |
 
 ---
 
