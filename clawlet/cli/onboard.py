@@ -20,7 +20,7 @@ from questionary import Style
 
 from loguru import logger
 
-from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig, OpenAIConfig, AnthropicConfig, MiniMaxConfig, MoonshotConfig, GoogleConfig, QwenConfig, ZAIConfig, CopilotConfig, VercelConfig, OpenCodeZenConfig, XiaomiConfig, SyntheticConfig, VeniceAIConfig
+from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig, OpenAIConfig, AnthropicConfig, MiniMaxConfig, MoonshotConfig, GoogleConfig, QwenConfig, ZAIConfig, CopilotConfig, VercelConfig, OpenCodeZenConfig, XiaomiConfig, SyntheticConfig, VeniceAIConfig, BraveSearchConfig
 
 
 # Sakura pink color scheme
@@ -292,6 +292,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     steps = [
         "Provider",
         "API Key",
+        "Web Search",
         "Channel",
         "Identity",
         "Create",
@@ -758,9 +759,31 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         )
     
     # ============================================
-    # Step 3: Channel Setup
+    # Step 3: Brave Search API (Optional)
     # ============================================
-    print_step_indicator(3, 5, steps)
+    print_step_indicator(3, 6, steps)
+    print_section("Web Search", "Enable web search for your agent?")
+
+    brave_use = await questionary.confirm(
+        "  Use Brave Search API for web searches?",
+        default=False,
+        style=CUSTOM_STYLE,
+    ).ask_async()
+
+    brave_api_key = None
+    if brave_use:
+        console.print("│  [dim]Get your free key at brave.com/search/api[/dim]")
+        brave_api_key = await questionary.password(
+            "  Enter your Brave Search API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        if brave_api_key:
+            console.print("  [green]✓[/green] Brave Search configured")
+
+    # ============================================
+    # Step 4: Channel Setup
+    # ============================================
+    print_step_indicator(4, 6, steps)
     print_section("Messaging Channels", "Where should your agent respond?")
     console.print("│")
     console.print("│  [dim]You can skip this and set up channels later[/dim]")
@@ -799,7 +822,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 4: Agent Identity
     # ============================================
-    print_step_indicator(4, 5, steps)
+    print_step_indicator(5, 6, steps)
     print_section("Agent Identity", "Give your agent a personality")
     console.print("│")
     
@@ -824,7 +847,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 5: Create Workspace
     # ============================================
-    print_step_indicator(5, 5, steps)
+    print_step_indicator(6, 6, steps)
     print_section("Creating Workspace", "Setting up your files...")
     console.print()
     
@@ -840,7 +863,14 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         (workspace / "memory").mkdir(exist_ok=True)
         progress.update(task, advance=1, description="Writing config...")
         
-        config = Config(provider=provider_config, channels={})
+        config = Config(
+            provider=provider_config,
+            channels={},
+            web_search=BraveSearchConfig(
+                api_key=brave_api_key if brave_api_key else "",
+                enabled=bool(brave_api_key),
+            ) if brave_use else BraveSearchConfig()
+        )
         config.to_yaml(workspace / "config.yaml")
         progress.update(task, advance=1, description="Creating identity files...")
         

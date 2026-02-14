@@ -40,8 +40,10 @@ class FileTool:
         """Get all file tools."""
         return [self.read, self.write, self.edit, self.list]
 
-def create_default_tool_registry(allowed_dir: str = None) -> ToolRegistry:
+def create_default_tool_registry(allowed_dir: str = None, config=None) -> ToolRegistry:
     """Create a default tool registry with all standard tools."""
+    import os
+    
     registry = ToolRegistry()
     
     # Add file tools
@@ -52,8 +54,15 @@ def create_default_tool_registry(allowed_dir: str = None) -> ToolRegistry:
     # Add shell tool
     registry.register(ShellTool(allowed_dir=allowed_dir))
     
-    # Add web search tool (requires BRAVE_API_KEY env var)
-    registry.register(WebSearchTool())
+    # Add web search tool (uses Brave Search API)
+    # Get API key from config, environment variable, or None
+    api_key = None
+    if config and config.web_search:
+        api_key = config.web_search.api_key or os.environ.get("BRAVE_SEARCH_API_KEY")
+    else:
+        api_key = os.environ.get("BRAVE_SEARCH_API_KEY")
+    
+    registry.register(WebSearchTool(api_key=api_key))
     
     return registry
 

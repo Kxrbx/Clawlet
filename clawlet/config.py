@@ -224,6 +224,19 @@ class VeniceAIConfig(BaseModel):
         return v
 
 
+class BraveSearchConfig(BaseModel):
+    """Brave Search API configuration."""
+    api_key: str = Field(default="", description="Brave Search API key")
+    enabled: bool = Field(default=False, description="Enable Brave Search")
+    max_results: int = Field(default=5, ge=1, le=20, description="Max search results")
+    
+    @field_validator('api_key')
+    @classmethod
+    def validate_api_key(cls, v: str) -> str:
+        # Allow empty if not enabled
+        return v
+
+
 class ProviderConfig(BaseModel):
     """Provider configuration."""
     primary: Literal[
@@ -335,6 +348,7 @@ class Config(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
+    web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
     
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":

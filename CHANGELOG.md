@@ -2,6 +2,48 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Brave Search API Support**: Added optional Brave Search API integration for web searches. Users can now enable web search during onboarding or add it later via settings. Configure via `web_search.api_key` in config.yaml or `BRAVE_SEARCH_API_KEY` environment variable.
+
+## [0.1.1] - 2026-02-13
+
+### Added
+- **New LLM Providers**:
+  - Anthropic (Claude) API support
+  - OpenAI API support
+  - Google Gemini API support
+  - MiniMax API support
+  - Moonshot AI (Kimi) API support
+  - Qwen (Alibaba) API support
+  - Z.AI (GLM) API support
+  - GitHub Copilot API support
+  - Vercel AI Gateway support
+  - OpenCode Zen API support
+  - Xiaomi AI API support
+  - Synthetic AI API support
+  - Venice AI API support (uncensored models)
+- **Models Cache System** - Daily auto-updating cache for provider models with disk persistence
+- **Enhanced Dashboard**:
+  - Console logs panel
+  - Health history charts
+  - Status badges
+  - Real-time agent management (start/stop)
+  - Settings configuration UI
+  - Full config.yaml editor
+  - Models browser with cache info
+- **Heartbeat Scheduler Enhancements**:
+  - Priority levels for tasks (HIGH, MEDIUM, LOW)
+  - State persistence (save/load)
+  - Daily models cache update task
+- **TokenBucket Rate Limiting** - Additional algorithm for more flexible rate limiting
+
+### Improved
+- Expanded provider factory functions in `clawlet/providers/__init__.py`
+- More comprehensive health checks with detailed provider/storage status
+- Extended configuration options for all new providers
+
 ## [0.1.0] - 2026-02-10
 
 ### Added
