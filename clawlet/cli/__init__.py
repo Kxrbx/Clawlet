@@ -1131,7 +1131,310 @@ heartbeat:
   interval_minutes: 120
   quiet_hours_start: 2  # 2am UTC
   quiet_hours_end: 9    # 9am UTC
+
+# Multi-Agent Routing (optional)
+routing:
+  enabled: false
+  default_agent: "default"
+  routes: []
 """
+
+
+# ============================================================================
+# Workspace Management Commands
+# ============================================================================
+
+workspace_app = typer.Typer(
+    name="workspace",
+    help="Manage multiple agent workspaces",
+)
+
+app.add_typer(workspace_app, name="workspace")
+
+
+@workspace_app.command("list")
+def workspace_list():
+    """List all workspaces."""
+    from clawlet.agent.workspace import WorkspaceManager
+    
+    manager = WorkspaceManager(get_workspace_path())
+    workspaces = manager.list_workspace_statuses()
+    
+    print_section("Workspaces", "Available agent workspaces")
+    console.print("¦")
+    
+    if not workspaces:
+        console.print("¦  [dim]No workspaces found[/dim]")
+        console.print("¦")
+        console.print("¦  [dim]Create one with: clawlet workspace create <name>[/dim]")
+    else:
+        # Create table
+        table = Table(show_header=True, header_style=f"bold {SAKURA_PINK}", box=None)
+        table.add_column("Name", style=SAKURA_LIGHT)
+        table.add_column("Status", style="dim")
+        table.add_column("Config", style="dim")
+        table.add_column("Identity", style="dim")
+        
+        for ws in workspaces:
+            status_icon = "[green]running[/green]" if ws.is_running else "[dim]stopped[/dim]"
+            config_icon = "[green]â\u201c\u201d[/green]" if ws.has_config else "[red]â\u201c\u0153[/red]"
+            identity_icon = "[green]â\u201c\u201d[/green]" if ws.has_identity else "[red]â\u201c\u0153[/red]"
+            
+            table.add_row(
+                ws.name,
+                status_icon,
+                config_icon,
+                identity_icon
+            )
+        
+        for line in table.to_string().split("\n"):
+            console.print(f"¦  {line}")
+    
+    print_footer()
+    
+    # Show routing status
+    console.print()
+    from clawlet.config import load_config
+    try:
+        config = load_config(get_workspace_path())
+        if config.routing.enabled:
+            console.print(f"[green]â\u201c\u201d Multi-agent routing enabled[/green]")
+            console.print(f"  Default agent: [{SAKURA_PINK}]{config.routing.default_agent}[/{SAKURA_PINK}]")
+            console.print(f"  Routes: {len(config.routing.routes)}")
+        else:
+            console.print("[dim]Multi-agent routing disabled[/dim]")
+    except Exception:
+        pass
+
+
+@workspace_app.command("create")
+def workspace_create(
+    name: str = typer.Argument(..., help="Workspace name"),
+    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Agent name"),
+    user_name: Optional[str] = typer.Option(None, "--user", "-u", help="User name"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing"),
+):
+    """Create a new workspace."""
+    from clawlet.agent.workspace import WorkspaceManager
+    
+    manager = WorkspaceManager(get_workspace_path())
+    
+    # Check if exists
+    existing = manager.get_workspace(name)
+    if existing and existing.exists() and not force:
+        console.print(f"[red]Error: Workspace '{name}' already exists[/red]")
+        console.print(f"  Use --force to overwrite")
+        raise typer.Exit(1)
+    
+    print_section("Create Workspace", f"Creating workspace '{name}'")
+    console.print("¦")
+    
+    try:
+        workspace = manager.create_workspace(
+            name=name,
+            agent_name=agent_name,
+            user_name=user_name,
+        )
+        
+        console.print(f"¦  [green]â\u201c\u201d[/green] Created workspace at [{SAKURA_PINK}]{workspace.path}[/{SAKURA_PINK}]")
+        console.print("¦")
+        console.print(f"¦  [dim]Files created:[/dim]")
+        console.print(f"¦    [dim]config.yaml[/dim]")
+        console.print(f"¦    [dim]SOUL.md[/dim]")
+        console.print(f"¦    [dim]USER.md[/dim]")
+        console.print(f"¦    [dim]MEMORY.md[/dim]")
+        console.print(f"¦    [dim]HEARTBEAT.md[/dim]")
+        
+        print_footer()
+        
+        console.print()
+        console.print("[bold]Next steps:[/bold]")
+        console.print(f"  1. Edit [{SAKURA_PINK}]{workspace.path}/config.yaml[/{SAKURA_PINK}] to configure")
+        console.print(f"  2. Edit [{SAKURA_PINK}]{workspace.path}/SOUL.md[/{SAKURA_PINK}] to customize agent")
+        console.print(f"  3. Add routing rules to main config.yaml")
+        console.print()
+        
+    except Exception as e:
+        console.print(f"¦  [red]â\u201c\u0153 Error creating workspace: {e}[/red]")
+        print_footer()
+        raise typer.Exit(1)
+
+
+@workspace_app.command("delete")
+def workspace_delete(
+    name: str = typer.Argument(..., help="Workspace name"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
+    """Delete a workspace."""
+    from clawlet.agent.workspace import WorkspaceManager
+    
+    manager = WorkspaceManager(get_workspace_path())
+    workspace = manager.get_workspace(name)
+    
+    if not workspace or not workspace.exists():
+        console.print(f"[red]Error: Workspace '{name}' not found[/red]")
+        raise typer.Exit(1)
+    
+    if workspace._running:
+        console.print(f"[red]Error: Workspace '{name}' is running. Stop it first.[/red]")
+        raise typer.Exit(1)
+    
+    # Confirm
+    if not yes:
+        console.print(f"[yellow]Warning: This will delete all files in {workspace.path}[/yellow]")
+        confirm = typer.confirm(f"Delete workspace '{name}'?")
+        if not confirm:
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+    
+    print_section("Delete Workspace", f"Deleting workspace '{name}'")
+    console.print("¦")
+    
+    if manager.delete_workspace(name):
+        console.print(f"¦  [green]â\u201c\u201d[/green] Workspace '{name}' deleted")
+        print_footer()
+    else:
+        console.print(f"¦  [red]â\u201c\u0153 Failed to delete workspace[/red]")
+        print_footer()
+        raise typer.Exit(1)
+
+
+@workspace_app.command("show")
+def workspace_show(
+    name: str = typer.Argument(..., help="Workspace name"),
+):
+    """Show workspace details."""
+    from clawlet.agent.workspace import WorkspaceManager
+    
+    manager = WorkspaceManager(get_workspace_path())
+    workspace = manager.get_workspace(name)
+    
+    if not workspace or not workspace.exists():
+        console.print(f"[red]Error: Workspace '{name}' not found[/red]")
+        raise typer.Exit(1)
+    
+    status = workspace.get_status()
+    
+    print_section(f"Workspace: {name}", str(workspace.path))
+    console.print("¦")
+    
+    console.print(f"¦  [bold]Path:[/bold] {status.path}")
+    console.print(f"¦  [bold]Exists:[/bold] {'[green]Yes[/green]' if status.exists else '[red]No[/red]'}")
+    console.print(f"¦  [bold]Config:[/bold] {'[green]Yes[/green]' if status.has_config else '[red]No[/red]'}")
+    console.print(f"¦  [bold]Identity:[/bold] {'[green]Yes[/green]' if status.has_identity else '[red]No[/red]'}")
+    console.print(f"¦  [bold]Running:[/bold] {'[green]Yes[/green]' if status.is_running else '[dim]No[/dim]'}")
+    
+    print_footer()
+    
+    # Show files
+    console.print()
+    console.print("[bold]Files:[/bold]")
+    
+    for filename in ["config.yaml", "SOUL.md", "USER.md", "MEMORY.md", "HEARTBEAT.md"]:
+        file_path = workspace.path / filename
+        if file_path.exists():
+            size = file_path.stat().st_size
+            console.print(f"  [green]â\u201c\u201d[/green] {filename} [dim]({size} bytes)[/dim]")
+        else:
+            console.print(f"  [red]â\u201c\u0153[/red] {filename} [dim](missing)[/dim]")
+
+
+@workspace_app.command("start")
+def workspace_start(
+    name: str = typer.Argument(..., help="Workspace name"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
+):
+    """Start a workspace agent."""
+    console.print("[yellow]Note: This command requires integration with the agent loop.[/yellow]")
+    console.print("[dim]For now, use 'clawlet agent' to start the default agent.[/dim]")
+    console.print()
+    console.print(f"To start workspace '{name}' with routing:")
+    console.print(f"  1. Enable routing in config.yaml")
+    console.print(f"  2. Add route for the workspace")
+    console.print(f"  3. Run 'clawlet agent'")
+
+
+@workspace_app.command("stop")
+def workspace_stop(
+    name: str = typer.Argument(..., help="Workspace name"),
+):
+    """Stop a workspace agent."""
+    console.print("[yellow]Note: This command requires integration with the agent loop.[/yellow]")
+    console.print("[dim]For now, use Ctrl+C to stop the running agent.[/dim]")
+
+
+# ============================================================================
+# Routing Commands
+# ============================================================================
+
+@app.command("routing")
+def routing_cmd(
+    list_routes: bool = typer.Option(False, "--list", "-l", help="List routing rules"),
+    enable: bool = typer.Option(False, "--enable", help="Enable routing"),
+    disable: bool = typer.Option(False, "--disable", help="Disable routing"),
+    add_route: bool = typer.Option(False, "--add", help="Add a route interactively"),
+):
+    """Manage multi-agent routing configuration."""
+    from clawlet.config import load_config
+    
+    workspace_path = get_workspace_path()
+    config_path = workspace_path / "config.yaml"
+    
+    if not config_path.exists():
+        console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
+        raise typer.Exit(1)
+    
+    config = load_config(workspace_path)
+    
+    # Handle enable/disable
+    if enable:
+        config.routing.enabled = True
+        config.to_yaml(config_path)
+        console.print("[green]â\u201c\u201d Multi-agent routing enabled[/green]")
+        return
+    
+    if disable:
+        config.routing.enabled = False
+        config.to_yaml(config_path)
+        console.print("[green]â\u201c\u201d Multi-agent routing disabled[/green]")
+        return
+    
+    # Handle add route
+    if add_route:
+        console.print("[yellow]Interactive route addition coming soon.[/yellow]")
+        console.print("[dim]For now, edit config.yaml directly to add routes.[/dim]")
+        return
+    
+    # Default: show routing status
+    print_section("Routing Configuration", "Multi-agent routing settings")
+    console.print("¦")
+    
+    status = "enabled" if config.routing.enabled else "disabled"
+    status_color = "green" if config.routing.enabled else "dim"
+    console.print(f"¦  Status: [{status_color}]{status}[/{status_color}]")
+    console.print(f"¦  Default agent: [{SAKURA_PINK}]{config.routing.default_agent}[/{SAKURA_PINK}]")
+    console.print("¦")
+    
+    if config.routing.routes:
+        console.print("¦  [bold]Routes:[/bold]")
+        for i, route in enumerate(config.routing.routes):
+            conditions = []
+            if route.channel:
+                conditions.append(f"channel={route.channel}")
+            if route.user_id:
+                conditions.append(f"user={route.user_id}")
+            if route.pattern:
+                conditions.append(f"pattern={route.pattern}")
+            
+            cond_str = ", ".join(conditions) if conditions else "all"
+            console.print(f"¦    {i+1}. [{SAKURA_PINK}]{route.agent}[/{SAKURA_PINK}] ({cond_str}) priority={route.priority}")
+    else:
+        console.print("¦  [dim]No routes configured[/dim]")
+    
+    print_footer()
+    
+    console.print()
+    console.print("[dim]Edit config.yaml to add or modify routes.[/dim]")
 
 
 if __name__ == "__main__":

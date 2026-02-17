@@ -51,3 +51,4 @@ htmlcov/
 .DS_Store
 Thumbs.db
 .kilocode/mcp.json
+plans/openclaw-vs-clawlet-comparison.md

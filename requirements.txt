@@ -1,0 +1,33 @@
+# Clawlet Dependencies
+
+# Core
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+PyYAML>=6.0
+loguru>=0.7.0
+aiohttp>=3.8.0
+
+# Providers
+openai>=1.0.0
+anthropic>=0.18.0
+httpx>=0.25.0
+
+# Channels
+python-telegram-bot>=20.0
+discord.py>=2.3.0
+slack_bolt>=1.18.0
+twilio>=8.0.0
+
+# Scheduling
+croniter>=1.4.0
+
+# Storage
+aiosqlite>=0.19.0
+asyncpg>=0.29.0
+
+# Web Search
+brave-search>=0.1.0
+
+# Webhooks
+starlette>=0.34.0
+uvicorn>=0.27.0

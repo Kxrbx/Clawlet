@@ -26,6 +26,7 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - 📊 **Built-in Dashboard** - React UI for monitoring and management
 - 🔒 **Security-First** - Hardened shell tool, safe command execution
 - 🌐 **Web Search** - Brave Search API integration for up-to-date information
+- 🔌 **Skills System** - Modular capabilities with OpenClaw-compatible SKILL.md format
 
 ## ✨ Features
 
@@ -35,16 +36,26 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - **Persistent Memory** - SQLite (default) or PostgreSQL
 - **Tool System** - File ops, shell commands, web search
 - **Models Cache** - Daily auto-updating cache with disk persistence
+- **Skills System** - Extend agent capabilities with modular skills
 
 ### Infrastructure
 - **Health Checks** - Monitor providers, storage, channels
 - **Rate Limiting** - Sliding window + token bucket algorithms
 - **Config Validation** - Pydantic-based with environment variable support
 - **Retry Logic** - Exponential backoff with circuit breaker
+- **Webhooks** - Receive events from GitHub, Stripe, and custom sources
+- **Scheduling** - Cron-based task scheduling with timezone support
 
 ### Channels
 - **Telegram** - Bot integration
 - **Discord** - Bot integration
+- **WhatsApp** - Business API integration
+- **Slack** - Socket Mode and HTTP integration
+
+### Multi-Agent
+- **Workspace Management** - Isolated agent environments
+- **Message Routing** - Route messages to appropriate agents
+- **Specialized Agents** - Configure agents for specific tasks
 
 ### Dashboard
 - **React + Tailwind UI** - Modern Sakura-themed design
@@ -320,10 +331,13 @@ Blocked patterns: `|`, `>`, `<`, `$()`, `&&`, `||`, `;`, backticks, and more.
 
 ```
 clawlet/
-├── agent/           # Identity, loop, memory
+├── agent/           # Identity, loop, memory, router, workspace
 ├── bus/             # Message bus
-├── channels/        # Telegram, Discord
+├── channels/        # Telegram, Discord, WhatsApp, Slack
 ├── providers/       # 18+ LLM providers
+├── skills/          # Skills system with bundled skills and templates
+├── webhooks/        # GitHub, Stripe, custom webhooks
+├── heartbeat/       # Scheduling and periodic tasks
 ├── storage/         # SQLite, PostgreSQL
 ├── tools/           # Files, shell, web search
 ├── dashboard/       # React + FastAPI
@@ -350,6 +364,25 @@ clawlet/
 | Web Search | Brave Search API |
 | Models Cache | Daily auto-updating with disk persistence |
 | Interactive Onboarding | 5-step guided setup |
+| Skills System | Modular capabilities with SKILL.md |
+| Webhooks | GitHub, Stripe, custom integrations |
+| Scheduling | Cron-based task automation |
+| Multi-Agent | Workspace isolation and routing |
+
+---
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Skills Documentation](docs/skills.md) | Create and manage modular skills |
+| [Skills API Reference](docs/skills-api.md) | Technical API documentation |
+| [Channels Documentation](docs/channels.md) | Telegram, Discord, WhatsApp, Slack |
+| [Webhooks Documentation](docs/webhooks.md) | GitHub, Stripe, custom webhooks |
+| [Scheduling Documentation](docs/scheduling.md) | Cron expressions and task scheduling |
+| [Multi-Agent Documentation](docs/multi-agent.md) | Workspace management and routing |
+| [Quick Start Guide](QUICKSTART.md) | Get started quickly |
+| [Deployment Guide](DEPLOYMENT.md) | Production deployment |
 
 ---
 

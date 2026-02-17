@@ -302,6 +302,59 @@ class DiscordConfig(BaseModel):
         return v
 
 
+class WhatsAppConfig(BaseModel):
+    """WhatsApp Business API channel configuration."""
+    enabled: bool = False
+    phone_number_id: str = ""
+    access_token: str = ""
+    verify_token: str = ""
+    allowed_users: list[str] = Field(default_factory=list)
+    port: int = Field(default=8080, ge=1, le=65535)
+    host: str = "0.0.0.0"
+    mark_read: bool = True
+    
+    @field_validator('phone_number_id', 'access_token')
+    @classmethod
+    def validate_required_if_enabled(cls, v: str, info) -> str:
+        if info.data.get('enabled') and not v:
+            raise ValueError(f"{info.field_name} is required when WhatsApp is enabled")
+        return v
+
+
+class SlackConfig(BaseModel):
+    """Slack channel configuration using Slack Bolt."""
+    enabled: bool = False
+    bot_token: str = ""  # xoxb-...
+    app_token: str = ""  # xapp-... (for Socket Mode)
+    signing_secret: str = ""  # For HTTP mode
+    socket_mode: bool = True  # Use Socket Mode (recommended)
+    allowed_channels: list[str] = Field(default_factory=list)
+    allowed_users: list[str] = Field(default_factory=list)
+    port: int = Field(default=3000, ge=1, le=65535)  # For HTTP mode
+    host: str = "0.0.0.0"  # For HTTP mode
+    
+    @field_validator('bot_token')
+    @classmethod
+    def validate_bot_token_if_enabled(cls, v: str, info) -> str:
+        if info.data.get('enabled') and not v:
+            raise ValueError("Slack bot_token is required when enabled")
+        return v
+    
+    @field_validator('app_token')
+    @classmethod
+    def validate_app_token_if_socket_mode(cls, v: str, info) -> str:
+        if info.data.get('enabled') and info.data.get('socket_mode', True) and not v:
+            raise ValueError("Slack app_token is required for Socket Mode")
+        return v
+    
+    @field_validator('signing_secret')
+    @classmethod
+    def validate_signing_secret_if_http_mode(cls, v: str, info) -> str:
+        if info.data.get('enabled') and not info.data.get('socket_mode', True) and not v:
+            raise ValueError("Slack signing_secret is required for HTTP mode")
+        return v
+
+
 class SQLiteConfig(BaseModel):
     """SQLite storage configuration."""
     path: str = "~/.clawlet/clawlet.db"
@@ -338,17 +391,142 @@ class HeartbeatSettings(BaseModel):
     quiet_hours_end: int = Field(default=9, ge=0, le=23)
 
 
+class SkillsConfig(BaseModel):
+    """Skills system configuration."""
+    enabled: bool = Field(default=True, description="Enable the skills system")
+    directories: list[str] = Field(
+        default_factory=lambda: ["~/.clawlet/skills", "./skills"],
+        description="Directories to search for skills"
+    )
+    disabled: list[str] = Field(
+        default_factory=list,
+        description="List of skill names to disable"
+    )
+    # Skill-specific configurations are stored as a dict
+    # e.g., {"email": {"smtp_server": "...", ...}}
+    email: dict = Field(default_factory=dict)
+    calendar: dict = Field(default_factory=dict)
+    notes: dict = Field(default_factory=dict)
+
+
+class GitHubWebhookConfig(BaseModel):
+    """GitHub webhook configuration."""
+    secret: str = Field(default="", description="GitHub webhook secret for signature verification")
+
+
+class StripeWebhookConfig(BaseModel):
+    """Stripe webhook configuration."""
+    secret: str = Field(default="", description="Stripe signing secret for signature verification")
+
+
+class WebhooksConfig(BaseModel):
+    """Webhooks system configuration."""
+    enabled: bool = Field(default=False, description="Enable the webhooks server")
+    host: str = Field(default="0.0.0.0", description="Host to bind the webhook server")
+    port: int = Field(default=8080, ge=1, le=65535, description="Port for the webhook server")
+    secret: str = Field(default="", description="Default secret for custom webhooks")
+    github: GitHubWebhookConfig = Field(default_factory=GitHubWebhookConfig)
+    stripe: StripeWebhookConfig = Field(default_factory=StripeWebhookConfig)
+    rate_limit_max: int = Field(default=100, ge=1, description="Max requests per rate limit window")
+    rate_limit_window: int = Field(default=60, ge=1, description="Rate limit window in seconds")
+    queue_max_size: int = Field(default=1000, ge=10, description="Max events in queue")
+    # Custom webhook handlers: {"handler_name": "secret"}
+    custom_handlers: dict[str, str] = Field(default_factory=dict)
+
+
+class RetryPolicyConfig(BaseModel):
+    """Retry policy configuration for scheduled tasks."""
+    max_attempts: int = Field(default=3, ge=1, le=10, description="Maximum retry attempts")
+    delay_seconds: float = Field(default=60.0, ge=1.0, description="Initial delay between retries in seconds")
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0, description="Exponential backoff multiplier")
+    max_delay_seconds: float = Field(default=3600.0, ge=60.0, description="Maximum delay between retries")
+
+
+class TaskConfig(BaseModel):
+    """Configuration for a single scheduled task."""
+    name: str = Field(..., description="Unique task name")
+    
+    # Scheduling (one of these)
+    cron: Optional[str] = Field(default=None, description="Cron expression (e.g., '0 8 * * *')")
+    interval: Optional[str] = Field(default=None, description="Interval (e.g., '5m', '1h', '1d')")
+    one_time: Optional[str] = Field(default=None, description="One-time execution at ISO datetime")
+    
+    # Timezone
+    timezone: str = Field(default="UTC", description="Timezone for scheduling")
+    
+    # Action
+    action: str = Field(default="callback", description="Action type: agent, tool, webhook, health_check, skill, callback")
+    prompt: Optional[str] = Field(default=None, description="Prompt for agent action")
+    tool: Optional[str] = Field(default=None, description="Tool name for tool action")
+    webhook_url: Optional[str] = Field(default=None, description="URL for webhook action")
+    webhook_method: str = Field(default="POST", description="HTTP method for webhook")
+    skill: Optional[str] = Field(default=None, description="Skill name for skill action")
+    params: dict = Field(default_factory=dict, description="Additional parameters")
+    
+    # Task settings
+    enabled: bool = Field(default=True, description="Whether task is enabled")
+    priority: str = Field(default="normal", description="Priority: low, normal, high, critical")
+    
+    # Dependencies
+    depends_on: list[str] = Field(default_factory=list, description="Task IDs this task depends on")
+    
+    # Retry
+    retry: Optional[RetryPolicyConfig] = Field(default=None, description="Retry policy")
+    
+    # Notifications
+    notify_on_success: bool = Field(default=False, description="Notify on successful execution")
+    notify_on_failure: bool = Field(default=True, description="Notify on failed execution")
+    
+    # Metadata
+    tags: list[str] = Field(default_factory=list, description="Tags for organization")
+
+
+class ScheduleConfig(BaseModel):
+    """Configuration for the scheduling system."""
+    enabled: bool = Field(default=True, description="Enable the scheduling system")
+    timezone: str = Field(default="UTC", description="Default timezone for tasks")
+    tasks: dict[str, TaskConfig] = Field(default_factory=dict, description="Scheduled tasks by ID")
+    max_concurrent: int = Field(default=3, ge=1, le=10, description="Maximum concurrent task executions")
+    default_retry_attempts: int = Field(default=3, ge=1, le=10, description="Default max retry attempts")
+    default_retry_delay: str = Field(default="1m", description="Default retry delay")
+    check_interval_seconds: float = Field(default=60.0, ge=10.0, le=300.0, description="How often to check for pending tasks")
+    state_file: str = Field(default="~/.clawlet/scheduler_state.json", description="Path to save scheduler state")
+
+
+class RouteRuleConfig(BaseModel):
+    """Configuration for a single routing rule."""
+    agent: str = Field(..., description="Agent ID to route to (workspace name)")
+    channel: Optional[str] = Field(default=None, description="Channel to match (telegram, discord, slack, whatsapp)")
+    user_id: Optional[str] = Field(default=None, description="Specific user ID to match")
+    workspace: Optional[str] = Field(default=None, description="Workspace context to match")
+    pattern: Optional[str] = Field(default=None, description="Regex pattern to match on message content")
+    priority: int = Field(default=0, ge=0, le=100, description="Rule priority (higher = checked first)")
+
+
+class RoutingConfig(BaseModel):
+    """Configuration for multi-agent routing."""
+    enabled: bool = Field(default=False, description="Enable multi-agent routing")
+    default_agent: str = Field(default="default", description="Default agent to use when no rules match")
+    routes: list[RouteRuleConfig] = Field(default_factory=list, description="Routing rules in priority order")
+
+
 class Config(BaseModel):
     """Main configuration."""
     provider: ProviderConfig
     channels: dict = Field(default_factory=lambda: {
         "telegram": TelegramConfig(),
         "discord": DiscordConfig(),
+        "whatsapp": WhatsAppConfig(),
+        "slack": SlackConfig(),
     })
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
     web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
+    schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":
