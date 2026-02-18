@@ -2,6 +2,27 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.2] - 2026-02-18
+
+### Security
+
+- **Path Traversal Fix**: Added symlink attack protection in file tools using `resolve(strict=True)` to prevent attackers from escaping allowed directories via symlinks
+- **Tool Rate Limiting**: Added rate limiting to tool execution (10 calls per minute per tool) to prevent resource exhaustion attacks
+
+### Stability
+
+- **Graceful Shutdown**: Added SIGTERM/SIGINT signal handlers to agent loop for proper cleanup on system shutdown
+- **Discord Error Handling**: Added try/catch to Discord message handler to prevent bot crashes from processing errors
+- **Slack Socket Mode Cleanup**: Fixed daemon thread cleanup to ensure proper graceful shutdown of Slack connections
+
+### Configuration
+
+- **Workspace Config Isolation**: Fixed workspace config sharing bug where modifying workspace config would affect parent config
+
+### Maintenance
+
+- **Model Names Updated**: Updated OpenAI provider to use valid model names (removed non-existent gpt-5, o3)
+
 ## [0.2.1] - 2026-02-18
 
 ### Security
