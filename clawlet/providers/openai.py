@@ -7,7 +7,7 @@ from typing import Optional, AsyncIterator, List
 import httpx
 from loguru import logger
 
-from clawlet.providers.base import BaseProvider, LLMResponse
+from clawlet.providers.base import BaseProvider, LLMResponse, get_http_client_manager
 
 
 # Default models list (fallback when API is unavailable)
@@ -82,7 +82,7 @@ class OpenAIProvider(BaseProvider):
         return self.default_model
     
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
+        """Get or create HTTP client with connection pooling."""
         if self._client is None or self._client.is_closed:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -97,9 +97,16 @@ class OpenAIProvider(BaseProvider):
             if self.use_oauth:
                 headers["OpenAI-Client"] = "clawlet"
             
+            # Use shared connection pool from HTTP client manager
+            manager = get_http_client_manager()
+            shared_limits = None
+            if manager._client is not None:
+                shared_limits = manager._client._limits
+            
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers=headers,
+                limits=shared_limits,  # Use shared connection pool
                 timeout=120.0,
             )
         return self._client

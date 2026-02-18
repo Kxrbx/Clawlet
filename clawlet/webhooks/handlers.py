@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 from abc import ABC, abstractmethod
-from typing import Optional, Callable, Any, Awaitable
+from typing import Optional, Callable, Any, Awaitable, Tuple
 from datetime import datetime
 
 from loguru import logger
@@ -21,6 +21,7 @@ from clawlet.webhooks.models import (
     WebhookSource,
     WebhookEventType,
 )
+from clawlet.exceptions import ValidationError
 
 
 class WebhookHandler(ABC):
@@ -482,3 +483,70 @@ class HandlerRegistry:
 
 # Global registry instance
 registry = HandlerRegistry()
+
+
+# Webhook payload validation
+MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def validate_webhook_payload(
+    payload: bytes,
+    headers: Optional[dict] = None,
+    max_size: int = MAX_PAYLOAD_SIZE,
+) -> Tuple[bool, str, Optional[dict]]:
+    """
+    Validate incoming webhook payload.
+    
+    Args:
+        payload: Raw request body bytes
+        headers: HTTP headers from the request
+        max_size: Maximum allowed payload size in bytes
+        
+    Returns:
+        Tuple of (is_valid, error_message, parsed_data)
+    """
+    errors = []
+    headers = headers or {}
+    
+    # Validate payload is not empty
+    if not payload:
+        errors.append("Payload cannot be empty")
+        return False, "; ".join(errors), None
+    
+    # Check payload size
+    payload_size = len(payload)
+    if payload_size > max_size:
+        errors.append(
+            f"Payload size ({payload_size} bytes) exceeds maximum allowed size "
+            f"({max_size} bytes)"
+        )
+        logger.warning(f"Webhook payload too large: {payload_size} bytes")
+        return False, "; ".join(errors), None
+    
+    # Try to parse JSON
+    try:
+        parsed_data = json.loads(payload.decode("utf-8"))
+    except UnicodeDecodeError as e:
+        errors.append(f"Payload is not valid UTF-8: {str(e)}")
+        logger.warning(f"Webhook payload UTF-8 decode error: {e}")
+        return False, "; ".join(errors), None
+    except json.JSONDecodeError as e:
+        errors.append(f"Payload is not valid JSON: {str(e)}")
+        logger.warning(f"Webhook payload JSON parse error: {e}")
+        return False, "; ".join(errors), None
+    
+    # Validate parsed data is a dict or list (common webhook formats)
+    if not isinstance(parsed_data, (dict, list)):
+        errors.append("Payload must be a JSON object or array")
+        return False, "; ".join(errors), None
+    
+    # Check Content-Type header if present
+    content_type = headers.get("Content-Type") or headers.get("content-type", "")
+    if content_type and "application/json" not in content_type.lower():
+        logger.warning(f"Unexpected Content-Type for webhook: {content_type}")
+    
+    if errors:
+        error_message = "; ".join(errors)
+        return False, error_message, None
+    
+    return True, "", parsed_data

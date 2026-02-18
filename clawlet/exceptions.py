@@ -178,3 +178,134 @@ class CircuitBreakerOpen(ClawletError):
     def __init__(self, message: str, retry_after: float = None):
         details = {"retry_after": retry_after} if retry_after else {}
         super().__init__(message, details)
+
+
+# Message bus errors
+
+class RateLimitExceeded(ClawletError):
+    """Rate limit exceeded for message bus operations."""
+    
+    def __init__(self, message: str, retry_after: float = None):
+        self.retry_after = retry_after
+        details = {"retry_after": retry_after} if retry_after else {}
+        super().__init__(message, details)
+
+
+# Validation errors
+
+class ValidationError(ClawletError):
+    """Validation failed for input data."""
+    
+    def __init__(self, field: str, message: str, is_critical: bool = True):
+        """
+        Initialize validation error.
+        
+        Args:
+            field: The field that failed validation
+            message: Description of the validation failure
+            is_critical: If True, this is a critical error that should raise an exception.
+                        If False, it's a warning that should be logged but not block execution.
+        """
+        self.field = field
+        self.is_critical = is_critical
+        super().__init__(
+            f"Validation failed for '{field}': {message}",
+            {"field": field, "is_critical": is_critical}
+        )
+
+
+# Validation helper functions
+
+def validate_not_empty(value: Any, field_name: str, is_critical: bool = True) -> tuple[bool, str]:
+    """
+    Validate that a value is not empty (None or empty string).
+    
+    Args:
+        value: The value to validate
+        field_name: Name of the field for error messages
+        is_critical: Whether this is a critical validation
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if value is None:
+        return False, f"{field_name} cannot be None"
+    if isinstance(value, str) and not value.strip():
+        return False, f"{field_name} cannot be empty"
+    return True, ""
+
+
+def validate_string_length(
+    value: str, 
+    field_name: str, 
+    min_length: int = 0, 
+    max_length: Optional[int] = None,
+    is_critical: bool = True
+) -> tuple[bool, str]:
+    """
+    Validate string length.
+    
+    Args:
+        value: The string value to validate
+        field_name: Name of the field for error messages
+        min_length: Minimum allowed length
+        max_length: Maximum allowed length (None for no limit)
+        is_critical: Whether this is a critical validation
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if value is None:
+        return False, f"{field_name} cannot be None"
+    
+    length = len(value)
+    
+    if length < min_length:
+        return False, f"{field_name} must be at least {min_length} characters"
+    
+    if max_length is not None and length > max_length:
+        return False, f"{field_name} must be at most {max_length} characters"
+    
+    return True, ""
+
+
+def validate_type(value: Any, expected_type: type, field_name: str, is_critical: bool = True) -> tuple[bool, str]:
+    """
+    Validate that a value is of the expected type.
+    
+    Args:
+        value: The value to validate
+        expected_type: The expected type
+        field_name: Name of the field for error messages
+        is_critical: Whether this is a critical validation
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not isinstance(value, expected_type):
+        return False, f"{field_name} must be of type {expected_type.__name__}, got {type(value).__name__}"
+    return True, ""
+
+
+def sanitize_string(value: str, max_length: Optional[int] = None) -> str:
+    """
+    Sanitize a string to prevent injection attacks.
+    
+    Args:
+        value: The string to sanitize
+        max_length: Maximum length to truncate to (None for no limit)
+        
+    Returns:
+        Sanitized string
+    """
+    if value is None:
+        return ""
+    
+    # Remove null bytes and other control characters
+    sanitized = "".join(char for char in value if ord(char) >= 32 or char in "\n\r\t")
+    
+    # Truncate if needed
+    if max_length is not None and len(sanitized) > max_length:
+        sanitized = sanitized[:max_length]
+    
+    return sanitized.strip()

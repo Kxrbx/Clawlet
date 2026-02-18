@@ -3,17 +3,20 @@ Dashboard API server with FastAPI.
 """
 
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Callable
 import asyncio
 import json
 import os
 import subprocess
+from functools import wraps
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from typing import List
+from fastapi.security import APIKeyHeader
 import uvicorn
 
 from loguru import logger
@@ -22,6 +25,10 @@ from clawlet import Config, load_config
 from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
 from clawlet.providers.models_cache import get_models_cache
+
+
+# API Key header
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 # Pydantic models
@@ -85,6 +92,57 @@ agent_status: dict = {
     "pid": None,
 }
 
+# Endpoints that don't require authentication
+PUBLIC_ENDPOINTS = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
+
+
+async def get_api_key(request: Request, api_key: str = Depends(api_key_header)) -> Optional[str]:
+    """
+    Dependency to verify API key authentication.
+    
+    Returns the API key if valid, otherwise raises 401 Unauthorized.
+    If no API key is configured, authentication is optional (passes).
+    """
+    global config
+    
+    # Load config if not loaded yet
+    if config is None:
+        try:
+            config = load_config()
+        except Exception as e:
+            logger.warning(f"Failed to load config for auth: {e}")
+            # If config can't be loaded, allow the request (fail open)
+            return api_key
+    
+    # Get configuration
+    dashboard_api_key = getattr(config, 'dashboard_api_key', None)
+    dashboard_auth_required = getattr(config, 'dashboard_auth_required', False)
+    
+    # If no API key is configured and auth is not required, allow access
+    if not dashboard_api_key and not dashboard_auth_required:
+        return api_key
+    
+    # If API key is configured but auth is not explicitly required,
+    # still require it for security
+    if dashboard_api_key and not dashboard_auth_required:
+        dashboard_auth_required = True
+    
+    # If we get here, auth is required
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: API key required. Provide X-API-Key header."
+        )
+    
+    # Verify the API key
+    if api_key != dashboard_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Invalid API key."
+        )
+    
+    return api_key
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -97,6 +155,10 @@ async def lifespan(app: FastAPI):
         health_checker = HealthChecker()
         
         logger.info("Dashboard API started")
+        if config.dashboard_api_key:
+            logger.info("Dashboard API authentication enabled")
+        else:
+            logger.info("Dashboard API authentication is optional (no API key configured)")
         yield
         
     finally:
@@ -126,7 +188,7 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def get_health():
-    """Get system health status."""
+    """Get system health status (public, no auth required for monitoring)."""
     try:
         result = await quick_health_check()
         # Record to history file
@@ -146,7 +208,7 @@ async def get_health():
 
 
 @app.get("/health/history")
-async def get_health_history(limit: int = 50):
+async def get_health_history(limit: int = 50, api_key: str = Depends(get_api_key)):
     """Get recent health history."""
     try:
         from pathlib import Path
@@ -162,7 +224,7 @@ async def get_health_history(limit: int = 50):
 
 
 @app.get("/health/detailed")
-async def get_detailed_health():
+async def get_detailed_health(api_key: str = Depends(get_api_key)):
     """Get detailed health checks with provider/storage."""
     if health_checker is None:
         raise HTTPException(status_code=503, detail="Health checker not initialized")
@@ -178,13 +240,13 @@ async def get_detailed_health():
 # Agent endpoints
 
 @app.get("/agent/status", response_model=AgentStatus)
-async def get_agent_status():
+async def get_agent_status(api_key: str = Depends(get_api_key)):
     """Get current agent status."""
     return AgentStatus(**agent_status)
 
 
 @app.post("/agent/start")
-async def start_agent():
+async def start_agent(api_key: str = Depends(get_api_key)):
     """Start the agent."""
     global agent_process
     
@@ -216,7 +278,7 @@ async def start_agent():
 
 
 @app.post("/agent/stop")
-async def stop_agent():
+async def stop_agent(api_key: str = Depends(get_api_key)):
     """Stop the agent."""
     if not agent_status["running"]:
         return {"success": False, "message": "Agent not running"}
@@ -231,7 +293,7 @@ async def stop_agent():
 # Settings endpoints
 
 @app.get("/settings", response_model=SettingsResponse)
-async def get_settings():
+async def get_settings(api_key: str = Depends(get_api_key)):
     """Get current settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -246,7 +308,7 @@ async def get_settings():
 
 
 @app.post("/settings")
-async def update_settings(settings: SettingsUpdate):
+async def update_settings(settings: SettingsUpdate, api_key: str = Depends(get_api_key)):
     """Update settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -266,7 +328,7 @@ async def update_settings(settings: SettingsUpdate):
 
 
 @app.get("/config/yaml")
-async def get_config_yaml():
+async def get_config_yaml(api_key: str = Depends(get_api_key)):
     """Get full config.yaml content."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -278,7 +340,7 @@ async def get_config_yaml():
 
 
 @app.post("/config/yaml")
-async def update_config_yaml(content: dict):
+async def update_config_yaml(content: dict, api_key: str = Depends(get_api_key)):
     """Update config.yaml entirely."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -299,7 +361,7 @@ async def update_config_yaml(content: dict):
 # Models endpoints
 
 @app.get("/models", response_model=ModelsResponse)
-async def get_models(provider: str = "openrouter", force_refresh: bool = False):
+async def get_models(provider: str = "openrouter", force_refresh: bool = False, api_key: str = Depends(get_api_key)):
     """Get available models for a provider."""
     if provider == "openrouter":
         from clawlet.providers.openrouter import OpenRouterProvider
@@ -314,7 +376,7 @@ async def get_models(provider: str = "openrouter", force_refresh: bool = False):
 
 
 @app.get("/models/cache-info", response_model=CacheInfoResponse)
-async def get_cache_info(provider: str = "openrouter"):
+async def get_cache_info(provider: str = "openrouter", api_key: str = Depends(get_api_key)):
     """Get models cache information."""
     if provider == "openrouter":
         cache = get_models_cache()
@@ -335,7 +397,7 @@ async def get_cache_info(provider: str = "openrouter"):
 # Logs endpoint
 
 @app.get("/logs")
-async def get_logs(limit: int = 100):
+async def get_logs(limit: int = 100, api_key: str = Depends(get_api_key)):
     """Get recent logs."""
     # TODO: Implement actual log retrieval
     return {
@@ -358,7 +420,7 @@ async def get_logs(limit: int = 100):
 # Console endpoint (WebSocket would be better, but HTTP for now)
 
 @app.get("/console")
-async def get_console_output():
+async def get_console_output(api_key: str = Depends(get_api_key)):
     """Get recent console output."""
     # TODO: Implement actual console output retrieval
     return {
@@ -376,7 +438,7 @@ async def get_console_output():
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
+    """Root endpoint (public, no auth required)."""
     return {
         "name": "Clawlet Dashboard API",
         "version": "0.1.0",

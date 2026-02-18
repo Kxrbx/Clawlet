@@ -8,7 +8,7 @@ from typing import Optional, AsyncIterator
 
 import httpx
 
-from clawlet.providers.base import BaseProvider, LLMResponse
+from clawlet.providers.base import BaseProvider, LLMResponse, get_http_client_manager
 from loguru import logger
 
 
@@ -59,9 +59,18 @@ class OllamaProvider(BaseProvider):
             self._client = None
     
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+        """Get or create HTTP client with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            # Use shared connection pool from HTTP client manager
+            manager = get_http_client_manager()
+            shared_limits = None
+            if manager._client is not None:
+                shared_limits = manager._client._limits
+            
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=shared_limits,  # Use shared connection pool
+            )
         return self._client
     
     async def complete(

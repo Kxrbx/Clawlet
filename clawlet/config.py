@@ -528,6 +528,38 @@ class Config(BaseModel):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     
+    # Outbound rate limiting configuration
+    max_outbound_per_minute: int = Field(
+        default=20,
+        ge=1,
+        le=1000,
+        description="Maximum outbound messages per minute per chat"
+    )
+    max_outbound_per_hour: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        description="Maximum outbound messages per hour per chat"
+    )
+    outbound_rate_limit_enabled: bool = Field(
+        default=True,
+        description="Enable outbound rate limiting to prevent spam"
+    )
+    outbound_rate_limit_strict: bool = Field(
+        default=False,
+        description="If True, reject messages when rate limited. If False, log warning but allow."
+    )
+    
+    # Dashboard API authentication
+    dashboard_api_key: Optional[str] = Field(
+        default=None,
+        description="API key for dashboard API authentication. If not set, auth is optional."
+    )
+    dashboard_auth_required: bool = Field(
+        default=False,
+        description="If True, require API key authentication for dashboard endpoints"
+    )
+    
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":
         """Load configuration from YAML file."""

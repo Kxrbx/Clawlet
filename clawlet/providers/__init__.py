@@ -20,7 +20,7 @@ Available providers:
 - VeniceProvider: Venice AI
 """
 
-from clawlet.providers.base import BaseProvider, LLMResponse
+from clawlet.providers.base import BaseProvider, LLMResponse, HTTPClientConfig, HTTPClientManager, get_http_client_manager
 
 # Factory functions for lazy loading
 def create_openrouter_provider(api_key: str, default_model: str = "anthropic/claude-sonnet-4"):
@@ -106,6 +106,9 @@ def create_venice_provider(api_key: str, default_model: str = "venice-llama-4"):
 __all__ = [
     "BaseProvider",
     "LLMResponse",
+    "HTTPClientConfig",
+    "HTTPClientManager",
+    "get_http_client_manager",
     "create_openrouter_provider",
     "create_ollama_provider",
     "create_lmstudio_provider",
