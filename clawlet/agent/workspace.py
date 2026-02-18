@@ -270,10 +270,11 @@ class Workspace:
         """
         Load workspace configuration.
         
-        If workspace has no config, inherits from parent_config.
+        If workspace has no config, uses defaults instead of inheriting from parent.
+        This ensures each workspace has isolated configuration.
         
         Args:
-            parent_config: Parent configuration to inherit from
+            parent_config: Parent configuration (not used for isolation)
             
         Returns:
             Loaded or inherited configuration
@@ -282,8 +283,10 @@ class Workspace:
             logger.info(f"Loading config from {self.config_path}")
             self.config = load_config(self.path)
         elif parent_config:
-            logger.info(f"Using parent config for workspace '{self.name}'")
-            self.config = parent_config
+            # Don't inherit parent config directly - use defaults for workspace
+            # This ensures each workspace has isolated configuration
+            logger.info(f"Using defaults for workspace '{self.name}' (no config found)")
+            self.config = load_config(Path.home() / ".clawlet")
         else:
             logger.warning(f"No config found for workspace '{self.name}', using defaults")
             self.config = load_config(Path.home() / ".clawlet")

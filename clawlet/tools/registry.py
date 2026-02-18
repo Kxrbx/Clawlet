@@ -6,10 +6,38 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Dict, Union
 import json
+import time
+from collections import defaultdict
 
 from loguru import logger
 
 from clawlet.exceptions import ValidationError, validate_not_empty, validate_type
+
+
+class RateLimiter:
+    """Simple rate limiter for tool execution."""
+    
+    def __init__(self, max_calls: int = 10, window_seconds: float = 60.0):
+        self.max_calls = max_calls
+        self.window_seconds = window_seconds
+        self._calls: dict[str, list[float]] = defaultdict(list)
+    
+    def check(self, key: str) -> tuple[bool, str]:
+        """Check if a key is within rate limits."""
+        now = time.time()
+        # Clean old calls outside the window
+        self._calls[key] = [t for t in self._calls[key] if now - t < self.window_seconds]
+        
+        if len(self._calls[key]) >= self.max_calls:
+            return False, f"Rate limit exceeded: {self.max_calls} calls per {self.window_seconds}s"
+        
+        self._calls[key].append(now)
+        return True, ""
+    
+    def reset(self, key: str) -> None:
+        """Reset rate limit for a key."""
+        if key in self._calls:
+            del self._calls[key]
 
 
 @dataclass
@@ -67,6 +95,7 @@ class ToolRegistry:
     
     def __init__(self):
         self._tools: dict[str, BaseTool] = {}
+        self._rate_limiter = RateLimiter(max_calls=10, window_seconds=60.0)
         logger.info("ToolRegistry initialized")
     
     def register(self, tool: BaseTool) -> None:
@@ -79,6 +108,11 @@ class ToolRegistry:
         if name in self._tools:
             del self._tools[name]
             logger.info(f"Unregistered tool: {name}")
+    
+    def set_rate_limit(self, max_calls: int, window_seconds: float = 60.0) -> None:
+        """Configure rate limiting for tool execution."""
+        self._rate_limiter = RateLimiter(max_calls=max_calls, window_seconds=window_seconds)
+        logger.info(f"Rate limit set: {max_calls} calls per {window_seconds}s")
     
     def get(self, name: str) -> Optional[BaseTool]:
         """Get a tool by name."""
@@ -100,6 +134,16 @@ class ToolRegistry:
                 success=False,
                 output="",
                 error=f"Tool not found: {name}"
+            )
+        
+        # Check rate limit
+        is_allowed, error_msg = self._rate_limiter.check(name)
+        if not is_allowed:
+            logger.warning(f"Rate limit exceeded for tool {name}")
+            return ToolResult(
+                success=False,
+                output="",
+                error=error_msg
             )
         
         try:

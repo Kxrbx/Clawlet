@@ -41,6 +41,19 @@ from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
 from clawlet.channels.base import BaseChannel
 
 
+def _invoke_async_callback(callback):
+    """Helper to invoke async callbacks from sync thread."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.call_soon(callback)
+        else:
+            asyncio.run(callback)
+    except RuntimeError:
+        # No event loop, create one
+        asyncio.run(callback)
+
+
 class SlackChannel(BaseChannel):
     """
     Slack channel using Slack Bolt for Python.
@@ -101,6 +114,10 @@ class SlackChannel(BaseChannel):
         
         # Outbound loop task
         self._outbound_task: Optional[asyncio.Task] = None
+        
+        # Socket Mode coordination
+        self._socket_ready = asyncio.Event()
+        self._socket_thread: Optional[threading.Thread] = None
         
         # Bot info
         self._bot_user_id: Optional[str] = None
@@ -305,19 +322,23 @@ class SlackChannel(BaseChannel):
         )
         
         # Start in a separate thread (SocketModeHandler is blocking)
-        # We need to use the async approach
         import threading
         
         def run_socket_mode():
             self.socket_handler.connect()
-            logger.info("Slack Socket Mode connected")
+            # Signal that we're connected
+            _invoke_async_callback(self._socket_ready.set)
         
         # Run in thread to not block
         self._socket_thread = threading.Thread(target=run_socket_mode, daemon=True)
         self._socket_thread.start()
         
-        # Give it a moment to connect
-        await asyncio.sleep(1)
+        # Wait for connection with timeout
+        try:
+            await asyncio.wait_for(self._socket_ready.wait(), timeout=10.0)
+            logger.info("Slack Socket Mode connected")
+        except asyncio.TimeoutError:
+            logger.warning("Slack Socket Mode connection timeout")
     
     async def _start_http_mode(self) -> None:
         """Start in HTTP mode with webhook endpoint."""
@@ -361,10 +382,13 @@ class SlackChannel(BaseChannel):
             except asyncio.CancelledError:
                 pass
         
-        # Close socket mode
+        # Close socket mode properly
         if self.socket_handler:
             try:
                 self.socket_handler.close()
+                # Wait for thread to finish
+                if self._socket_thread and self._socket_thread.is_alive():
+                    self._socket_thread.join(timeout=5.0)
             except Exception as e:
                 logger.warning(f"Error closing socket handler: {e}")
         

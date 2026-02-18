@@ -12,13 +12,12 @@ from clawlet.providers.base import BaseProvider, LLMResponse, get_http_client_ma
 
 # Default models list (fallback when API is unavailable)
 OPENAI_MODELS = [
-    "gpt-5",
+    "gpt-4.5",
     "gpt-4o",
     "gpt-4o-mini",
     "gpt-4-turbo",
     "gpt-4",
     "gpt-3.5-turbo",
-    "o3",
     "o1",
     "o1-mini",
     "o3-mini",
@@ -36,7 +35,7 @@ class OpenAIProvider(BaseProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        default_model: str = "gpt-5",
+        default_model: str = "gpt-4o",
         base_url: Optional[str] = None,
         organization: Optional[str] = None,
         use_oauth: bool = False,

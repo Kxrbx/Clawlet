@@ -86,26 +86,30 @@ class DiscordChannel(BaseChannel):
             if message.author == self.bot.user:
                 return
             
-            # Create inbound message
-            guild_id = str(message.guild.id) if message.guild else None
-            inbound = InboundMessage(
-                channel="discord",
-                chat_id=str(message.channel.id),
-                content=message.content,
-                user_id=str(message.author.id),
-                metadata={
-                    "guild_id": guild_id,
-                    "channel_name": message.channel.name if hasattr(message.channel, 'name') else "DM",
-                    "is_dm": isinstance(message.channel, discord.DMChannel),
-                    "message_id": str(message.id),
-                    "reply_to": str(message.reference.message_id) if message.reference else None,
-                }
-            )
-            
-            logger.info(f"Discord message from {message.author}: {message.content[:50]}...")
-            
-            # Publish to message bus (this is the fix!)
-            await self._publish_inbound(inbound)
+            try:
+                # Create inbound message
+                guild_id = str(message.guild.id) if message.guild else None
+                inbound = InboundMessage(
+                    channel="discord",
+                    chat_id=str(message.channel.id),
+                    content=message.content,
+                    user_id=str(message.author.id),
+                    metadata={
+                        "guild_id": guild_id,
+                        "channel_name": message.channel.name if hasattr(message.channel, 'name') else "DM",
+                        "is_dm": isinstance(message.channel, discord.DMChannel),
+                        "message_id": str(message.id),
+                        "reply_to": str(message.reference.message_id) if message.reference else None,
+                    }
+                )
+                
+                logger.info(f"Discord message from {message.author}: {message.content[:50]}...")
+                
+                # Publish to message bus
+                await self._publish_inbound(inbound)
+                
+            except Exception as e:
+                logger.error(f"Error processing Discord message: {e}", exc_info=True)
     
     async def start(self) -> None:
         """Start the Discord bot and outbound loop."""

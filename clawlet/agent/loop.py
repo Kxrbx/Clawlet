@@ -4,7 +4,9 @@ Agent loop - the core processing engine.
 
 import asyncio
 import json
+import os
 import re
+import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -90,6 +92,9 @@ class AgentLoop:
         self._history: list[Message] = []
         
         logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
+        
+        # Set up signal handlers for graceful shutdown
+        self.setup_signal_handlers()
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -132,6 +137,19 @@ class AgentLoop:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
+    
+    def setup_signal_handlers(self) -> None:
+        """Set up signal handlers for graceful shutdown."""
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+            self.stop()
+        
+        # Register signal handlers
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, signal_handler)
+        if hasattr(signal, 'SIGINT'):
+            signal.signal(signal.SIGINT, signal_handler)
+        logger.debug("Signal handlers registered for graceful shutdown")
     
     def _get_user_friendly_error(self, error: Exception, context: str = "") -> str:
         """Generate a user-friendly error message while logging details internally.
