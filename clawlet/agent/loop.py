@@ -14,6 +14,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from clawlet.agent.identity import Identity, IdentityLoader
+from clawlet.agent.tool_parser import ToolCallParser
 from clawlet.exceptions import (
     ProviderError,
     ProviderConnectionError,
@@ -90,6 +91,7 @@ class AgentLoop:
         
         self._running = False
         self._history: list[Message] = []
+        self._tool_parser = ToolCallParser()
         
         logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
         
@@ -306,16 +308,16 @@ class AgentLoop:
     def _extract_tool_calls(self, content: str) -> list[ToolCall]:
         """Extract tool calls from LLM response content.
         
-        This method safely parses tool calls from various formats:
-        1. JSON blocks: ```json{"name": "...", "arguments": {...}}```
-        2. XML-style: <tool_call name="..." arguments='{...}'/>
-        
-        Uses JSON parsing where possible to avoid ReDoS vulnerabilities
-        from regex patterns with nested quantifiers.
+        Delegates to ToolCallParser for parsing various formats.
         """
-        tool_calls = []
-        
-        # First, try to extract JSON blocks (safest approach)
+        parsed = self._tool_parser.parse(content)
+        return [
+            ToolCall(id=p.id, name=p.name, arguments=p.arguments)
+            for p in parsed
+        ]
+    
+    async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
+        """Execute a tool call."""
         # Pattern: ```json ... ``` or ``` ... ``` blocks containing JSON
         json_pattern = r'```(?:json)?\s*\n?([\s\S]*?)\n?```'
         json_matches = re.findall(json_pattern, content, re.IGNORECASE)

@@ -2,6 +2,23 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.3] - 2026-02-19
+
+### Refactoring
+
+- **Config Consolidation**: Created `APIKeyConfig` base class to eliminate code duplication across 14+ provider configurations. Reduced config.py by ~19% (~123 lines).
+
+- **CLI Modularization**: Split monolithic CLI (`__init__.py` - 1441 lines) into modular command files:
+  - New `clawlet/cli/commands/` directory with 10 command modules
+  - Reduced main CLI file to 156 lines (89% reduction)
+  - Improved maintainability and navigation
+
+- **Tool Call Parser Extraction**: Created `clawlet/agent/tool_parser.py` to unify regex-based tool call extraction patterns. Simplified `agent/loop.py` by delegating to reusable parser class.
+
+### Maintenance
+
+- **Backward Compatibility**: Added `Config` alias and `load_config()` function to maintain API compatibility for external consumers
+
 ## [0.2.2] - 2026-02-18
 
 ### Security

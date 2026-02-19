@@ -12,18 +12,29 @@ import yaml
 from loguru import logger
 
 
-class OpenRouterConfig(BaseModel):
-    """OpenRouter provider configuration."""
-    api_key: str = Field(..., description="OpenRouter API key")
-    model: str = Field(default="anthropic/claude-sonnet-4", description="Model to use")
-    base_url: str = Field(default="https://openrouter.ai/api/v1", description="API base URL")
+class APIKeyConfig(BaseModel):
+    """Base class for provider configs requiring API keys."""
+    api_key: str = Field(..., description="API key")
+    model: str = Field(default="default", description="Model to use")
+    base_url: str = Field(default="", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_OPENROUTER_API_KEY":
-            raise ValueError("OpenRouter API key is required")
+        if not v:
+            raise ValueError("API key is required")
+        # Check against class-specific placeholder
+        class_name = cls.__name__.replace('Config', '').upper()
+        placeholder = f"YOUR_{class_name}_API_KEY"
+        if v == placeholder:
+            raise ValueError(f"{class_name.replace('_', ' ')} API key is required")
         return v
+
+
+class OpenRouterConfig(APIKeyConfig):
+    """OpenRouter provider configuration."""
+    model: str = Field(default="anthropic/claude-sonnet-4", description="Model to use")
+    base_url: str = Field(default="https://openrouter.ai/api/v1", description="API base URL")
 
 
 class OllamaConfig(BaseModel):
@@ -38,104 +49,48 @@ class LMStudioConfig(BaseModel):
     model: str = Field(default="local-model", description="Model name")
 
 
-class OpenAIConfig(BaseModel):
+class OpenAIConfig(APIKeyConfig):
     """OpenAI provider configuration."""
-    api_key: str = Field(..., description="OpenAI API key")
     use_oauth: bool = Field(default=False, description="Use OAuth instead of API key")
     organization: Optional[str] = Field(default=None, description="Organization ID")
     model: str = Field(default="gpt-5", description="Model to use")
     base_url: str = Field(default="https://api.openai.com/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_OPENAI_API_KEY":
-            raise ValueError("OpenAI API key is required")
-        return v
 
 
-class AnthropicConfig(BaseModel):
+class AnthropicConfig(APIKeyConfig):
     """Anthropic provider configuration."""
-    api_key: str = Field(..., description="Anthropic API key")
     model: str = Field(default="claude-sonnet-5-20260203", description="Model to use")
     base_url: str = Field(default="https://api.anthropic.com/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_ANTHROPIC_API_KEY":
-            raise ValueError("Anthropic API key is required")
-        return v
 
 
-class MiniMaxConfig(BaseModel):
+class MiniMaxConfig(APIKeyConfig):
     """MiniMax provider configuration."""
-    api_key: str = Field(..., description="MiniMax API key")
     model: str = Field(default="abab7-preview", description="Model to use")
     base_url: str = Field(default="https://api.minimax.chat/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_MINIMAX_API_KEY":
-            raise ValueError("MiniMax API key is required")
-        return v
 
 
-class MoonshotConfig(BaseModel):
+class MoonshotConfig(APIKeyConfig):
     """Moonshot (Kimi) provider configuration."""
-    api_key: str = Field(..., description="Moonshot API key")
     model: str = Field(default="kimi-k2.5", description="Model to use")
     base_url: str = Field(default="https://api.moonshot.ai/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_MOONSHOT_API_KEY":
-            raise ValueError("Moonshot API key is required")
-        return v
 
 
-class GoogleConfig(BaseModel):
+class GoogleConfig(APIKeyConfig):
     """Google (Gemini) provider configuration."""
-    api_key: str = Field(..., description="Google API key")
     model: str = Field(default="gemini-4-pro", description="Model to use")
     base_url: str = Field(default="https://generativelanguage.googleapis.com/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_GOOGLE_API_KEY":
-            raise ValueError("Google API key is required")
-        return v
 
 
-class QwenConfig(BaseModel):
+class QwenConfig(APIKeyConfig):
     """Qwen (Alibaba) provider configuration."""
-    api_key: str = Field(..., description="Qwen API key")
     model: str = Field(default="qwen4", description="Model to use")
     base_url: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_QWEN_API_KEY":
-            raise ValueError("Qwen API key is required")
-        return v
 
 
-class ZAIConfig(BaseModel):
+class ZAIConfig(APIKeyConfig):
     """ZAI (ChatGLM) provider configuration."""
-    api_key: str = Field(..., description="ZAI API key")
     model: str = Field(default="glm-5", description="Model to use")
     base_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_ZAI_API_KEY":
-            raise ValueError("ZAI API key is required")
-        return v
 
 
 class CopilotConfig(BaseModel):
@@ -154,72 +109,50 @@ class CopilotConfig(BaseModel):
         return v
 
 
-class VercelConfig(BaseModel):
+class VercelConfig(APIKeyConfig):
     """Vercel (AI SDK) provider configuration."""
-    api_key: str = Field(..., description="Vercel API key")
     model: str = Field(default="openai/gpt-5", description="Model to use")
     base_url: str = Field(default="https://api.openai.com/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_VERCEL_API_KEY":
-            raise ValueError("Vercel API key is required")
-        return v
 
 
-class OpenCodeZenConfig(BaseModel):
+class OpenCodeZenConfig(APIKeyConfig):
     """OpenCode Zen provider configuration."""
-    api_key: str = Field(..., description="OpenCode Zen API key")
     model: str = Field(default="zen-3.0", description="Model to use")
     base_url: str = Field(default="https://api.opencode.ai/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_OPENCODE_ZEN_API_KEY":
+        if not v:
+            raise ValueError("API key is required")
+        if v == "YOUR_OPENCODE_ZEN_API_KEY":
             raise ValueError("OpenCode Zen API key is required")
         return v
 
 
-class XiaomiConfig(BaseModel):
+class XiaomiConfig(APIKeyConfig):
     """Xiaomi provider configuration."""
-    api_key: str = Field(..., description="Xiaomi API key")
     model: str = Field(default="mi-agent-2", description="Model to use")
     base_url: str = Field(default="https://api.xiaomi.com/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_XIAOMI_API_KEY":
-            raise ValueError("Xiaomi API key is required")
-        return v
 
 
-class SyntheticConfig(BaseModel):
+class SyntheticConfig(APIKeyConfig):
     """Synthetic provider configuration."""
-    api_key: str = Field(..., description="Synthetic API key")
     model: str = Field(default="synthetic-llm-2", description="Model to use")
     base_url: str = Field(default="https://api.synthetic.ai/v1", description="API base URL")
-    
-    @field_validator('api_key')
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_SYNTHETIC_API_KEY":
-            raise ValueError("Synthetic API key is required")
-        return v
 
 
-class VeniceAIConfig(BaseModel):
+class VeniceAIConfig(APIKeyConfig):
     """Venice AI provider configuration."""
-    api_key: str = Field(..., description="Venice AI API key")
     model: str = Field(default="venice-llama-4", description="Model to use")
     base_url: str = Field(default="https://api.venice.ai/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_VENICE_API_KEY":
+        if not v:
+            raise ValueError("API key is required")
+        if v == "YOUR_VENICE_API_KEY":
             raise ValueError("Venice AI API key is required")
         return v
 
@@ -498,159 +431,132 @@ class RouteRuleConfig(BaseModel):
     agent: str = Field(..., description="Agent ID to route to (workspace name)")
     channel: Optional[str] = Field(default=None, description="Channel to match (telegram, discord, slack, whatsapp)")
     user_id: Optional[str] = Field(default=None, description="Specific user ID to match")
-    workspace: Optional[str] = Field(default=None, description="Workspace context to match")
-    pattern: Optional[str] = Field(default=None, description="Regex pattern to match on message content")
-    priority: int = Field(default=0, ge=0, le=100, description="Rule priority (higher = checked first)")
+    enabled: bool = Field(default=True, description="Whether this rule is active")
 
 
-class RoutingConfig(BaseModel):
-    """Configuration for multi-agent routing."""
-    enabled: bool = Field(default=False, description="Enable multi-agent routing")
-    default_agent: str = Field(default="default", description="Default agent to use when no rules match")
-    routes: list[RouteRuleConfig] = Field(default_factory=list, description="Routing rules in priority order")
+class RouterConfig(BaseModel):
+    """Configuration for the routing system."""
+    enabled: bool = Field(default=True, description="Enable the routing system")
+    rules: dict[str, RouteRuleConfig] = Field(default_factory=dict, description="Routing rules by rule ID")
+    fallback_agent: Optional[str] = Field(default=None, description="Default agent for unmatched messages")
 
 
-class Config(BaseModel):
-    """Main configuration."""
-    provider: ProviderConfig
-    channels: dict = Field(default_factory=lambda: {
-        "telegram": TelegramConfig(),
-        "discord": DiscordConfig(),
-        "whatsapp": WhatsAppConfig(),
-        "slack": SlackConfig(),
-    })
+class ClawletConfig(BaseSettings):
+    """Main Clawlet configuration."""
+    app_name: str = "Clawlet"
+    version: str = "0.1.0"
+    debug: bool = False
+    
+    # Provider configuration
+    provider: ProviderConfig = Field(default_factory=ProviderConfig)
+    
+    # Channel configurations
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    discord: DiscordConfig = Field(default_factory=DiscordConfig)
+    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
+    slack: SlackConfig = Field(default_factory=SlackConfig)
+    
+    # Storage
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    
+    # Agent settings
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    
+    # Heartbeat
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
-    web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
+    
+    # Skills
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    
+    # Webhooks
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
+    
+    # Scheduling
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
-    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     
-    # Outbound rate limiting configuration
-    max_outbound_per_minute: int = Field(
-        default=20,
-        ge=1,
-        le=1000,
-        description="Maximum outbound messages per minute per chat"
-    )
-    max_outbound_per_hour: int = Field(
-        default=100,
-        ge=1,
-        le=10000,
-        description="Maximum outbound messages per hour per chat"
-    )
-    outbound_rate_limit_enabled: bool = Field(
-        default=True,
-        description="Enable outbound rate limiting to prevent spam"
-    )
-    outbound_rate_limit_strict: bool = Field(
-        default=False,
-        description="If True, reject messages when rate limited. If False, log warning but allow."
-    )
+    # Router
+    router: RouterConfig = Field(default_factory=RouterConfig)
     
-    # Dashboard API authentication
-    dashboard_api_key: Optional[str] = Field(
-        default=None,
-        description="API key for dashboard API authentication. If not set, auth is optional."
-    )
-    dashboard_auth_required: bool = Field(
-        default=False,
-        description="If True, require API key authentication for dashboard endpoints"
-    )
+    # Paths
+    data_dir: str = "~/.clawlet"
+    config_dir: str = "~/.clawlet"
+    
+    class Config:
+        env_prefix = "CLAWLET_"
+        env_nested_delimiter = "__"
     
     @classmethod
-    def from_yaml(cls, path: Path) -> "Config":
-        """Load configuration from YAML file."""
+    def from_yaml(cls, path: str | Path) -> "ClawletConfig":
+        """Load configuration from a YAML file."""
+        path = Path(path).expanduser()
         if not path.exists():
-            raise FileNotFoundError(f"Config file not found: {path}")
+            logger.warning(f"Config file not found: {path}")
+            return cls()
         
-        with open(path) as f:
+        with open(path, "r") as f:
             data = yaml.safe_load(f) or {}
-        
-        # Support environment variable substitution
-        data = cls._substitute_env_vars(data)
         
         return cls(**data)
     
-    @staticmethod
-    def _substitute_env_vars(data: dict) -> dict:
-        """Recursively substitute environment variables in config."""
-        import re
+    @classmethod
+    def load(cls, config_path: Optional[str] = None) -> "ClawletConfig":
+        """Load configuration from file or environment."""
+        if config_path:
+            return cls.from_yaml(config_path)
         
-        def substitute(value):
-            if isinstance(value, str):
-                # Match ${VAR_NAME} or ${VAR_NAME:-default}
-                pattern = r'\$\{([^}]+)\}'
-                
-                def replace(match):
-                    expr = match.group(1)
-                    if ':-' in expr:
-                        var_name, default = expr.split(':-', 1)
-                        return os.environ.get(var_name, default)
-                    return os.environ.get(expr, '')
-                
-                return re.sub(pattern, replace, value)
-            elif isinstance(value, dict):
-                return {k: substitute(v) for k, v in value.items()}
-            elif isinstance(value, list):
-                return [substitute(item) for item in value]
-            return value
+        # Try default config locations
+        default_paths = [
+            Path("~/.clawlet/config.yaml"),
+            Path("~/.clawlet.yml"),
+            Path("./clawlet.yaml"),
+            Path("./config.yaml"),
+        ]
         
-        return substitute(data)
+        for path in default_paths:
+            if path.exists():
+                logger.info(f"Loading config from: {path}")
+                return cls.from_yaml(path)
+        
+        logger.info("No config file found, using defaults")
+        return cls()
     
-    def to_yaml(self, path: Path) -> None:
-        """Save configuration to YAML file."""
+    def save(self, path: str | Path) -> None:
+        """Save configuration to a YAML file."""
+        path = Path(path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(path, 'w', encoding='utf-8') as f:
-            yaml.dump(self.model_dump(mode='python'), f, default_flow_style=False)
-        
-        logger.info(f"Saved config to {path}")
-
-    def reload(self) -> None:
-        """Reload configuration from the original YAML file."""
-        if self.config_path and self.config_path.exists():
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            # Update self with new data
-            updated = Config(**data)
-            self.__dict__.update(updated.__dict__)
-            logger.info(f"Reloaded config from {self.config_path}")
-        else:
-            logger.warning("Cannot reload config: file not found")
+        with open(path, "w") as f:
+            yaml.dump(self.model_dump(exclude_none=True), f, default_flow_style=False)
 
 
-def load_config(workspace: Optional[Path] = None) -> Config:
-    """
-    Load configuration from workspace or default location.
+# Default config instance
+default_config = ClawletConfig()
+
+# ============================================================================
+# Backward-compatible aliases (for existing code)
+# ============================================================================
+
+# Alias for ClawletConfig
+Config = ClawletConfig
+
+
+def load_config(workspace: Path = None) -> ClawletConfig:
+    """Load configuration from the workspace.
     
-    Args:
-        workspace: Workspace directory (defaults to ~/.clawlet)
-        
-    Returns:
-        Config object
+    This is a backward-compatible function that loads the config
+    from the workspace directory.
     """
-    workspace = workspace or Path.home() / ".clawlet"
+    if workspace is None:
+        workspace = Path.home() / ".clawlet"
+    
     config_path = workspace / "config.yaml"
     
     if config_path.exists():
-        logger.info(f"Loading config from {config_path}")
-        return Config.from_yaml(config_path)
-    else:
-        logger.warning(f"No config file at {config_path}, using defaults")
-        # Create default config with placeholder values
-        return Config(
-            provider=ProviderConfig(
-                primary="openrouter",
-                openrouter=OpenRouterConfig(
-                    api_key=os.environ.get("OPENROUTER_API_KEY"),
-                ),
-            ),
-        )
+        return ClawletConfig.from_yaml(config_path)
+    
+    return ClawletConfig()
 
 
 def get_default_config_path() -> Path:
-    """Get the default config path."""
+    """Get the default configuration file path."""
     return Path.home() / ".clawlet" / "config.yaml"
