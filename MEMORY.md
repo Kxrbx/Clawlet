@@ -124,10 +124,40 @@ Rebranded and enhanced the social analytics dashboard as **ClawBoard**, a dedica
 
 **Status:** ClawBoard complete and pushed to GitHub. Ready for `docker-compose up -d`. Pending deployment and template rotation validation.
 
+### Clawlet Website Redesign (Feb 20, 2026)
+Applied neo-brutalist styling to the Clawlet official website using the `frontend-design` skill. Transformed a generic Next.js starter into an aggressive, high-contrast editorial design.
+
+**Design Implementation:**
+- Neo-brutalist palette: claw-lime (#ccff00), claw-magenta (#ff00ff), claw-cyan (#00ffff), claw-dark (#0a0a0a)
+- 4px solid black borders on all UI elements
+- Space Grotesk for headings, JetBrains Mono for body/code
+- Noise texture overlay (opacity 0.03) across entire site
+- Hard box shadows (`shadow-hard`: 8px offset)
+- Marquee banner, corner accent decorations, glitch-ready animations
+
+**Technical Stack:**
+- Next.js 16.1.6 (App Router, Turbopack)
+- Tailwind CSS v4 with custom `@theme inline` configuration
+- shadcn/ui Button component reimplemented with neo-brutalist variants
+- GSAP-style staggered animations (via CSS keyframes)
+- Responsive layout with grid system
+
+**Components Updated:**
+- `app/page.tsx`: Full hero, features grid, comparison table, quick start, CTA, footer
+- `app/layout.tsx`: Metadata for SEO, font setup via next/font
+- `app/globals.css`: Neo-brutalist utilities, marquee animation, custom inputs
+- `components/ui/button.tsx`: Neo-brutalist variants (lime, magenta, cyan, yellow, orange, dark)
+- `tailwind.config.ts`: Custom color palette and shadow definitions
+
+**Build Status:** Production build successful (`npm run build`). TypeScript errors resolved. Ready for deployment.
+
+**Impact:** Clawlet now has a distinctive, memorable brand identity that stands out in the AI agent space.
+
 ---
 
-## Current Status (2026-02-19)
+## Current Status (2026-02-20)
 - ClawBoard dashboard: complete (neo-brutalist redesign, Dockerized, GitHub pushed)
+- Clawlet website: complete neo-brutalist redesign (built, committed, pushed)
 - Engagement automation: healthy (Moltbook active with fallback endpoint, Molthub active, trendingLimit 30, templates 10 with rotation)
 - GEOITIS platform: production-ready (awaiting Cercle deployment details)
 - Brave Search: operational
