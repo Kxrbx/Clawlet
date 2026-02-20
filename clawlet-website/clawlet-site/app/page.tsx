@@ -5,42 +5,51 @@ import { Button } from "@/components/ui/button";
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-gradient-to-b from-sakura-50 via-white to-sakura-100">
-      {/* Decorative background blobs */}
+    <div className="min-h-screen bg-gradient-to-b from-sakura-50 via-white to-sakura-100 relative overflow-hidden">
+      {/* Decorative background: floating emoji & blobs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-        <div className="absolute -top-40 -right-40 w-96 h-96 bg-sakura-200 rounded-full mix-blend-multiply filter blur-3xl opacity-40 animate-float"></div>
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-sakura-300 rounded-full mix-blend-multiply filter blur-3xl opacity-40 animate-float" style={{ animationDelay: "2s" }}></div>
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-sakura-150 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-float" style={{ animationDelay: "4s" }}></div>
+        {/* Large gradient blobs with stronger glow */}
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-sakura-200 rounded-full mix-blend-multiply filter blur-3xl opacity-60 glow-lg animate-float"></div>
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-sakura-300 rounded-full mix-blend-multiply filter blur-3xl opacity-60 glow-lg animate-float" style={{ animationDelay: "2s" }}></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-sakura-150 rounded-full mix-blend-multiply filter blur-3xl opacity-50 glow-lg animate-float" style={{ animationDelay: "4s" }}></div>
+
+        {/* Floating emoji particles */}
+        <div className="absolute top-20 left-10 text-4xl opacity-40 animate-float" style={{ animationDelay: "0s" }}>🌸</div>
+        <div className="absolute top-1/3 right-10 text-3xl opacity-40 animate-float" style={{ animationDelay: "1s" }}>💖</div>
+        <div className="absolute bottom-40 left-20 text-4xl opacity-40 animate-float" style={{ animationDelay: "3s" }}>✨</div>
+        <div className="absolute top-1/4 left-1/3 text-2xl opacity-40 animate-float" style={{ animationDelay: "5s" }}>🦾</div>
+        <div className="absolute bottom-1/4 right-1/4 text-3xl opacity-40 animate-float" style={{ animationDelay: "2.5s" }}>🤖</div>
+        <div className="absolute top-2/3 left-1/2 text-2xl opacity-40 animate-float" style={{ animationDelay: "4.5s" }}>💡</div>
       </div>
 
       {/* Navigation */}
-      <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-md border-b border-sakura-200 shadow-glow-sm">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+      <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-xl border-b border-sakura-200 glow-sm">
+        <div className="max-w-6xl mx-auto px-4 h-20 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2 group">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sakura-400 to-sakura-600 flex items-center justify-center text-white font-bold text-lg shadow-glow-sm group-hover:shadow-glow-md transition-shadow">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-sakura-400 to-sakura-600 flex items-center justify-center text-white font-bold text-2xl glow-md group-hover:glow-lg transition-all group-hover:scale-105">
               C
             </div>
             <div>
               <div className="text-xl font-bold bg-gradient-to-r from-sakura-600 to-sakura-400 bg-clip-text text-transparent">
                 Clawlet
               </div>
-              <div className="text-[10px] font-mono text-sakura-600 uppercase tracking-wider">AI Agent Framework</div>
+              <div className="text-[10px] font-mono text-sakura-600 uppercase tracking-wider">🤖 AI Agent Framework</div>
             </div>
           </Link>
           <div className="flex items-center gap-3">
             <Link href="/docs" className="hidden md:block px-4 py-2 text-sm font-medium text-sakura-700 hover:text-sakura-500 transition-colors">
-              Documentation
+              📚 Docs
             </Link>
             <a
               href="https://github.com/Kxrbx/Clawlet"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-4 py-2 text-sm font-medium text-sakura-700 border border-sakura-300 rounded-lg hover:bg-sakura-100 transition-all"
+              className="px-4 py-2 text-sm font-medium text-sakura-700 border border-sakura-300 rounded-xl hover:bg-sakura-100 transition-all flex items-center gap-2"
             >
-              GitHub
+              <span>💾</span> GitHub
             </a>
-            <Button size="sm" className="bg-gradient-to-r from-sakura-500 to-sakura-600 hover:from-sakura-600 hover:to-sakura-500 text-white shadow-glow-sm hover:shadow-glow-md transition-all">
-              Get Started
+            <Button size="sm" className="bg-gradient-to-r from-sakura-500 to-sakura-600 hover:from-sakura-600 hover:to-sakura-500 text-white glow-sm hover:glow-md transition-all px-5 py-5 rounded-xl">
+              🚀 Get Started
             </Button>
           </div>
         </div>
@@ -50,58 +59,58 @@ export default function HomePage() {
       <section className="pt-32 pb-20 px-4">
         <div className="max-w-4xl mx-auto text-center">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/60 border border-sakura-300 text-sakura-700 text-sm font-medium mb-8 shadow-glow-sm backdrop-blur-sm animate-float">
+          <div className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-white/70 backdrop-blur-md border border-sakura-300 text-sakura-700 text-sm font-semibold mb-10 glow-md animate-float">
             <span className="w-2 h-2 rounded-full bg-sakura-500 animate-pulse"></span>
-            Now with Identity System & Realtime Dashboard
+            ✨ Now with Identity System & Realtime Dashboard
           </div>
 
           {/* Main title */}
-          <h1 className="text-5xl md:text-7xl font-bold mb-6 leading-tight">
-            <span className="block bg-gradient-to-r from-sakura-400 via-sakura-500 to-sakura-600 bg-clip-text text-transparent">
+          <h1 className="text-5xl md:text-8xl font-bold mb-8 leading-tight">
+            <span className="block bg-gradient-to-r from-sakura-400 via-sakura-500 to-sakura-600 bg-clip-text text-transparent drop-shadow-sm">
               Clawlet
             </span>
-            <span className="block text-gray-800 md:inline"> AI Agents That</span>
+            <span className="block text-gray-800 md:inline"> 🤖 AI Agents That</span>
             <span className="block bg-gradient-to-r from-sakura-600 to-sakura-400 bg-clip-text text-transparent md:inline"> Know Who They Are</span>
           </h1>
 
           {/* Subtitle */}
-          <p className="text-xl text-sakura-600 mb-4 font-medium">
-            Local-first • Identity-aware • Open Source
+          <p className="text-xl text-sakura-700 mb-6 font-medium">
+            🏠 Local-first • 🎭 Identity-aware • 📖 Open Source
           </p>
 
-          <p className="text-lg text-gray-600 mb-12 max-w-2xl mx-auto leading-relaxed">
-            Build self-aware AI agents that read their own <code className="px-2 py-1 bg-sakura-100 border border-sakura-200 rounded text-sakura-700 font-mono text-sm">SOUL.md</code>, <code className="px-2 py-1 bg-sakura-100 border border-sakura-200 rounded text-sakura-700 font-mono text-sm">USER.md</code>, and <code className="px-2 py-1 bg-sakura-100 border border-sakura-200 rounded text-sakura-700 font-mono text-sm">MEMORY.md</code>. Run entirely on your machine with Ollama. No cloud lock-in, no usage limits, total privacy.
+          <p className="text-lg text-gray-600 mb-16 max-w-3xl mx-auto leading-relaxed">
+            Build self-aware AI agents that read their own <code className="px-3 py-1 bg-sakura-100 border border-sakura-200 rounded-lg text-sakura-700 font-mono text-sm shadow-sm">SOUL.md</code>, <code className="px-3 py-1 bg-sakura-100 border border-sakura-200 rounded-lg text-sakura-700 font-mono text-sm shadow-sm">USER.md</code>, and <code className="px-3 py-1 bg-sakura-100 border border-sakura-200 rounded-lg text-sakura-700 font-mono text-sm shadow-sm">MEMORY.md</code>. Run entirely on your machine with Ollama. No cloud lock-in, no usage limits, total privacy. 🌙
           </p>
 
           {/* CTA Buttons */}
-          <div className="flex flex-wrap justify-center gap-4 mb-16">
-            <Button size="lg" className="bg-gradient-to-r from-sakura-500 to-sakura-600 hover:from-sakura-600 hover:to-sakura-500 text-white shadow-glow-sm hover:shadow-glow-md px-8 py-6 text-lg font-semibold rounded-xl">
-              Get Started Free
+          <div className="flex flex-wrap justify-center gap-5 mb-20">
+            <Button size="lg" className="bg-gradient-to-r from-sakura-500 to-sakura-600 hover:from-sakura-600 hover:to-sakura-500 text-white glow-md hover:glow-lg px-10 py-7 text-xl font-bold rounded-2xl">
+              🚀 Get Started Free
             </Button>
-            <Button size="lg" variant="outline" className="border-sakura-300 text-sakura-700 hover:bg-sakura-100 px-8 py-6 text-lg font-semibold rounded-xl">
-              View Documentation
+            <Button size="lg" variant="outline" className="border-2 border-sakura-300 text-sakura-700 hover:bg-sakura-100 px-10 py-7 text-xl font-bold rounded-2xl glow-sm hover:glow-md">
+              📖 View Documentation
             </Button>
-            <Button size="lg" variant="ghost" asChild className="px-8 py-6 text-lg">
-              <a href="https://github.com/Kxrbx/Clawlet" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sakura-600 hover:text-sakura-500">
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-                Star on GitHub
+            <Button size="lg" variant="ghost" asChild className="px-10 py-7 text-xl rounded-2xl">
+              <a href="https://github.com/Kxrbx/Clawlet" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-sakura-600 hover:text-sakura-500 font-bold">
+                ⭐ Star on GitHub
               </a>
             </Button>
           </div>
 
           {/* Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-5 max-w-4xl mx-auto">
             {[
-              { label: "Lines of Code", value: "~5,200", color: "text-sakura-600" },
-              { label: "License", value: "MIT", color: "text-sakura-600" },
-              { label: "Local & Private", value: "100%", color: "text-sakura-600" },
-              { label: "Free Forever", value: "Yes", color: "text-sakura-600" },
+              { label: "Lines of Code", value: "~5,200", color: "text-sakura-600", icon: "💻" },
+              { label: "License", value: "MIT", color: "text-sakura-600", icon: "📜" },
+              { label: "Local & Private", value: "100%", color: "text-sakura-600", icon: "🔒" },
+              { label: "Free Forever", value: "Yes", color: "text-sakura-600", icon: "🎁" },
             ].map((stat, i) => (
-              <div key={i} className="bg-white/60 backdrop-blur-sm rounded-2xl p-6 border border-sakura-200 shadow-glow-sm hover:shadow-glow-md transition-shadow">
-                <div className={`text-3xl font-bold mb-1 ${stat.color}`}>
+              <div key={i} className="bg-white/70 backdrop-blur-lg rounded-2xl p-8 border border-sakura-200 glow-md hover:glow-lg transition-all hover:-translate-y-1 animate-fade-in-up" style={{ animationDelay: `${i * 0.1}s` }}>
+                <div className="text-4xl mb-2">{stat.icon}</div>
+                <div className={`text-3xl font-bold mb-2 ${stat.color}`}>
                   {stat.value}
                 </div>
-                <div className="text-sm text-sakura-600 font-medium">{stat.label}</div>
+                <div className="text-sm text-sakura-600 font-semibold">{stat.label}</div>
               </div>
             ))}
           </div>
@@ -109,26 +118,26 @@ export default function HomePage() {
       </section>
 
       {/* Features Section */}
-      <section className="py-24 px-4">
+      <section className="py-28 px-4 bg-gradient-to-r from-sakura-100/50 to-sakura-50/50">
         <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold mb-4 text-gray-800">Why Clawlet?</h2>
+          <div className="text-center mb-20">
+            <h2 className="text-4xl md:text-5xl font-bold mb-4 text-gray-800">✨ Why Clawlet?</h2>
             <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Built for developers who want full control over their AI assistant. No cloud lock-in, no recurring costs, just pure local intelligence.
+              Built for developers who want full control over their AI assistant. No cloud lock-in, no recurring costs, just pure local intelligence. 🧠
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-10">
             {[
               {
                 icon: "🏠",
                 title: "Local-First Architecture",
-                desc: "Run entirely on your machine with Ollama or LM Studio. No API fees, no data leaving your network. Your conversations stay private."
+                desc: "Run entirely on your machine with Ollama or LM Studio. No API fees, no data leaving your network. Your conversations stay private and secure."
               },
               {
                 icon: "🎭",
                 title: "True Identity System",
-                desc: "Agents read SOUL.md, USER.md, and MEMORY.md to build personality and memory. Create an assistant that actually knows you."
+                desc: "Agents read SOUL.md, USER.md, and MEMORY.md to build personality and memory. Create an assistant that actually knows you and remembers."
               },
               {
                 icon: "🔧",
@@ -151,9 +160,13 @@ export default function HomePage() {
                 desc: "React + FastAPI dashboard with real-time logs, health metrics, message history, and a terminal to test commands."
               },
             ].map((feature, idx) => (
-              <div key={idx} className="bg-white/70 backdrop-blur-sm rounded-2xl p-8 border border-sakura-200 shadow-glow-sm hover:shadow-glow-md hover:-translate-y-1 transition-all duration-300 animate-fade-in-up" style={{ animationDelay: `${idx * 0.1}s` }}>
-                <div className="text-4xl mb-4">{feature.icon}</div>
-                <h3 className="font-semibold text-xl mb-3 text-gray-800">
+              <div key={idx} className="bg-white/80 backdrop-blur-lg rounded-2xl p-8 border border-sakura-200 glow-md hover:glow-lg hover:-translate-y-2 transition-all duration-300 animate-fade-in-up group relative" style={{ animationDelay: `${idx * 0.1}s` }}>
+                {/* Decorative corner glow */}
+                <div className="absolute -top-2 -right-2 w-8 h-8 bg-gradient-to-br from-sakura-300 to-sakura-500 rounded-full opacity-50 blur-sm"></div>
+                <div className="absolute -bottom-2 -left-2 w-8 h-8 bg-gradient-to-br from-sakura-400 to-sakura-600 rounded-full opacity-50 blur-sm"></div>
+
+                <div className="text-5xl mb-6 group-hover:scale-110 transition-transform">{feature.icon}</div>
+                <h3 className="font-bold text-xl mb-4 text-gray-800">
                   {feature.title}
                 </h3>
                 <p className="text-gray-600 leading-relaxed">
@@ -166,21 +179,21 @@ export default function HomePage() {
       </section>
 
       {/* Comparison Table */}
-      <section className="py-24 px-4 bg-gradient-to-r from-sakura-100 to-sakura-50">
+      <section className="py-28 px-4 bg-gradient-to-br from-sakura-100 to-sakura-50">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-12">
-            <h2 className="text-4xl font-bold mb-4 text-gray-800">Compare Frameworks</h2>
+            <h2 className="text-4xl font-bold mb-4 text-gray-800">🔍 Compare Frameworks</h2>
             <p className="text-gray-600">See how Clawlet stacks up against other agent frameworks.</p>
           </div>
 
-          <div className="overflow-x-auto bg-white/80 backdrop-blur-sm rounded-2xl border border-sakura-200 shadow-glow-sm">
+          <div className="overflow-x-auto bg-white/80 backdrop-blur-lg rounded-2xl border border-sakura-200 glow-md">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-sakura-200 bg-gradient-to-r from-sakura-100 to-sakura-50">
-                  <th className="text-left py-4 px-6 font-semibold text-gray-800">Feature</th>
-                  <th className="text-center py-4 px-6 font-semibold text-sakura-600">Clawlet</th>
-                  <th className="text-center py-4 px-6 font-semibold text-gray-500">OpenClaw</th>
-                  <th className="text-center py-4 px-6 font-semibold text-gray-500">nanobot</th>
+                <tr className="border-b border-sakura-200 bg-gradient-to-r from-sakura-50 to-sakura-100">
+                  <th className="text-left py-5 px-6 font-bold text-gray-800">Feature</th>
+                  <th className="text-center py-5 px-6 font-bold text-sakura-600">Clawlet</th>
+                  <th className="text-center py-5 px-6 font-semibold text-gray-500">OpenClaw</th>
+                  <th className="text-center py-5 px-6 font-semibold text-gray-500">nanobot</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
@@ -193,7 +206,7 @@ export default function HomePage() {
                   ["Onboarding", "✅", "✅", "❌"],
                 ].map(([feature, clawlet, openclaw, nanobot], i) => (
                   <tr key={feature} className={`border-b border-sakura-100 hover:bg-sakura-50/50 ${i % 2 === 0 ? "bg-white/50" : "bg-white/30"}`}>
-                    <td className="py-4 px-6 text-left font-medium text-gray-800">{feature}</td>
+                    <td className="py-4 px-6 text-left font-semibold text-gray-800">{feature}</td>
                     <td className="py-4 px-6 text-center font-bold text-sakura-600">{clawlet}</td>
                     <td className="py-4 px-6 text-center text-gray-500">{openclaw}</td>
                     <td className="py-4 px-6 text-center text-gray-500">{nanobot}</td>
@@ -206,14 +219,14 @@ export default function HomePage() {
       </section>
 
       {/* Quick Start */}
-      <section className="py-24 px-4">
+      <section className="py-28 px-4">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-12">
-            <h2 className="text-4xl font-bold mb-4 text-gray-800">Get Started in Minutes</h2>
+            <h2 className="text-4xl font-bold mb-4 text-gray-800">🚀 Get Started in Minutes</h2>
             <p className="text-lg text-gray-600">Install, run the wizard, and you're ready to go.</p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid md:grid-cols-3 gap-10">
             {[
               {
                 step: "1",
@@ -234,13 +247,13 @@ export default function HomePage() {
                 code: "clawlet agent"
               },
             ].map((step, i) => (
-              <div key={i} className="bg-white/80 backdrop-blur-sm rounded-2xl p-8 border border-sakura-200 shadow-glow-sm hover:shadow-glow-md transition-all text-center">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-sakura-400 to-sakura-600 flex items-center justify-center font-bold text-xl text-white mx-auto mb-6 shadow-glow-sm">
+              <div key={i} className="bg-white/80 backdrop-blur-lg rounded-2xl p-8 border border-sakura-200 glow-md hover:glow-lg transition-all text-center hover:-translate-y-2">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-sakura-400 to-sakura-600 flex items-center justify-center font-bold text-2xl text-white mx-auto mb-8 glow-md">
                   {step.step}
                 </div>
-                <h3 className="font-semibold text-xl mb-2 text-gray-800">{step.title}</h3>
+                <h3 className="font-bold text-xl mb-3 text-gray-800">{step.title}</h3>
                 <p className="text-gray-600 mb-6">{step.desc}</p>
-                <pre className="bg-sakura-50 border border-sakura-200 rounded-lg p-4 text-left text-sm font-mono text-sakura-700 overflow-x-auto">
+                <pre className="bg-sakura-50 border border-sakura-200 rounded-xl p-5 text-left text-sm font-mono text-sakura-700 overflow-x-auto shadow-inner">
                   {step.code}
                 </pre>
               </div>
@@ -250,45 +263,53 @@ export default function HomePage() {
       </section>
 
       {/* Final CTA */}
-      <section className="py-24 px-4 bg-gradient-to-r from-sakura-500 to-sakura-600">
-        <div className="max-w-3xl mx-auto text-center text-white">
-          <h2 className="text-4xl font-bold mb-6">Open Source & Free</h2>
-          <p className="text-xl mb-10 opacity-90 max-w-2xl mx-auto">
-            MIT licensed. No usage limits. No cloud dependency. Clone the repo, run it, own your AI.
+      <section className="py-32 px-4 bg-gradient-to-r from-sakura-500 to-sakura-600 relative overflow-hidden">
+        {/* Decorative glow inside CTA */}
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2Zy4uLgo=')] opacity-10"></div>
+
+        <div className="max-w-3xl mx-auto text-center text-white relative z-10">
+          <h2 className="text-4xl md:text-5xl font-bold mb-8 drop-shadow-lg">
+            Open Source & Free 🎉
+          </h2>
+          <p className="text-xl mb-12 opacity-95 max-w-2xl mx-auto">
+            MIT licensed. No usage limits. No cloud dependency. Clone the repo, run it, own your AI. 🌟
           </p>
-          <div className="flex flex-wrap justify-center gap-4">
-            <Button size="lg" className="bg-white text-sakura-600 hover:bg-sakura-50 shadow-glow-sm px-10 py-6 text-lg font-semibold rounded-xl">
-              Get Started Now
+          <div className="flex flex-wrap justify-center gap-6">
+            <Button size="lg" className="bg-white text-sakura-600 hover:bg-sakura-50 glow-lg px-10 py-7 text-xl font-bold rounded-2xl">
+              🚀 Get Started Now
             </Button>
-            <Button size="lg" variant="outline" className="border-white text-white hover:bg-white/10 px-10 py-6 text-lg font-semibold rounded-xl">
-              View on GitHub
+            <Button size="lg" variant="outline" className="border-2 border-white text-white hover:bg-white/10 px-10 py-7 text-xl font-bold rounded-2xl glow-md">
+              💾 View on GitHub
             </Button>
           </div>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="bg-white/80 backdrop-blur-sm border-t border-sakura-200 py-16 px-4">
+      <footer className="bg-white/80 backdrop-blur-xl border-t border-sakura-200 py-20 px-4">
         <div className="max-w-4xl mx-auto text-center">
-          <div className="flex items-center justify-center gap-3 mb-6">
-            <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-sakura-400 to-sakura-600 flex items-center justify-center text-2xl font-bold text-white shadow-glow-sm">
+          <div className="flex items-center justify-center gap-4 mb-8">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-sakura-400 to-sakura-600 flex items-center justify-center text-3xl font-bold text-white glow-md">
               C
             </div>
             <div className="text-left">
               <div className="text-2xl font-bold bg-gradient-to-r from-sakura-600 to-sakura-400 bg-clip-text text-transparent">Clawlet</div>
-              <div className="text-sm text-sakura-600 font-medium">AI Agent Framework</div>
+              <div className="text-sm text-sakura-600 font-semibold">🤖 AI Agent Framework</div>
             </div>
           </div>
 
-          <p className="text-sakura-600 mb-8 font-mono">
+          <p className="text-sakura-600 mb-10 font-mono text-sm">
             Built with 💕 by the OpenClaw community | MIT License
           </p>
 
-          <div className="flex justify-center gap-8 text-sm text-sakura-500">
-            <a href="https://github.com/Kxrbx/Clawlet" target="_blank" rel="noopener noreferrer" className="hover:text-sakura-600 transition-colors">GitHub</a>
-            <a href="https://github.com/Kxrbx/Clawlet/discussions" target="_blank" rel="noopener noreferrer" className="hover:text-sakura-600 transition-colors">Discussions</a>
-            <a href="https://github.com/Kxrbx/Clawlet/issues" target="_blank" rel="noopener noreferrer" className="hover:text-sakura-600 transition-colors">Issues</a>
+          <div className="flex justify-center gap-10 text-base text-sakura-500">
+            <a href="https://github.com/Kxrbx/Clawlet" target="_blank" rel="noopener noreferrer" className="hover:text-sakura-600 transition-colors font-medium">📚 GitHub</a>
+            <a href="https://github.com/Kxrbx/Clawlet/discussions" target="_blank" rel="noopener noreferrer" className="hover:text-sakura-600 transition-colors font-medium">💬 Discussions</a>
+            <a href="https://github.com/Kxrbx/Clawlet/issues" target="_blank" rel="noopener noreferrer" className="hover:text-sakura-600 transition-colors font-medium">🐛 Issues</a>
           </div>
+
+          {/* Big goodbye emoji */}
+          <div className="mt-12 text-5xl opacity-60">🌸</div>
         </div>
       </footer>
     </div>

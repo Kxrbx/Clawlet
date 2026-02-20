@@ -2,9 +2,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Custom sakura theme – soft, dreamy, modern */
+/* Custom sakura theme */
 @theme inline {
-  /* Colors – sakura palette with depth */
   --color-sakura-50: #fdf2f8;
   --color-sakura-100: #fce7f3;
   --color-sakura-150: #fbcfe8;
@@ -20,30 +19,20 @@
   --font-mono: "JetBrains Mono", monospace;
 }
 
-/* Smooth scrolling */
 html {
   scroll-behavior: smooth;
 }
 
-/* Base background & text */
 body {
   @apply bg-sakura-50 text-gray-800;
 }
 
-/* Custom glow using box-shadow (used via class name in JSX) */
-.glow-sm {
-  box-shadow: 0 0 12px rgba(236, 72, 153, 0.25);
-}
+/* Custom glow utilities – using plain CSS classes (no @apply) */
+.glow-sm { box-shadow: 0 0 12px rgba(236, 72, 153, 0.25), 0 0 4px rgba(236, 72, 153, 0.15); }
+.glow-md { box-shadow: 0 0 20px rgba(236, 72, 153, 0.35), 0 0 8px rgba(236, 72, 153, 0.2); }
+.glow-lg { box-shadow: 0 0 32px rgba(236, 72, 153, 0.5), 0 0 12px rgba(236, 72, 153, 0.25); }
+.glow-xl { box-shadow: 0 0 48px rgba(236, 72, 153, 0.6), 0 0 16px rgba(236, 72, 153, 0.3); }
 
-.glow-md {
-  box-shadow: 0 0 20px rgba(236, 72, 153, 0.35);
-}
-
-.glow-lg {
-  box-shadow: 0 0 32px rgba(236, 72, 153, 0.45);
-}
-
-/* Gradient text – sakura */
 .sakura-gradient {
   background: linear-gradient(135deg, #ec4899 0%, #f472b6 50%, #db2777 100%);
   -webkit-background-clip: text;
@@ -51,58 +40,44 @@ body {
   background-clip: text;
 }
 
-/* Floating animation */
 @keyframes float {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-12px); }
+  50% { transform: translateY(-15px); }
 }
+.animate-float { animation: float 6s ease-in-out infinite; }
 
-.animate-float {
-  animation: float 6s ease-in-out infinite;
-}
-
-/* Pulse glow */
-@keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 10px rgba(236, 72, 153, 0.2); }
-  50% { box-shadow: 0 0 24px rgba(236, 72, 153, 0.45); }
-}
-
-.animate-pulse-glow {
-  animation: pulseGlow 3s ease-in-out infinite;
-}
-
-/* Fade & slide up */
 @keyframes fadeInUp {
-  0% { opacity: 0; transform: translateY(20px); }
+  0% { opacity: 0; transform: translateY(25px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+.animate-fade-in-up { animation: fadeInUp 0.8s ease-out forwards; }
 
-@keyframes slideUp {
-  0% { opacity: 0; transform: translateY(30px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-
-.animate-fade-in-up {
-  animation: fadeInUp 0.8s ease-out forwards;
-}
-
-.animate-slide-up {
-  animation: slideUp 0.6s ease-out forwards;
-}
-
-/* Input & button defaults – softened */
+/* Input styling */
 input, textarea, select {
   border: 1px solid #fbcfe8;
   background: rgba(255, 255, 255, 0.9);
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   padding: 0.75rem 1rem;
   font-family: "JetBrains Mono", monospace;
   font-size: 0.875rem;
   transition: all 0.2s ease;
 }
-
 input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: #ec4899;
-  box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.15);
+  box-shadow: 0 0 0 4px rgba(236, 72, 153, 0.15);
+}
+
+/* Glassmorphism card class */
+.glass-card {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid #fbcfe8;
+  border-radius: 1rem;
+  box-shadow: 0 8px 32px rgba(236, 72, 153, 0.15);
+}
+.glass-card:hover {
+  box-shadow: 0 12px 40px rgba(236, 72, 153, 0.25);
+  transform: translateY(-2px);
 }
