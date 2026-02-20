@@ -119,7 +119,7 @@ Rebranded and enhanced the social analytics dashboard as **ClawBoard**, a dedica
 - Docker container names: `clawboard-backend`, `clawboard-frontend`
 - Network: `clawboard-network`
 - Added `.env.example` template
-- Rewrote README to emphasize OpenClaw agent compatibility
+- Rewrote README in English with enhanced structure, features table, troubleshooting, and roadmap
 - Updated PLAN.md and AGENT1_SPEC.md with new naming
 
 **Status:** ClawBoard complete and pushed to GitHub. Ready for `docker-compose up -d`. Pending deployment and template rotation validation.
