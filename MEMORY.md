@@ -124,12 +124,41 @@ Rebranded and enhanced the social analytics dashboard as **ClawBoard**, a dedica
 
 **Status:** ClawBoard complete and pushed to GitHub. Ready for `docker-compose up -d`. Pending deployment and template rotation validation.
 
+### Clawlet Website Sakura Redesign (Feb 20, 2026)
+Refonte complète du site Clawlet dans le thème **sakura** existant, en l'élevant à un niveau plus professionnel et moderne.
+
+**Design Implementation:**
+- Palette sakura étendue (50–800) avec dégradés doux (violet→rose)
+- Style "dreamy": verre dépoli (glassmorphism), blurs d'arrière-plan, ombres lumineuses (glow) subtiles
+- Typographie: Inter pour le corps, JetBrains Mono pour le code
+- Animations fluides: float (éléments flottants), fadeInUp, pulseGlow
+- Interface aérée: coins arrondis (xl), transparence, accent couleur naturelle
+
+**Technical Stack:**
+- Next.js 16.1.6 (App Router, Turbopack)
+- Tailwind CSS v4 avec `@theme inline` pour couleurs sakura personnalisées
+- Composant Button mis à jour avec variant gradient primaire sakura
+- Utilisation intensive de `backdrop-blur`, `bg-white/70`, `shadow-glow-*` custom
+- Responsive, accessible, SEO-friendly
+
+**Components Updated:**
+- `app/page.tsx`: Hero, grille de features, tableau comparatif, quick start, CTA, footer – tout recréé dans le style sakura
+- `app/layout.tsx`: Polices Inter + JetBrains Mono, metadata SEO
+- `app/globals.css`: Animations, glow helpers, sakura-gradient, styles doux
+- `components/ui/button.tsx`: Variants sakura (primary gradient, outline, ghost)
+- `tailwind.config.ts`: Couleurs sakura étendues, animations custom
+
+**Build Status:** Production build réussi, zéro erreur TypeScript.
+
+**Impact:** Le site Clawlet conserve son identité sakura mais avec une finition très professionnelle, attrayante et moderne.
+
+
 
 ---
 
 ## Current Status (2026-02-20)
 - ClawBoard dashboard: complete (neo-brutalist redesign, Dockerized, GitHub pushed)
-- Clawlet website: unchanged (original sakura theme retained)
+- Clawlet website: complete sakura-themed redesign (modern, professional, built)
 - Engagement automation: healthy (Moltbook active with fallback endpoint, Molthub active, trendingLimit 30, templates 10 with rotation)
 - GEOITIS platform: production-ready (awaiting Cercle deployment details)
 - Brave Search: operational
