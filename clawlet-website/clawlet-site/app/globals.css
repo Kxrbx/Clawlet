@@ -2,37 +2,22 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Custom neo-brutalist theme */
+/* Custom sakura theme – soft, dreamy, modern */
 @theme inline {
-  /* Colors */
-  --color-claw-lime: #ccff00;
-  --color-claw-magenta: #ff00ff;
-  --color-claw-cyan: #00ffff;
-  --color-claw-yellow: #ffff00;
-  --color-claw-orange: #ff7700;
-  --color-claw-red: #ff0000;
-  --color-claw-dark: #0a0a0a;
-  --color-claw-black: #000000;
-  --color-claw-gray: #a0a0a0;
-  --color-claw-light: #e0e0e0;
+  /* Colors – sakura palette with depth */
+  --color-sakura-50: #fdf2f8;
+  --color-sakura-100: #fce7f3;
+  --color-sakura-150: #fbcfe8;
+  --color-sakura-200: #f9a8d4;
+  --color-sakura-300: #f472b6;
+  --color-sakura-400: #ec4899;
+  --color-sakura-500: #db2777;
+  --color-sakura-600: #be185d;
+  --color-sakura-700: #9d174d;
+  --color-sakura-800: #831843;
 
-  /* Fonts – connect to next/font variables */
-  --font-sans: var(--font-space-grotesk);
-  --font-mono: var(--font-jetbrains-mono);
-}
-
-/* Noise texture overlay */
-body::before {
-  content: "";
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 9999;
-  opacity: 0.03;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
 }
 
 /* Smooth scrolling */
@@ -40,207 +25,84 @@ html {
   scroll-behavior: smooth;
 }
 
-/* Hard borders everywhere */
-* {
-  border-color: #000000;
+/* Base background & text */
+body {
+  @apply bg-sakura-50 text-gray-800;
 }
 
-/* Custom utilities */
-.border-hard {
-  border-width: 4px;
-  border-style: solid;
-  border-color: #000000;
+/* Custom glow using box-shadow (used via class name in JSX) */
+.glow-sm {
+  box-shadow: 0 0 12px rgba(236, 72, 153, 0.25);
 }
 
-.border-hard-sm {
-  border-width: 2px;
-  border-style: solid;
-  border-color: #000000;
+.glow-md {
+  box-shadow: 0 0 20px rgba(236, 72, 153, 0.35);
 }
 
-.bg-claw-dark {
-  background-color: #0a0a0a;
+.glow-lg {
+  box-shadow: 0 0 32px rgba(236, 72, 153, 0.45);
 }
 
-.bg-claw-lime {
-  background-color: #ccff00;
+/* Gradient text – sakura */
+.sakura-gradient {
+  background: linear-gradient(135deg, #ec4899 0%, #f472b6 50%, #db2777 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-.bg-claw-magenta {
-  background-color: #ff00ff;
+/* Floating animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
 }
 
-.bg-claw-cyan {
-  background-color: #00ffff;
+.animate-float {
+  animation: float 6s ease-in-out infinite;
 }
 
-.bg-claw-yellow {
-  background-color: #ffff00;
+/* Pulse glow */
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 10px rgba(236, 72, 153, 0.2); }
+  50% { box-shadow: 0 0 24px rgba(236, 72, 153, 0.45); }
 }
 
-.bg-claw-orange {
-  background-color: #ff7700;
+.animate-pulse-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
 }
 
-.bg-claw-red {
-  background-color: #ff0000;
+/* Fade & slide up */
+@keyframes fadeInUp {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
-.bg-claw-gray {
-  background-color: #a0a0a0;
+@keyframes slideUp {
+  0% { opacity: 0; transform: translateY(30px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
-.bg-claw-light {
-  background-color: #e0e0e0;
+.animate-fade-in-up {
+  animation: fadeInUp 0.8s ease-out forwards;
 }
 
-.text-claw-lime {
-  color: #ccff00;
+.animate-slide-up {
+  animation: slideUp 0.6s ease-out forwards;
 }
 
-.text-claw-magenta {
-  color: #ff00ff;
-}
-
-.text-claw-cyan {
-  color: #00ffff;
-}
-
-.text-claw-yellow {
-  color: #ffff00;
-}
-
-.text-claw-orange {
-  color: #ff7700;
-}
-
-.text-claw-red {
-  color: #ff0000;
-}
-
-/* Hard button style – we keep this as base, but use Button component variants */
-.btn-hard {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.75rem 1.5rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border: 4px solid #000000;
-  background-color: #ccff00;
-  color: #000000;
-  box-shadow: 4px 4px 0px 0px #000000;
-  transition: all 0.1s ease;
-  cursor: pointer;
-}
-
-.btn-hard:hover {
-  transform: translate(2px, 2px);
-  box-shadow: 2px 2px 0px 0px #000000;
-}
-
-.btn-hard:active {
-  transform: translate(4px, 4px);
-  box-shadow: 0px 0px 0px 0px #000000;
-}
-
-.btn-hard-secondary {
-  background-color: #0a0a0a;
-  color: #ccff00;
-}
-
-.btn-hard-outline {
-  background-color: transparent;
-  color: #000000;
-}
-
-/* Card style */
-.card-hard {
-  background: #ffffff;
-  border: 4px solid #000000;
-  box-shadow: 8px 8px 0px 0px #000000;
+/* Input & button defaults – softened */
+input, textarea, select {
+  border: 1px solid #fbcfe8;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.875rem;
   transition: all 0.2s ease;
 }
 
-.card-hard:hover {
-  transform: translate(-2px, -2px);
-  box-shadow: 10px 10px 0px 0px #000000;
-}
-
-.dark .card-hard {
-  background: #1a1a1a;
-}
-
-/* Marquee container */
-.marquee-container {
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.marquee-content {
-  display: inline-block;
-  animation: marquee 25s linear infinite;
-}
-
-/* Staggered animations */
-.stagger-1 { animation-delay: 0.1s; }
-.stagger-2 { animation-delay: 0.2s; }
-.stagger-3 { animation-delay: 0.3s; }
-.stagger-4 { animation-delay: 0.4s; }
-.stagger-5 { animation-delay: 0.5s; }
-
-/* Hard input – override shadcn defaults */
-input, textarea, select {
-  border: 4px solid #000000 !important;
-  background: #ffffff !important;
-  padding: 0.75rem 1rem !important;
-  font-family: "var(--font-jetbrains-mono)", monospace !important;
-  font-size: 0.875rem !important;
-  transition: all 0.1s ease !important;
-}
-
 input:focus, textarea:focus, select:focus {
-  outline: none !important;
-  border-color: #ccff00 !important;
-  box-shadow: 0 0 0 3px rgba(204, 255, 0, 0.2) !important;
-}
-
-.dark input, .dark textarea, .dark select {
-  background: #0a0a0a !important;
-  color: #ffffff !important;
-}
-
-/* Corner accent decoration */
-.corner-accent {
-  position: relative;
-}
-
-.corner-accent::before,
-.corner-accent::after {
-  content: "";
-  position: absolute;
-  width: 20px;
-  height: 20px;
-  border: 4px solid #000000;
-}
-
-.corner-accent::before {
-  top: -10px;
-  left: -10px;
-  border-right: none;
-  border-bottom: none;
-}
-
-.corner-accent::after {
-  bottom: -10px;
-  right: -10px;
-  border-left: none;
-  border-top: none;
-}
-
-/* Animations */
-@keyframes marquee {
-  0% { transform: translateX(0%); }
-  100% { transform: translateX(-100%); }
+  outline: none;
+  border-color: #ec4899;
+  box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.15);
 }

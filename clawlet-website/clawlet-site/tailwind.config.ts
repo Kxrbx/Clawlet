@@ -9,66 +9,65 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Neo-brutalist palette
-        claw: {
-          50: "#f0f0f0",
-          100: "#e0e0e0",
-          200: "#cccccc",
-          300: "#a0a0a0",
-          400: "#707070",
-          500: "#404040",
-          600: "#202020",
-          700: "#0a0a0a",
-          800: "#000000",
-          900: "#000000",
-          lime: "#ccff00",
-          magenta: "#ff00ff",
-          cyan: "#00ffff",
-          yellow: "#ffff00",
-          orange: "#ff7700",
-          red: "#ff0000",
+        // Sakura palette – soft, dreamy, with depth
+        sakura: {
+          // core pastels
+          50: "#fdf2f8",      // very light pink
+          100: "#fce7f3",     // light pink
+          150: "#fbcfe8",     // slightly stronger
+          200: "#f9a8d4",     // pink
+          300: "#f472b6",     // hot pink
+          400: "#ec4899",     // vibrant pink
+          500: "#db2777",     // main brand
+          600: "#be185d",     // darker
+          700: "#9d174d",     // deep
+          800: "#831843",     // deeper
+          900: "#831843",     // same as 800 for continuity
+          // accents
+          lavender: "#a78bfa",
+          sky: "#60a5fa",
+          mint: "#34d399",
+          peach: "#fbbf24",
+          coral: "#f87171",
         },
       },
       fontFamily: {
-        sans: ["Space Grotesk", "system-ui", "sans-serif"],
+        sans: ["Inter", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "monospace"],
       },
-      borderWidth: {
-        "4": "4px",
-      },
       boxShadow: {
-        "hard": "4px 4px 0px 0px #000000",
-        "hard-sm": "2px 2px 0px 0px #000000",
-        "hard-lg": "8px 8px 0px 0px #000000",
-        "glow-lime": "0 0 20px rgba(204, 255, 0, 0.5)",
-        "glow-magenta": "0 0 20px rgba(255, 0, 255, 0.5)",
-        "glow-cyan": "0 0 20px rgba(0, 255, 255, 0.5)",
+        // Soft glowing shadows for sakura aesthetic
+        "glow-sm": "0 0 12px rgba(236, 72, 153, 0.25)",
+        "glow-md": "0 0 20px rgba(236, 72, 153, 0.35)",
+        "glow-lg": "0 0 32px rgba(236, 72, 153, 0.45)",
+        "glow-primary": "0 0 24px rgba(219, 39, 119, 0.4)",
+        "inner-glow": "inset 0 0 12px rgba(236, 72, 153, 0.15)",
+      },
+      backdropBlur: {
+        xs: "2px",
       },
       animation: {
-        "hard-bounce": "hardBounce 0.6s ease-in-out infinite alternate",
-        "glitch": "glitch 0.3s ease-in-out infinite",
-        "marquee": "marquee 25s linear infinite",
-        "pulse-hard": "pulseHard 2s ease-in-out infinite",
+        "float": "float 6s ease-in-out infinite",
+        "pulse-glow": "pulseGlow 3s ease-in-out infinite",
+        "fade-in-up": "fadeInUp 0.8s ease-out forwards",
+        "slide-up": "slideUp 0.6s ease-out forwards",
       },
       keyframes: {
-        hardBounce: {
-          "0%": { transform: "translateY(0)" },
-          "100%": { transform: "translateY(-10px)" },
+        float: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-12px)" },
         },
-        glitch: {
-          "0%, 100%": { transform: "translate(0)" },
-          "20%": { transform: "translate(-2px, 2px)" },
-          "40%": { transform: "translate(-2px, -2px)" },
-          "60%": { transform: "translate(2px, 2px)" },
-          "80%": { transform: "translate(2px, -2px)" },
+        pulseGlow: {
+          "0%, 100%": { boxShadow: "0 0 10px rgba(236, 72, 153, 0.2)" },
+          "50%": { boxShadow: "0 0 24px rgba(236, 72, 153, 0.45)" },
         },
-        marquee: {
-          "0%": { transform: "translateX(0%)" },
-          "100%": { transform: "translateX(-100%)" },
+        fadeInUp: {
+          "0%": { opacity: "0", transform: "translateY(20px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
         },
-        pulseHard: {
-          "0%, 100%": { boxShadow: "0 0 0 0 rgba(204, 255, 0, 0.7)" },
-          "50%": { boxShadow: "0 0 0 10px rgba(204, 255, 0, 0)" },
+        slideUp: {
+          "0%": { opacity: "0", transform: "translateY(30px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
         },
       },
     },
