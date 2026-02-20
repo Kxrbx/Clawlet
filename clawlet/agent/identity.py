@@ -107,7 +107,7 @@ class IdentityLoader:
         # Load USER.md
         user_path = self.workspace / "USER.md"
         if user_path.exists():
-            identity.user = user_path.read_text()
+            identity.user = user_path.read_text(encoding="utf-8")
             identity.user_name = self._extract_name(identity.user, "Human")
             identity.timezone = self._extract_timezone(identity.user)
             logger.info(f"Loaded USER.md for {identity.user_name}")
@@ -117,7 +117,7 @@ class IdentityLoader:
         # Load MEMORY.md
         memory_path = self.workspace / "MEMORY.md"
         if memory_path.exists():
-            identity.memory = memory_path.read_text()
+            identity.memory = memory_path.read_text(encoding="utf-8")
             logger.info("Loaded MEMORY.md")
         else:
             logger.warning(f"MEMORY.md not found at {memory_path}")
@@ -125,7 +125,7 @@ class IdentityLoader:
         # Load HEARTBEAT.md
         heartbeat_path = self.workspace / "HEARTBEAT.md"
         if heartbeat_path.exists():
-            identity.heartbeat = heartbeat_path.read_text()
+            identity.heartbeat = heartbeat_path.read_text(encoding="utf-8")
             logger.info("Loaded HEARTBEAT.md")
         else:
             logger.warning(f"HEARTBEAT.md not found at {heartbeat_path}")

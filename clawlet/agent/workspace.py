@@ -391,13 +391,20 @@ class Workspace:
         self._running = False
         logger.info(f"Stopped agent for workspace '{self.name}'")
     
-    def delete(self) -> bool:
+    def delete(self, confirm: bool = False) -> bool:
         """
         Delete the workspace directory and all contents.
+        
+        Args:
+            confirm: Must be True to actually delete. Safety measure to prevent accidental deletion.
         
         Returns:
             True if deleted successfully
         """
+        if not confirm:
+            logger.warning(f"Delete not confirmed for workspace '{self.name}'. Pass confirm=True to delete.")
+            return False
+        
         if self._running:
             logger.warning(f"Cannot delete running workspace '{self.name}'")
             return False
@@ -673,7 +680,7 @@ class WorkspaceManager:
         if not workspace:
             return False
         
-        if workspace.delete():
+        if workspace.delete(confirm=True):
             del self.workspaces[name]
             return True
         

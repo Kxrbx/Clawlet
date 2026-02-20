@@ -318,97 +318,6 @@ class AgentLoop:
     
     async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call."""
-        # Pattern: ```json ... ``` or ``` ... ``` blocks containing JSON
-        json_pattern = r'```(?:json)?\s*\n?([\s\S]*?)\n?```'
-        json_matches = re.findall(json_pattern, content, re.IGNORECASE)
-        
-        for i, json_str in enumerate(json_matches):
-            json_str = json_str.strip()
-            if not json_str:
-                continue
-            try:
-                data = json.loads(json_str)
-                
-                # Handle single tool call object
-                if isinstance(data, dict) and "name" in data:
-                    arguments = data.get("arguments", data.get("parameters", {}))
-                    if not isinstance(arguments, dict):
-                        arguments = {"value": arguments}
-                    tool_calls.append(ToolCall(
-                        id=f"call_json_{i}",
-                        name=data["name"],
-                        arguments=arguments,
-                    ))
-                # Handle array of tool calls
-                elif isinstance(data, list):
-                    for j, item in enumerate(data):
-                        if isinstance(item, dict) and "name" in item:
-                            arguments = item.get("arguments", item.get("parameters", {}))
-                            if not isinstance(arguments, dict):
-                                arguments = {"value": arguments}
-                            tool_calls.append(ToolCall(
-                                id=f"call_json_{i}_{j}",
-                                name=item["name"],
-                                arguments=arguments,
-                            ))
-            except json.JSONDecodeError:
-                pass  # Not valid JSON, try other formats
-        
-        # Second, try XML-style format with safer regex
-        # Use non-greedy matching and avoid nested quantifiers
-        # Format: <tool_call name="..." arguments='{...}'/>
-        xml_pattern = r'<tool_call\s+name="([^"]+)"\s+arguments=\'(\{[^\']*\}|\[[^\']*\])\'\s*/?>'  # noqa: E501
-        
-        try:
-            # Use re.finditer with timeout protection concept (bounded matches)
-            matches = re.findall(xml_pattern, content)
-            
-            for i, (name, args_str) in enumerate(matches):
-                try:
-                    args = json.loads(args_str)
-                    if isinstance(args, dict):
-                        tool_calls.append(ToolCall(
-                            id=f"call_xml_{i}",
-                            name=name,
-                            arguments=args,
-                        ))
-                    else:
-                        # Arguments is a list or primitive, wrap in dict
-                        tool_calls.append(ToolCall(
-                            id=f"call_xml_{i}",
-                            name=name,
-                            arguments={"value": args},
-                        ))
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse tool arguments for {name}: {e}")
-        except re.error as e:
-            logger.error(f"Regex error in tool call extraction: {e}")
-        
-        # Third, try simpler key-value format as fallback
-        # Format: tool: name | arguments: {...}
-        simple_pattern = r'tool[:\s]+([a-zA-Z_][a-zA-Z0-9_]*)[\s\n]+arguments?[:\s]+(\{[^}]+\}|\[[^\]]+\])'
-        try:
-            simple_matches = re.findall(simple_pattern, content, re.IGNORECASE)
-            for i, (name, args_str) in enumerate(simple_matches):
-                try:
-                    args = json.loads(args_str)
-                    tool_calls.append(ToolCall(
-                        id=f"call_simple_{i}",
-                        name=name.strip(),
-                        arguments=args if isinstance(args, dict) else {"value": args},
-                    ))
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse simple format for {name}: {e}")
-        except re.error as e:
-            logger.error(f"Regex error in simple tool call extraction: {e}")
-        
-        if tool_calls:
-            logger.info(f"Extracted {len(tool_calls)} tool call(s)")
-        
-        return tool_calls
-    
-    async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
-        """Execute a tool call."""
         logger.info(f"Executing tool: {tool_call.name} with args: {tool_call.arguments}")
         
         result = await self.tools.execute(tool_call.name, **tool_call.arguments)
@@ -419,7 +328,7 @@ class AgentLoop:
             logger.warning(f"Tool {tool_call.name} failed: {result.error}")
         
         return result
-    
+
     def _build_messages(self) -> list[dict]:
         """Build messages list for LLM."""
         messages = []
@@ -437,7 +346,7 @@ class AgentLoop:
         return messages
     
     def _trim_history(self) -> None:
-        """Trim history to prevent unbounded growth.
+        """Trim history to prevent memory issues.
         
         Trims based on:
         1. Maximum number of messages (MAX_HISTORY)
