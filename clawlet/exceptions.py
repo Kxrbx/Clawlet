@@ -2,7 +2,7 @@
 Custom exceptions for Clawlet.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 
 class ClawletError(Exception):
