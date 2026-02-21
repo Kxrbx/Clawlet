@@ -56,7 +56,7 @@ dev = [
 ]
 
 [project.scripts]
-clawlet = "clawlet.cli:main"
+clawlet = "clawlet.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
