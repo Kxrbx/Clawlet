@@ -7,6 +7,10 @@ PyYAML>=6.0
 loguru>=0.7.0
 aiohttp>=3.8.0
 
+# CLI
+typer>=0.9.0
+rich>=13.0.0
+
 # Providers
 openai>=1.0.0
 anthropic>=0.18.0
