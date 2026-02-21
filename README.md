@@ -1,6 +1,7 @@
 # 🌸 Clawlet
 
 <div align="center">
+<img width="256" height="256" alt="Clawlet logo" src="https://github.com/user-attachments/assets/de0343fb-ad04-4563-896b-686a375c9721" />
 
 **A lightweight AI agent framework with identity awareness**
 
