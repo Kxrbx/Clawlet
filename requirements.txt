@@ -10,6 +10,12 @@ aiohttp>=3.8.0
 # CLI
 typer>=0.9.0
 rich>=13.0.0
+questionary>=1.10.0
+
+# API Server
+fastapi>=0.109.0
+starlette>=0.34.0
+uvicorn>=0.27.0
 
 # Providers
 openai>=1.0.0
@@ -31,7 +37,3 @@ asyncpg>=0.29.0
 
 # Web Search
 brave-search>=0.1.0
-
-# Webhooks
-starlette>=0.34.0
-uvicorn>=0.27.0
