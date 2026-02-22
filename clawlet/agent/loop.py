@@ -93,6 +93,7 @@ class AgentLoop:
         self.memory = memory or MemoryManager(self.workspace)
         
         self._running = False
+        self._task = None
         self._history: list[Message] = []
         self._tool_parser = ToolCallParser()
         
@@ -104,6 +105,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
+        self._task = asyncio.current_task()
         logger.info("Agent loop started")
         
         while self._running:
@@ -148,6 +150,7 @@ class AgentLoop:
         def signal_handler(signum, frame):
             logger.info(f"Received signal {signum}, initiating graceful shutdown...")
             self.stop()
+            raise KeyboardInterrupt()
         
         # Register signal handlers
         if hasattr(signal, 'SIGTERM'):

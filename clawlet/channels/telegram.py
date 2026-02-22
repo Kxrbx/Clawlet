@@ -3,6 +3,7 @@ Telegram channel implementation.
 """
 
 import asyncio
+import re
 from typing import Optional
 
 from loguru import logger
@@ -13,20 +14,57 @@ from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
 from clawlet.channels.base import BaseChannel
 
 
-def escape_markdown_v2(text: str) -> str:
-    """Escape reserved characters for Telegram MarkdownV2.
+def convert_markdown_to_html(text: str) -> str:
+    """Convert common Markdown formatting to Telegram HTML.
     
-    MarkdownV2 requires these characters to be escaped with a preceding backslash:
-    _ * [ ] ( ) ~ ` > # + - = | { } . !
+    Supports:
+    - **bold** or __bold__ -> <b>bold</b>
+    - *italic* or _italic_ -> <i>italic</i>
+    - `inline code` -> <code>inline code</code>
+    - ```code block``` -> <pre>code block</pre>
+    - [text](url) -> <a href="url">text</a>
+    - # Heading -> <b>Heading</b>
+    - - list item -> • list item
+    - ~~strikethrough~~ -> <s>strikethrough</s>
+    
+    Also escapes HTML special characters to prevent injection.
     """
     if not text:
         return text
     
-    # Order matters: escape backslash first to avoid double-escaping
-    escape_chars = ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    # First escape HTML special characters (but preserve our own tags later)
+    # We escape in a way that protects against HTML injection
+    text = text.replace('&', '&')
+    text = text.replace('<', '<')
+    text = text.replace('>', '>')
     
-    for char in escape_chars:
-        text = text.replace(char, '\\' + char)
+    # Convert Markdown to HTML (order matters - more specific patterns first)
+    
+    # Code blocks (```...```) -> <pre>...</pre>
+    text = re.sub(r'```(\w*)\n?([\s\S]*?)```', r'<pre>\2</pre>', text)
+    
+    # Inline code (`...`) -> <code>...</code>
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    
+    # Bold (**...** or __...__) -> <b>...</b>
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'__([^_]+)__', r'<b>\1</b>', text)
+    
+    # Italic (*...* or _..._) -> <i>...</i> (being careful not to match already bold)
+    text = re.sub(r'(?<![*_])\*([^*]+)\*(?![*_])', r'<i>\1</i>', text)
+    text = re.sub(r'(?<![*_])_([^_]+)_(?![*_])', r'<i>\1</i>', text)
+    
+    # Links [text](url) -> <a href="url">text</a>
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+    
+    # Unordered lists: - item or * item -> • item
+    text = re.sub(r'^[\-\*]\s+', '• ', text, flags=re.MULTILINE)
+    
+    # Headers: # H1, ## H2, ### H3 -> <b>H1</b>, <b>H2</b>, <b>H3</b>
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
+    
+    # Strikethrough ~~text~~ -> <s>text</s>
+    text = re.sub(r'~~([^~]+)~~', r'<s>\1</s>', text)
     
     return text
 
@@ -93,18 +131,12 @@ class TelegramChannel(BaseChannel):
         logger.info("Telegram channel stopped")
     
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message to Telegram."""
+        """Send a message to Telegram with proper formatting."""
         logger.info(f"Telegram send: to={msg.chat_id}, content={msg.content[:50]}...")
         
         # DEBUG: Log content for diagnosis
         content_preview = msg.content[:200] if msg.content else "(empty)"
         logger.debug(f"Telegram message content (raw): {content_preview}")
-        
-        # Check for unescaped MarkdownV2 reserved characters
-        reserved_chars = {'_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '\\'}
-        found_chars = {c: msg.content.count(c) for c in reserved_chars if c in (msg.content or '')}
-        if found_chars:
-            logger.warning(f"Telegram message contains unescaped MarkdownV2 reserved chars: {found_chars}")
         
         try:
             try:
@@ -113,23 +145,24 @@ class TelegramChannel(BaseChannel):
                 logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
                 return
             
-            # Try MarkdownV2 with properly escaped content
-            parse_mode = "MarkdownV2"
-            escaped_content = escape_markdown_v2(msg.content)
-            logger.debug(f"Escaped content: {escaped_content[:100]}...")
+            # Try HTML parse_mode with converted Markdown
+            parse_mode = "HTML"
+            html_content = convert_markdown_to_html(msg.content)
+            logger.debug(f"Converted HTML content: {html_content[:100]}...")
+            
             try:
                 await self.app.bot.send_message(
                     chat_id=chat_id,
-                    text=escaped_content,
+                    text=html_content,
                     parse_mode=parse_mode
                 )
-                logger.info(f"Sent Telegram message to {chat_id}")
+                logger.info(f"Sent Telegram message to {chat_id} (HTML format)")
             except Exception as parse_error:
-                # Fall back to plain text if even escaped MarkdownV2 fails
-                logger.warning(f"MarkdownV2 parsing failed even with escaping, falling back to plain text: {parse_error}")
+                # Fall back to plain text if HTML parsing fails
+                logger.warning(f"HTML parsing failed, falling back to plain text: {parse_error}")
                 await self.app.bot.send_message(
                     chat_id=chat_id,
-                    text=msg.content,  # Use original unescaped content for plain text
+                    text=msg.content,
                     parse_mode=None
                 )
                 logger.info(f"Sent Telegram message to {chat_id} (plain text)")

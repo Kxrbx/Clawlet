@@ -45,8 +45,8 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     from clawlet.agent.identity import IdentityLoader
     from clawlet.agent.memory import MemoryManager
     from clawlet.bus.queue import MessageBus
-    from clawlet.providers.openrouter import OpenRouterProvider
     from clawlet.config import load_config
+    from loguru import logger
     import os
     
     # Load identity
@@ -59,19 +59,117 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     # Load configuration first (needed for both provider and channels)
     config = load_config(workspace)
     
-    # Get API key from config or environment variable
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    # DEBUG: Log the primary provider to confirm the issue
+    primary_provider = config.provider.primary
+    logger.debug(f"DEBUG: Primary provider from config: {primary_provider}")
+    
+    # Get API key and model based on the configured primary provider
+    api_key = ""
     config_model = None
-    if config.provider.openrouter:
+    
+    if primary_provider == "openrouter":
+        logger.debug("DEBUG: Selected provider is OpenRouter - checking for OPENROUTER_API_KEY")
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
         if not api_key:
-            api_key = config.provider.openrouter.api_key
-        config_model = config.provider.openrouter.model
+            api_key = config.provider.openrouter.api_key if config.provider.openrouter else ""
+        config_model = config.provider.openrouter.model if config.provider.openrouter else None
+    elif primary_provider == "ollama":
+        logger.debug("DEBUG: Selected provider is Ollama - no API key required")
+        config_model = config.provider.ollama.model if config.provider.ollama else None
+    elif primary_provider == "lmstudio":
+        logger.debug("DEBUG: Selected provider is LMStudio - no API key required")
+        config_model = config.provider.lmstudio.model if config.provider.lmstudio else None
+    elif primary_provider == "openai":
+        logger.debug("DEBUG: Selected provider is OpenAI - checking for OPENAI_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            api_key = config.provider.openai.api_key if config.provider.openai else ""
+        config_model = config.provider.openai.model if config.provider.openai else None
+    elif primary_provider == "anthropic":
+        logger.debug("DEBUG: Selected provider is Anthropic - checking for ANTHROPIC_API_KEY")
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            api_key = config.provider.anthropic.api_key if config.provider.anthropic else ""
+        config_model = config.provider.anthropic.model if config.provider.anthropic else None
+    else:
+        logger.warning(f"DEBUG: Unknown provider '{primary_provider}', defaulting behavior")
+        # Fallback: try openrouter config
+        if config.provider.openrouter:
+            api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            if not api_key:
+                api_key = config.provider.openrouter.api_key
+            config_model = config.provider.openrouter.model
     
     # Use model from CLI arg, then config, then provider default
     effective_model = model or config_model
     
-    # Create provider with the configured model
-    provider = OpenRouterProvider(api_key=api_key, default_model=effective_model)
+    logger.debug(f"DEBUG: Creating provider for '{primary_provider}' with model: {effective_model}")
+    
+    # Create provider based on the primary provider setting
+    if primary_provider == "openrouter":
+        from clawlet.providers.openrouter import OpenRouterProvider
+        provider = OpenRouterProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "ollama":
+        from clawlet.providers.ollama import OllamaProvider
+        provider = OllamaProvider(base_url=config.provider.ollama.base_url, default_model=effective_model)
+    elif primary_provider == "lmstudio":
+        from clawlet.providers.lmstudio import LMStudioProvider
+        provider = LMStudioProvider(base_url=config.provider.lmstudio.base_url, default_model=effective_model)
+    elif primary_provider == "openai":
+        from clawlet.providers.openai import OpenAIProvider
+        provider = OpenAIProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "anthropic":
+        from clawlet.providers.anthropic import AnthropicProvider
+        provider = AnthropicProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "minimax":
+        from clawlet.providers.minimax import MiniMaxProvider
+        api_key = api_key or (config.provider.minimax.api_key if config.provider.minimax else "")
+        provider = MiniMaxProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "moonshot":
+        from clawlet.providers.moonshot import MoonshotProvider
+        api_key = api_key or (config.provider.moonshot.api_key if config.provider.moonshot else "")
+        provider = MoonshotProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "google":
+        from clawlet.providers.google import GoogleProvider
+        api_key = api_key or (config.provider.google.api_key if config.provider.google else "")
+        provider = GoogleProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "qwen":
+        from clawlet.providers.qwen import QwenProvider
+        api_key = api_key or (config.provider.qwen.api_key if config.provider.qwen else "")
+        provider = QwenProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "zai":
+        from clawlet.providers.zai import ZAIProvider
+        api_key = api_key or (config.provider.zai.api_key if config.provider.zai else "")
+        provider = ZAIProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "copilot":
+        from clawlet.providers.copilot import CopilotProvider
+        access_token = os.environ.get("GITHUB_TOKEN", config.provider.copilot.access_token if config.provider.copilot else "")
+        provider = CopilotProvider(access_token=access_token, default_model=effective_model)
+    elif primary_provider == "vercel":
+        from clawlet.providers.vercel import VercelProvider
+        api_key = api_key or (config.provider.vercel.api_key if config.provider.vercel else "")
+        provider = VercelProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "opencode_zen":
+        from clawlet.providers.opencode_zen import OpenCodeZenProvider
+        api_key = api_key or (config.provider.opencode_zen.api_key if config.provider.opencode_zen else "")
+        provider = OpenCodeZenProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "xiaomi":
+        from clawlet.providers.xiaomi import XiaomiProvider
+        api_key = api_key or (config.provider.xiaomi.api_key if config.provider.xiaomi else "")
+        provider = XiaomiProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "synthetic":
+        from clawlet.providers.synthetic import SyntheticProvider
+        api_key = api_key or (config.provider.synthetic.api_key if config.provider.synthetic else "")
+        provider = SyntheticProvider(api_key=api_key, default_model=effective_model)
+    elif primary_provider == "venice_ai":
+        from clawlet.providers.venice import VeniceProvider
+        api_key = api_key or (config.provider.venice_ai.api_key if config.provider.venice_ai else "")
+        provider = VeniceProvider(api_key=api_key, default_model=effective_model)
+    else:
+        # Default fallback to openrouter
+        from clawlet.providers.openrouter import OpenRouterProvider
+        logger.warning(f"Unknown provider '{primary_provider}', falling back to OpenRouter")
+        provider = OpenRouterProvider(api_key=api_key, default_model=effective_model)
     
     # Get Telegram configuration from the correct field
     # ClawletConfig stores channels as individual fields (telegram, discord, etc.)
@@ -89,28 +187,37 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     from loguru import logger
     logger.debug(f"Telegram config: enabled={telegram_enabled}")
     
-    # Initialize and start Telegram channel if enabled
-    if telegram_enabled and telegram_token:
-        from clawlet.channels.telegram import TelegramChannel
-        logger.info("Initializing Telegram channel...")
-        telegram_channel = TelegramChannel(bus, {"token": telegram_token})
-        await telegram_channel.start()
-        logger.info("Telegram channel started")
-    elif telegram_enabled and not telegram_token:
-        logger.warning("Telegram enabled but token not configured")
-    else:
-        logger.warning("Telegram channel not enabled in config - messages will not be received!")
-    
-    # Create agent loop with the configured model
-    memory = MemoryManager(workspace)
-    agent = AgentLoop(
-        bus=bus,
-        workspace=workspace,
-        identity=identity,
-        provider=provider,
-        model=effective_model,
-        memory=memory,
-    )
-    
-    # Run the agent
-    await agent.run()
+    telegram_channel = None
+    try:
+        # Initialize and start Telegram channel if enabled
+        if telegram_enabled and telegram_token:
+            from clawlet.channels.telegram import TelegramChannel
+            logger.info("Initializing Telegram channel...")
+            telegram_channel = TelegramChannel(bus, {"token": telegram_token})
+            await telegram_channel.start()
+            logger.info("Telegram channel started")
+        elif telegram_enabled and not telegram_token:
+            logger.warning("Telegram enabled but token not configured")
+        else:
+            logger.warning("Telegram channel not enabled in config - messages will not be received!")
+        
+        # Create agent loop with the configured model
+        memory = MemoryManager(workspace)
+        agent = AgentLoop(
+            bus=bus,
+            workspace=workspace,
+            identity=identity,
+            provider=provider,
+            model=effective_model,
+            memory=memory,
+        )
+        
+        # Run the agent
+        await agent.run()
+    finally:
+        if telegram_channel is not None:
+            try:
+                logger.info("Stopping Telegram channel...")
+                await telegram_channel.stop()
+            except Exception as e:
+                logger.error(f"Error stopping Telegram channel: {e}")
