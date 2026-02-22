@@ -2,6 +2,12 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.6] - 2026-02-22
+
+### Fixes
+
+- **OpenRouter App Attribution**: Updated HTTP-Referer header from `https://clawlet.ai` to `https://github.com/Kxrbx/Clawlet` to properly identify Clawlet on OpenRouter and resolve namesquatting issues.
+
 ## [0.2.5] - 2026-02-22
 
 ### Features

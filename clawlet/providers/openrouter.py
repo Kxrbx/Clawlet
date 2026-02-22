@@ -65,7 +65,7 @@ class OpenRouterProvider(BaseProvider):
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
-                    "HTTP-Referer": "https://clawlet.ai",
+                    "HTTP-Referer": "https://github.com/Kxrbx/Clawlet",
                     "X-Title": "Clawlet",
                 },
                 timeout=120.0,

@@ -40,7 +40,7 @@ class ModelsCache:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://openrouter.ai/api/v1/models",
-                headers={"HTTP-Referer": "https://clawlet.ai", "X-Title": "Clawlet"},
+                headers={"HTTP-Referer": "https://github.com/Kxrbx/Clawlet", "X-Title": "Clawlet"},
                 timeout=30.0
             )
             response.raise_for_status()
