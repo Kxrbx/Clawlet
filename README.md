@@ -17,6 +17,12 @@
 
 ---
 
+
+<div align="center">
+<img width="809" height="475" alt="{28F593B5-58B5-49E8-A1D7-5C88E563726B}" src="https://github.com/user-attachments/assets/1d01fabc-7ddc-4f64-8b35-a279e4ad981f" />
+</div>
+
+
 ## Why Clawlet?
 
 Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for developers who want:
