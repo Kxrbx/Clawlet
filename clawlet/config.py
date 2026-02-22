@@ -456,6 +456,9 @@ class ClawletConfig(BaseSettings):
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     
+    # Web search
+    web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
+    
     # Storage
     storage: StorageConfig = Field(default_factory=StorageConfig)
     
@@ -495,6 +498,31 @@ class ClawletConfig(BaseSettings):
         
         with open(path, "r") as f:
             data = yaml.safe_load(f) or {}
+        
+        # Handle legacy 'channels:' key by merging into individual channel fields
+        # This supports both old format (channels.telegram) and new format (telegram)
+        if "channels" in data:
+            channels_data = data.pop("channels")
+            logger.info(f"Legacy 'channels:' key found, migrating to individual channel fields")
+            # Merge channels data into top-level channel fields
+            for channel_name, channel_config in channels_data.items():
+                if channel_name in cls.model_fields:
+                    # Get existing config or start fresh
+                    existing = data.get(channel_name, {})
+                    if isinstance(existing, dict):
+                        # Merge: channels data takes precedence over top-level
+                        merged = {**existing, **channel_config}
+                        data[channel_name] = merged
+                    else:
+                        # If existing is a Pydantic model, convert to dict and merge
+                        if hasattr(existing, 'model_dump'):
+                            existing_dict = existing.model_dump()
+                            merged = {**existing_dict, **channel_config}
+                            data[channel_name] = merged
+                        else:
+                            data[channel_name] = channel_config
+                else:
+                    logger.warning(f"Unknown channel '{channel_name}' in channels config")
         
         return cls(**data)
     

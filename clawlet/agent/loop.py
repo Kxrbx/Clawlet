@@ -364,10 +364,10 @@ class AgentLoop:
         self._trim_by_size()
         
         # Log memory usage after trimming
-        if logger.level >= 15:  # DEBUG level
-            stats = self.get_history_stats()
-            logger.debug(f"History stats: {stats['message_count']} messages, "
-                        f"{stats['memory_kb']}KB ({stats['utilization_percent']}% of max)")
+        # Note: Removed debug level check since loguru doesn't have simple level property
+        stats = self.get_history_stats()
+        logger.debug(f"History stats: {stats['message_count']} messages, "
+                    f"{stats['memory_kb']}KB ({stats['utilization_percent']}% of max)")
     
     def _trim_by_size(self) -> None:
         """Trim history to stay within MAX_TOTAL_HISTORY_SIZE."""

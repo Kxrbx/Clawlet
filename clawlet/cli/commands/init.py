@@ -203,18 +203,20 @@ provider:
     base_url: "http://localhost:1234"
     model: "local-model"
 
-# Channel Settings
-channels:
-  telegram:
-    enabled: false
-    token: "YOUR_TELEGRAM_BOT_TOKEN"
-  
-  discord:
-    enabled: false
-    token: "YOUR_DISCORD_BOT_TOKEN"
-  
-  whatsapp:
-    enabled: false
+# Channel Settings (individual fields - not 'channels:' key)
+ telegram:
+   enabled: false
+   token: "YOUR_TELEGRAM_BOT_TOKEN"
+ 
+ discord:
+   enabled: false
+   token: "YOUR_DISCORD_BOT_TOKEN"
+ 
+ whatsapp:
+   enabled: false
+ 
+ slack:
+   enabled: false
 
 # Storage Settings
 storage:

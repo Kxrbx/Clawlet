@@ -72,8 +72,9 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     # Create provider with the configured model
     provider = OpenRouterProvider(api_key=api_key, default_model=effective_model)
     
-    # DEBUG: Check Telegram configuration
-    telegram_cfg = config.channels.get("telegram")
+    # Get Telegram configuration from the correct field
+    # ClawletConfig stores channels as individual fields (telegram, discord, etc.)
+    telegram_cfg = config.telegram
     
     # Handle both raw dict and Pydantic model formats
     if isinstance(telegram_cfg, dict):

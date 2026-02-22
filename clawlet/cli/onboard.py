@@ -865,13 +865,12 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         config = Config(
             provider=provider_config,
-            channels={},
             web_search=BraveSearchConfig(
                 api_key=brave_api_key if brave_api_key else "",
                 enabled=bool(brave_api_key),
             ) if brave_use else BraveSearchConfig()
         )
-        config.to_yaml(workspace / "config.yaml")
+        config.save(workspace / "config.yaml")
         progress.update(task, advance=1, description="Creating identity files...")
         
         create_identity_files(
@@ -964,20 +963,22 @@ def create_identity_files(
         with open(config_path, encoding='utf-8') as f:
             config_data = yaml.safe_load(f)
         
-        if "channels" not in config_data:
-            config_data["channels"] = {}
-        
+        # Write to individual channel fields instead of 'channels:' key
+        # This matches the ClawletConfig schema
         if telegram_token:
-            config_data["channels"]["telegram"] = {
+            config_data["telegram"] = {
                 "enabled": True,
                 "token": telegram_token,
             }
         
         if discord_token:
-            config_data["channels"]["discord"] = {
+            config_data["discord"] = {
                 "enabled": True,
                 "token": discord_token,
             }
+        
+        # Remove legacy 'channels:' key if it exists to avoid confusion
+        config_data.pop("channels", None)
         
         with open(config_path, 'w') as f:
             yaml.dump(config_data, f, default_flow_style=False)
