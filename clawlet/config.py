@@ -290,7 +290,12 @@ class SlackConfig(BaseModel):
 
 class SQLiteConfig(BaseModel):
     """SQLite storage configuration."""
-    path: str = "~/.clawlet/clawlet.db"
+    path: str = Field(default="~/.clawlet/clawlet.db")
+    
+    @property
+    def expanded_path(self) -> Path:
+        """Return the expanded path with user home directory."""
+        return Path(self.path).expanduser()
 
 
 class PostgresConfig(BaseModel):

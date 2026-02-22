@@ -8,7 +8,30 @@ import asyncio
 import json
 import os
 import subprocess
+from pathlib import Path
 from functools import wraps
+
+# CORS origins from environment (comma-separated list)
+# Default to localhost origins for development
+DEFAULT_CORS_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
+
+
+def get_cors_origins() -> list[str]:
+    """Get CORS origins from environment variable or use defaults."""
+    env_origins = os.environ.get("CLAWLET_CORS_ORIGINS", "")
+    if env_origins:
+        return [origin.strip() for origin in env_origins.split(",") if origin.strip()]
+    return DEFAULT_CORS_ORIGINS
+
+
+# Configuration for API key enforcement
+def get_require_api_key() -> bool:
+    """Check if API key is required from environment variable."""
+    return os.environ.get("CLAWLET_REQUIRE_API_KEY", "false").lower() in ("true", "1", "yes")
+
+
+# Configuration for health history
+MAX_HEALTH_HISTORY_LINES = int(os.environ.get("CLAWLET_MAX_HEALTH_HISTORY_LINES", "1000"))
 
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -118,6 +141,11 @@ async def get_api_key(request: Request, api_key: str = Depends(api_key_header)) 
     dashboard_api_key = getattr(config, 'dashboard_api_key', None)
     dashboard_auth_required = getattr(config, 'dashboard_auth_required', False)
     
+    # Check environment variable for requiring API key
+    env_require_api_key = get_require_api_key()
+    if env_require_api_key:
+        dashboard_auth_required = True
+    
     # If no API key is configured and auth is not required, allow access
     if not dashboard_api_key and not dashboard_auth_required:
         return api_key
@@ -174,10 +202,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS
+# Add CORS with environment-based origins
+cors_origins = get_cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -191,14 +220,24 @@ async def get_health():
     """Get system health status (public, no auth required for monitoring)."""
     try:
         result = await quick_health_check()
-        # Record to history file
+        # Record to history file with rotation
         try:
             from pathlib import Path
             history_file = Path.home() / ".clawlet" / "health_history.jsonl"
             history_file.parent.mkdir(parents=True, exist_ok=True)
             import json
+            
+            # Append the new health record
             with open(history_file, "a") as f:
                 f.write(json.dumps(result) + "\n")
+            
+            # Rotate if file exceeds max lines
+            if MAX_HEALTH_HISTORY_LINES > 0:
+                lines = history_file.read_text().strip().split("\n")
+                if len(lines) > MAX_HEALTH_HISTORY_LINES:
+                    # Keep only the most recent lines
+                    lines = lines[-MAX_HEALTH_HISTORY_LINES:]
+                    history_file.write_text("\n".join(lines) + "\n")
         except Exception as e:
             logger.debug(f"Failed to write health history: {e}")
         return HealthResponse(**result)

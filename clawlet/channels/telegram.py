@@ -83,12 +83,25 @@ class TelegramChannel(BaseChannel):
             except (ValueError, TypeError) as e:
                 logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
                 return
-            await self.app.bot.send_message(
-                chat_id=chat_id,
-                text=msg.content,
-                parse_mode="Markdown"
-            )
-            logger.info(f"Sent Telegram message to {chat_id}")
+            
+            # Try MarkdownV2 first, fall back to None if parsing fails
+            parse_mode = "MarkdownV2"
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id,
+                    text=msg.content,
+                    parse_mode=parse_mode
+                )
+                logger.info(f"Sent Telegram message to {chat_id}")
+            except Exception as parse_error:
+                # Fall back to None if MarkdownV2 parsing fails
+                logger.warning(f"MarkdownV2 parsing failed, falling back to plain text: {parse_error}")
+                await self.app.bot.send_message(
+                    chat_id=chat_id,
+                    text=msg.content,
+                    parse_mode=None
+                )
+                logger.info(f"Sent Telegram message to {chat_id} (plain text)")
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
     
