@@ -43,6 +43,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     """Run the agent loop."""
     from clawlet.agent.loop import AgentLoop
     from clawlet.agent.identity import IdentityLoader
+    from clawlet.agent.memory import MemoryManager
     from clawlet.bus.queue import MessageBus
     from clawlet.providers.openrouter import OpenRouterProvider
     from clawlet.config import load_config
@@ -101,12 +102,14 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         logger.warning("Telegram channel not enabled in config - messages will not be received!")
     
     # Create agent loop with the configured model
+    memory = MemoryManager(workspace)
     agent = AgentLoop(
         bus=bus,
         workspace=workspace,
         identity=identity,
         provider=provider,
         model=effective_model,
+        memory=memory,
     )
     
     # Run the agent

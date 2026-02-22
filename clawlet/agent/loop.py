@@ -14,6 +14,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from clawlet.agent.identity import Identity, IdentityLoader
+from clawlet.agent.memory import MemoryManager
 from clawlet.agent.tool_parser import ToolCallParser
 from clawlet.exceptions import (
     ProviderError,
@@ -80,6 +81,7 @@ class AgentLoop:
         tools: Optional[ToolRegistry] = None,
         model: Optional[str] = None,
         max_iterations: int = 10,
+        memory: Optional[MemoryManager] = None,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -88,6 +90,7 @@ class AgentLoop:
         self.tools = tools or ToolRegistry()
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
+        self.memory = memory or MemoryManager(self.workspace)
         
         self._running = False
         self._history: list[Message] = []
@@ -237,6 +240,11 @@ class AgentLoop:
         
         while iteration < self.max_iterations:
             iteration += 1
+            
+            # Periodic memory save every 5 iterations
+            if iteration % 5 == 0:
+                self.memory.save_long_term()
+                logger.debug(f"Memory saved at iteration {iteration}")
             
             # Build messages for LLM
             messages = self._build_messages()
@@ -481,5 +489,9 @@ class AgentLoop:
     
     async def close(self):
         """Clean up resources."""
+        # Save memory on shutdown
+        self.memory.save_long_term()
+        logger.info("Memory saved on shutdown")
+        
         if hasattr(self.provider, 'close'):
             await self.provider.close()
