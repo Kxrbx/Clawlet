@@ -164,7 +164,7 @@ def get_heartbeat_template() -> str:
 This file defines tasks your agent performs periodically.
 
 ## Check Interval
-Every 2 hours
+Every 30 minutes
 
 ## Tasks
 - [ ] Check for important updates
@@ -243,7 +243,7 @@ agent:
 
 # Heartbeat Settings
 heartbeat:
-  interval_minutes: 120
+  interval_minutes: 30
   quiet_hours_start: 2  # 2am UTC
   quiet_hours_end: 9    # 9am UTC
 

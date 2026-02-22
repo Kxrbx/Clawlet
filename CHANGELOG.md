@@ -2,6 +2,24 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.7] - 2026-02-22
+
+### Features
+
+- **CORS Configuration**: Added environment variable support (`CLAWLET_CORS_ORIGINS`) for configuring CORS origins, providing flexibility for different deployment environments.
+- **API Key Enforcement**: Added optional API key requirement (`CLAWLET_REQUIRE_API_KEY`) for dashboard API access, enhancing security for production deployments.
+- **Health History Configuration**: Added configurable health history lines (`CLAWLET_MAX_HEALTH_HISTORY_LINES`) via environment variable for customizable monitoring.
+
+### Refactoring
+
+- **OpenAI Provider Enhancement**: Added OAuth flow support (`use_oauth` parameter) for OpenAI provider, enabling alternative authentication methods.
+- **LM Studio Provider**: Improved timeout handling and client management for more reliable local LLM connections.
+- **Button Component Update**: Updated dashboard button component with improved styling variants for better UI consistency.
+
+### Documentation
+
+- **Provider Documentation**: Updated model listings with latest available models including GPT-4.5 and o3-mini.
+
 ## [0.2.6] - 2026-02-22
 
 ### Fixes

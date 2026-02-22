@@ -324,7 +324,7 @@ class AgentSettings(BaseModel):
 
 class HeartbeatSettings(BaseModel):
     """Heartbeat settings."""
-    interval_minutes: int = Field(default=120, ge=10, le=1440)
+    interval_minutes: int = Field(default=30, ge=10, le=1440)
     quiet_hours_start: int = Field(default=2, ge=0, le=23)
     quiet_hours_end: int = Field(default=9, ge=0, le=23)
 

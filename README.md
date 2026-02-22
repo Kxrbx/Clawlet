@@ -11,7 +11,7 @@
 
 *Build AI agents that know who they are*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [v0.2.5](#-v025---2026-02-22)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [v0.2.7](#-v027---2026-02-22)
 
 </div>
 
@@ -408,14 +408,15 @@ Contributions welcome!
 
 ---
 
-## 📝 v0.2.5 - 2026-02-22
+## 📝 v0.2.7 - 2026-02-22
 
 ### Latest Updates
-- **Dashboard Error Handling**: Added ErrorBoundary component for graceful error recovery
-- **Rate Limiting**: Automatic cleanup of stale entries and configurable max entries
-- **Telegram**: MarkdownV2 fallback support for better message formatting
-- **SQLite Path**: Home directory (`~`) expansion support
-- **Environment Variables**: `.env` support added to .gitignore
+- **CORS Configuration**: Environment variable support for custom CORS origins (`CLAWLET_CORS_ORIGINS`)
+- **API Security**: Optional API key enforcement for dashboard access (`CLAWLET_REQUIRE_API_KEY`)
+- **Health Monitoring**: Configurable health history lines via `CLAWLET_MAX_HEALTH_HISTORY_LINES`
+- **OpenAI OAuth**: Added OAuth flow support for OpenAI provider authentication
+- **LM Studio**: Improved timeout handling for reliable local LLM connections
+- **UI Updates**: Enhanced button component styling variants
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.

@@ -953,7 +953,7 @@ def create_identity_files(
     (workspace / "MEMORY.md").write_text("# MEMORY.md - Long-Term Memory\n\n## Key Information\n- Add important facts here\n- Decisions made\n- Lessons learned\n\n## Recent Updates\n- [Date] Initial setup\n\n---\n🌸 _Memories persist across sessions._\n", encoding="utf-8")
     
     # HEARTBEAT.md
-    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md - Periodic Tasks\n\n## Check Interval\nEvery 2 hours\n\n## Tasks\n- [ ] Check for important updates\n- [ ] Review recent activity\n## Quiet Hours\n2am - 9am UTC\n\n---\n🌸 _Heartbeats help your agent stay proactive._\n", encoding="utf-8")
+    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md - Periodic Tasks\n\n## Check Interval\nEvery 30 minutes\n\n## Tasks\n- [ ] Check for important updates\n- [ ] Review recent activity\n## Quiet Hours\n2am - 9am UTC\n\n---\n🌸 _Heartbeats help your agent stay proactive._\n", encoding="utf-8")
     
     # Update config with channel tokens
     if telegram_token or discord_token:

@@ -13,6 +13,24 @@ from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
 from clawlet.channels.base import BaseChannel
 
 
+def escape_markdown_v2(text: str) -> str:
+    """Escape reserved characters for Telegram MarkdownV2.
+    
+    MarkdownV2 requires these characters to be escaped with a preceding backslash:
+    _ * [ ] ( ) ~ ` > # + - = | { } . !
+    """
+    if not text:
+        return text
+    
+    # Order matters: escape backslash first to avoid double-escaping
+    escape_chars = ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    for char in escape_chars:
+        text = text.replace(char, '\\' + char)
+    
+    return text
+
+
 class TelegramChannel(BaseChannel):
     """Telegram channel using python-telegram-bot."""
     
@@ -77,6 +95,17 @@ class TelegramChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message to Telegram."""
         logger.info(f"Telegram send: to={msg.chat_id}, content={msg.content[:50]}...")
+        
+        # DEBUG: Log content for diagnosis
+        content_preview = msg.content[:200] if msg.content else "(empty)"
+        logger.debug(f"Telegram message content (raw): {content_preview}")
+        
+        # Check for unescaped MarkdownV2 reserved characters
+        reserved_chars = {'_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '\\'}
+        found_chars = {c: msg.content.count(c) for c in reserved_chars if c in (msg.content or '')}
+        if found_chars:
+            logger.warning(f"Telegram message contains unescaped MarkdownV2 reserved chars: {found_chars}")
+        
         try:
             try:
                 chat_id = int(msg.chat_id)
@@ -84,21 +113,23 @@ class TelegramChannel(BaseChannel):
                 logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
                 return
             
-            # Try MarkdownV2 first, fall back to None if parsing fails
+            # Try MarkdownV2 with properly escaped content
             parse_mode = "MarkdownV2"
+            escaped_content = escape_markdown_v2(msg.content)
+            logger.debug(f"Escaped content: {escaped_content[:100]}...")
             try:
                 await self.app.bot.send_message(
                     chat_id=chat_id,
-                    text=msg.content,
+                    text=escaped_content,
                     parse_mode=parse_mode
                 )
                 logger.info(f"Sent Telegram message to {chat_id}")
             except Exception as parse_error:
-                # Fall back to None if MarkdownV2 parsing fails
-                logger.warning(f"MarkdownV2 parsing failed, falling back to plain text: {parse_error}")
+                # Fall back to plain text if even escaped MarkdownV2 fails
+                logger.warning(f"MarkdownV2 parsing failed even with escaping, falling back to plain text: {parse_error}")
                 await self.app.bot.send_message(
                     chat_id=chat_id,
-                    text=msg.content,
+                    text=msg.content,  # Use original unescaped content for plain text
                     parse_mode=None
                 )
                 logger.info(f"Sent Telegram message to {chat_id} (plain text)")
