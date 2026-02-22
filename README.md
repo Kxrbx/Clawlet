@@ -11,7 +11,7 @@
 
 *Build AI agents that know who they are*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [v0.2.5](#-v025---2026-02-22)
 
 </div>
 
@@ -58,12 +58,13 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - **Message Routing** - Route messages to appropriate agents
 - **Specialized Agents** - Configure agents for specific tasks
 
-### Dashboard (WIP)
+### Dashboard
 - **React + Tailwind UI** - Modern Sakura-themed design
 - **FastAPI Backend** - RESTful API with OpenAPI docs
 - **Real-time Monitoring** - Health history charts, console logs
 - **Agent Management** - Start/stop agents, view status
 - **Settings UI** - Full config editor with models browser
+
 
 ---
 
@@ -291,7 +292,7 @@ America/New_York
 
 ---
 
-## 📊 Dashboard (Work in Progress)
+## 📊 Dashboard (WIP)
 
 Launch the web dashboard:
 
@@ -396,6 +397,22 @@ Contributions welcome!
 3. Commit (`git commit -m 'Add amazing feature'`)
 4. Push (`git push origin feature/amazing`)
 5. Open a Pull Request
+
+---
+
+---
+
+## 📝 v0.2.5 - 2026-02-22
+
+### Latest Updates
+- **Dashboard Error Handling**: Added ErrorBoundary component for graceful error recovery
+- **Rate Limiting**: Automatic cleanup of stale entries and configurable max entries
+- **Telegram**: MarkdownV2 fallback support for better message formatting
+- **SQLite Path**: Home directory (`~`) expansion support
+- **Environment Variables**: `.env` support added to .gitignore
+
+### Previous Versions
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ---
 

@@ -2,6 +2,26 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.5] - 2026-02-22
+
+### Features
+
+- **Dashboard Error Handling**: Added ErrorBoundary component for graceful error handling in the React dashboard, preventing entire app crashes from component errors.
+
+### Refactoring
+
+- **Rate Limiting Enhancement**: Added automatic cleanup of stale entries and configurable maximum total entries to prevent memory growth from long-running agents.
+
+- **Telegram Message Formatting**: Enhanced message sending with MarkdownV2 fallback support, providing better formatting options for Telegram bot messages.
+
+- **SQLite Path Expansion**: Expanded SQLite path configuration to support user home directory (`~`) expansion for easier database file placement.
+
+### Maintenance
+
+- **Environment Variables Support**: Updated `.gitignore` to include environment variable files (`.env`) for safer local development.
+
+- **Dashboard API Base URL**: Updated API base URL configuration for improved flexibility in different deployment environments.
+
 ## [0.2.4] - 2026-02-22
 
 ### Features
