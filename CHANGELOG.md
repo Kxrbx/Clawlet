@@ -2,6 +2,33 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.4] - 2026-02-22
+
+### Features
+
+- **Memory Persistence**: Added memory persistence with periodic saves to maintain agent state across sessions. Memory is saved every 5 iterations during execution and persisted on agent shutdown for session continuity.
+
+### Refactoring
+
+- **Config Schema Migration**: Migrated from nested `channels:` dictionary to individual top-level fields for each channel (telegram, discord, whatsapp, slack). Also adds web_search configuration support with automatic migration logic for legacy config files.
+
+- **Tool Call Execution**: Simplified tool call execution in agent loop by removing complex regex-based parsing. Added confirmation parameter to `Workspace.delete()` to prevent accidental deletions.
+
+### Dependencies
+
+- **New CLI Dependencies**: Added [Typer](https://typer.tiangolo.com/) and [Rich](https://rich.readthedocs.io/) for improved interactive CLI experiences.
+- **FastAPI Integration**: Added FastAPI and Questionary dependencies for enhanced API and interactive prompt support.
+
+### Maintenance
+
+- **Project Configuration**: Added `pyproject.toml` for standardized Python project configuration.
+- **CLI Entry Point**: Updated CLI entry point from `main` to `app` for consistency.
+- **Encoding Fix**: Explicitly specified UTF-8 encoding when reading identity files (USER.md, MEMORY.md, HEARTBEAT.md).
+
+### Documentation
+
+- **Visual Branding**: Added logo image to README for improved visual presentation.
+
 ## [0.2.3] - 2026-02-19
 
 ### Refactoring

@@ -58,7 +58,7 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - **Message Routing** - Route messages to appropriate agents
 - **Specialized Agents** - Configure agents for specific tasks
 
-### Dashboard
+### Dashboard (WIP)
 - **React + Tailwind UI** - Modern Sakura-themed design
 - **FastAPI Backend** - RESTful API with OpenAPI docs
 - **Real-time Monitoring** - Health history charts, console logs
@@ -357,7 +357,7 @@ clawlet/
 |---------|-------------|
 | LLM Providers | 18+ cloud and local providers |
 | Local LLMs | Ollama, LM Studio (free) |
-| Dashboard | React + FastAPI with Sakura theme |
+| Dashboard | React + FastAPI with Sakura theme | WIP
 | Identity System | SOUL/USER/MEMORY files |
 | Health Checks | Monitor providers, storage, channels |
 | Rate Limiting | Sliding window + token bucket |
