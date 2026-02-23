@@ -95,6 +95,10 @@ class IdentityLoader:
         """Load all identity files."""
         identity = Identity()
         
+        # DEBUG: Log that we're loading identity files
+        logger.info("[DEBUG] Loading identity files from workspace")
+        # END DEBUG
+        
         # Load SOUL.md
         soul_path = self.workspace / "SOUL.md"
         if soul_path.exists():
@@ -142,7 +146,12 @@ class IdentityLoader:
     def identity(self) -> Identity:
         """Get loaded identity, loading if necessary."""
         if self._identity is None:
+            # DEBUG: Log that we're loading from scratch
+            logger.info("[DEBUG] Identity cache is empty, loading identity files")
             self._identity = self.load_all()
+        else:
+            # DEBUG: Log that we're using cached identity
+            logger.info("[DEBUG] Using cached identity (files may have changed on disk)")
         return self._identity
     
     def _extract_name(self, content: str, default: str) -> str:

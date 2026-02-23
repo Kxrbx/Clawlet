@@ -138,6 +138,8 @@ class WriteFileTool(BaseTool):
     async def execute(self, path: str, content: str, **kwargs) -> ToolResult:
         """Write a file."""
         try:
+            from loguru import logger
+            
             file_path = Path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
@@ -152,13 +154,24 @@ class WriteFileTool(BaseTool):
             # Create parent directories
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # DEBUG: Log that we're about to write
+            logger.info(f"[DEBUG] write_file: Writing {len(content)} bytes to {resolved_path}")
+            # END DEBUG
+            
             resolved_path.write_text(content, encoding="utf-8")
+            
+            # DEBUG: Log that we successfully wrote
+            logger.info(f"[DEBUG] write_file: Successfully wrote to {resolved_path}")
+            # END DEBUG
+            
             return ToolResult(
                 success=True,
                 output=f"Successfully wrote {len(content)} bytes to {path}",
                 data={"path": str(resolved_path), "size": len(content)}
             )
         except Exception as e:
+            from loguru import logger
+            logger.error(f"[DEBUG] write_file: Failed to write {path}: {e}")
             return ToolResult(success=False, output="", error=str(e))
 
 
@@ -200,6 +213,8 @@ class EditFileTool(BaseTool):
     async def execute(self, path: str, old_text: str, new_text: str, **kwargs) -> ToolResult:
         """Edit a file."""
         try:
+            from loguru import logger
+            
             file_path = Path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
@@ -220,8 +235,16 @@ class EditFileTool(BaseTool):
                     error=f"Text not found in file: {old_text[:50]}..."
                 )
             
+            # DEBUG: Log that we're about to edit
+            logger.info(f"[DEBUG] edit_file: Editing {resolved_path}")
+            # END DEBUG
+            
             new_content = content.replace(old_text, new_text, 1)
             resolved_path.write_text(new_content)
+            
+            # DEBUG: Log that we successfully edited
+            logger.info(f"[DEBUG] edit_file: Successfully edited {resolved_path}")
+            # END DEBUG
             
             return ToolResult(
                 success=True,
@@ -229,6 +252,8 @@ class EditFileTool(BaseTool):
                 data={"path": str(resolved_path)}
             )
         except Exception as e:
+            from loguru import logger
+            logger.error(f"[DEBUG] edit_file: Failed to edit {path}: {e}")
             return ToolResult(success=False, output="", error=str(e))
 
 

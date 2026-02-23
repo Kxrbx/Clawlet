@@ -66,10 +66,20 @@ class ToolCallParser:
         tool_calls = []
         
         # Try each pattern in order
-        tool_calls.extend(self._parse_json_blocks(content))
-        tool_calls.extend(self._parse_xml_format(content))
-        tool_calls.extend(self._parse_simple_format(content))
-        tool_calls.extend(self._parse_mcp_format(content))
+        json_calls = self._parse_json_blocks(content)
+        xml_calls = self._parse_xml_format(content)
+        simple_calls = self._parse_simple_format(content)
+        mcp_calls = self._parse_mcp_format(content)
+        
+        tool_calls.extend(json_calls)
+        tool_calls.extend(xml_calls)
+        tool_calls.extend(simple_calls)
+        tool_calls.extend(mcp_calls)
+        
+        # DEBUG: Log which patterns matched
+        if json_calls or xml_calls or simple_calls or mcp_calls:
+            logger.warning(f"[DIAGNOSTIC] Tool parser matches - JSON: {len(json_calls)}, XML: {len(xml_calls)}, Simple: {len(simple_calls)}, MCP: {len(mcp_calls)}")
+            logger.debug(f"[DIAGNOSTIC] Raw content sample: {content[:300]}...")
         
         if tool_calls:
             logger.info(f"Extracted {len(tool_calls)} tool call(s)")

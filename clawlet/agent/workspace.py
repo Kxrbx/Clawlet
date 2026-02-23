@@ -297,10 +297,17 @@ class Workspace:
         """
         Load workspace identity files.
         
+        Always reloads from disk to ensure latest changes are picked up.
+        
         Returns:
             Loaded Identity object
         """
+        # DEBUG: Log that we're reloading identity
+        logger.info("[DEBUG] load_identity: Reloading identity from disk")
+        # END DEBUG
+        
         loader = IdentityLoader(self.path)
+        # Always call load_all() to ensure we get fresh data from disk
         self.identity = loader.load_all()
         return self.identity
     
@@ -345,9 +352,13 @@ class Workspace:
         if not self.config:
             self.load_config()
         
-        # Load identity if not loaded
-        if not self.identity:
-            self.load_identity()
+        # Load identity if not loaded - always reload to get latest changes
+        # DEBUG: Log the state of identity before loading
+        logger.info(f"[DEBUG] start: self.identity is None = {self.identity is None}")
+        # END DEBUG
+        
+        # Always reload identity to pick up any changes from previous sessions
+        self.load_identity()
         
         # Import here to avoid circular imports
         from clawlet.agent.loop import AgentLoop

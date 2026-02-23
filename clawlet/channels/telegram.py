@@ -32,11 +32,19 @@ def convert_markdown_to_html(text: str) -> str:
     if not text:
         return text
     
+    # DEBUG: Log the input for diagnosing parsing errors
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[HTML_CONVERT] Input text: {repr(text[:500])}")
+    
     # First escape HTML special characters (but preserve our own tags later)
     # We escape in a way that protects against HTML injection
-    text = text.replace('&', '&')
-    text = text.replace('<', '<')
-    text = text.replace('>', '>')
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
+    
+    # DEBUG: Log after escaping
+    logger.debug(f"[HTML_CONVERT] After escape: {repr(text[:500])}")
     
     # Convert Markdown to HTML (order matters - more specific patterns first)
     
@@ -65,6 +73,9 @@ def convert_markdown_to_html(text: str) -> str:
     
     # Strikethrough ~~text~~ -> <s>text</s>
     text = re.sub(r'~~([^~]+)~~', r'<s>\1</s>', text)
+    
+    # DEBUG: Log the final output
+    logger.debug(f"[HTML_CONVERT] Final output: {repr(text[:500])}")
     
     return text
 
