@@ -203,6 +203,12 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         
         # Create agent loop with the configured model
         memory = MemoryManager(workspace)
+        
+        # Create tool registry with all tools (including web search)
+        from clawlet.tools import create_default_tool_registry
+        allowed_dir = str(workspace)
+        tools = create_default_tool_registry(allowed_dir=allowed_dir, config=config)
+        
         agent = AgentLoop(
             bus=bus,
             workspace=workspace,
@@ -210,6 +216,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             provider=provider,
             model=effective_model,
             memory=memory,
+            tools=tools,
         )
         
         # Run the agent
