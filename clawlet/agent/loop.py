@@ -14,6 +14,8 @@ from typing import Any, Optional
 from loguru import logger
 
 from clawlet.bus.queue import OutboundMessage
+from clawlet.agent.identity import Identity
+from clawlet.agent.memory import MemoryManager
 from clawlet.exceptions import (
     ProviderError,
     ProviderConnectionError,
