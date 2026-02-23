@@ -355,7 +355,13 @@ class Workspace:
         
         # Create tool registry if not provided
         if tools is None:
-            tools = ToolRegistry()
+            from clawlet.tools import create_default_tool_registry
+            tools = create_default_tool_registry(
+                allowed_dir=str(self.path),
+                config=self.config
+            )
+            logger.info(f"Created default tool registry with {len(tools.all_tools())} tools for workspace '{self.name}'")
+            logger.debug(f"Registered tools: {[t.name for t in tools.all_tools()]}")
         
         # Get model from config or use default
         if model is None and self.config:

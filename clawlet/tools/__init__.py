@@ -51,8 +51,8 @@ def create_default_tool_registry(allowed_dir: str = None, config=None) -> ToolRe
     for tool in file_tool.tools:
         registry.register(tool)
     
-    # Add shell tool
-    registry.register(ShellTool(allowed_dir=allowed_dir))
+    # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
+    registry.register(ShellTool(workspace=allowed_dir))
     
     # Add web search tool (uses Brave Search API)
     # Get API key from config, environment variable, or None

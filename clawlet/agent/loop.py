@@ -98,6 +98,7 @@ class AgentLoop:
         self._tool_parser = ToolCallParser()
         
         logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
+        logger.debug(f"Available tools: {[t.name for t in self.tools.all_tools()]}")
         
         # Set up signal handlers for graceful shutdown
         self.setup_signal_handlers()
