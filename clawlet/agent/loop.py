@@ -38,9 +38,48 @@ class Message:
     tool_calls: list = field(default_factory=list)
     
     def to_dict(self) -> dict:
+        import json
+        from loguru import logger
+        
         d = {"role": self.role, "content": self.content}
         if self.tool_calls:
-            d["tool_calls"] = self.tool_calls
+            # Transform tool_calls to OpenAI API format:
+            # {"id": "...", "type": "function", "function": {"name": "...", "arguments": "{...}"}}
+            formatted_tool_calls = []
+            for tc in self.tool_calls:
+                # Handle both dict and object formats
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id")
+                    tc_name = tc.get("name")
+                    tc_args = tc.get("arguments", {})
+                else:
+                    tc_id = tc.id
+                    tc_name = tc.name
+                    tc_args = tc.arguments
+                
+                # Convert arguments dict to JSON string
+                if isinstance(tc_args, dict):
+                    args_str = json.dumps(tc_args)
+                else:
+                    args_str = str(tc_args)
+                
+                formatted_tool_calls.append({
+                    "id": tc_id,
+                    "type": "function",
+                    "function": {
+                        "name": tc_name,
+                        "arguments": args_str
+                    }
+                })
+            
+            d["tool_calls"] = formatted_tool_calls
+            logger.debug(f"Message.to_dict: role={self.role}, tool_calls={formatted_tool_calls}")
+        
+        # Include tool_call_id for tool role messages
+        if self.role == "tool" and self.metadata.get("tool_call_id"):
+            d["tool_call_id"] = self.metadata["tool_call_id"]
+            logger.debug(f"Message.to_dict: tool with tool_call_id={self.metadata['tool_call_id']}")
+        
         return d
 
 

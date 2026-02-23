@@ -94,6 +94,13 @@ class OpenRouterProvider(BaseProvider):
         
         logger.info(f"OpenRouter request: model={model}, messages={len(messages)}")
         
+        # DEBUG: Log tool_calls format in messages
+        for i, msg in enumerate(messages):
+            if msg.get("tool_calls"):
+                logger.debug(f"Message {i} ({msg.get('role')}) has tool_calls: {msg['tool_calls']}")
+            if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                logger.debug(f"Message {i} (tool) has tool_call_id: {msg['tool_call_id']}")
+        
         try:
             logger.debug(f"Sending request to OpenRouter API...")
             response = await client.post("/chat/completions", json=payload)
