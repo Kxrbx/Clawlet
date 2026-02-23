@@ -17,6 +17,7 @@ class LLMResponse:
     model: str
     usage: dict
     finish_reason: str = "stop"
+    tool_calls: list = None  # List of tool calls from the model
 
 
 @dataclass

@@ -140,7 +140,12 @@ class OpenAIProvider(BaseProvider):
             
             data = response.json()
             
-            content = data["choices"][0]["message"]["content"]
+            # Check for tool_calls in response
+            message = data["choices"][0]["message"]
+            tool_calls_response = message.get("tool_calls")
+            logger.debug(f"[DEBUG] OpenAI tool_calls in response: {tool_calls_response is not None}")
+            
+            content = message.get("content") or ""
             usage = data.get("usage", {})
             finish_reason = data["choices"][0].get("finish_reason", "stop")
             
@@ -151,6 +156,7 @@ class OpenAIProvider(BaseProvider):
                 model=model,
                 usage=usage,
                 finish_reason=finish_reason,
+                tool_calls=tool_calls_response,
             )
             
         except httpx.HTTPStatusError as e:

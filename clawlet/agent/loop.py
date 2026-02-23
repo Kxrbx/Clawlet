@@ -315,13 +315,46 @@ class AgentLoop:
                 
                 response_content = response.content
                 
+                # DEBUG: Log response details
+                logger.debug(f"[DEBUG] Response content: {repr(response_content[:200]) if response_content else '(empty)'}")
+                logger.debug(f"[DEBUG] Response finish_reason: {getattr(response, 'finish_reason', 'N/A')}")
+                
                 # Check for streaming errors (empty response with error finish_reason)
                 if not response_content and hasattr(response, 'finish_reason') and response.finish_reason == "error":
                     logger.error("Streaming response failed with error")
                     raise Exception("Streaming response failed")
                 
                 # Check for tool calls in response
-                tool_calls = self._extract_tool_calls(response_content)
+                # First check if tool_calls exist in the response object (from API)
+                # Then fall back to parsing from content text
+                tool_calls = []
+                
+                if hasattr(response, 'tool_calls') and response.tool_calls:
+                    # Convert API tool_calls format to ToolCall objects
+                    logger.debug(f"[DEBUG] Using tool_calls from API response")
+                    for tc in response.tool_calls:
+                        # OpenAI API format: {id, type, function: {name, arguments}}
+                        tc_id = tc.get("id", f"call_{id(tc)}")
+                        func = tc.get("function", {})
+                        tc_name = func.get("name", "")
+                        tc_args = func.get("arguments", "{}")
+                        
+                        # Parse arguments as JSON
+                        try:
+                            args_dict = json.loads(tc_args) if isinstance(tc_args, str) else tc_args
+                        except json.JSONDecodeError:
+                            args_dict = {"raw": tc_args}
+                        
+                        tool_calls.append(ToolCall(id=tc_id, name=tc_name, arguments=args_dict))
+                else:
+                    # Fall back to parsing from content text
+                    tool_calls = self._extract_tool_calls(response_content)
+                
+                # DEBUG: Log tool call extraction results
+                logger.debug(f"[DEBUG] Extracted tool_calls: {len(tool_calls)} calls")
+                if tool_calls:
+                    for tc in tool_calls:
+                        logger.debug(f"[DEBUG] Tool call: {tc.name} with args: {tc.arguments}")
                 
                 if tool_calls:
                     # Add assistant message with tool calls (truncate if needed)

@@ -109,7 +109,19 @@ class OpenRouterProvider(BaseProvider):
             
             data = response.json()
             
-            content = data["choices"][0]["message"]["content"]
+            # DEBUG: Log full response structure to diagnose tool_calls issue
+            logger.debug(f"[DEBUG] OpenRouter response keys: {data.keys()}")
+            
+            # Check for tool_calls in response
+            message = data["choices"][0]["message"]
+            logger.debug(f"[DEBUG] OpenRouter choices[0] message keys: {message.keys()}")
+            
+            tool_calls_response = message.get("tool_calls")
+            logger.debug(f"[DEBUG] tool_calls in response: {tool_calls_response is not None}")
+            if tool_calls_response:
+                logger.debug(f"[DEBUG] tool_calls content: {tool_calls_response}")
+            
+            content = message.get("content") or ""
             usage = data.get("usage", {})
             finish_reason = data["choices"][0].get("finish_reason", "stop")
             
@@ -120,6 +132,7 @@ class OpenRouterProvider(BaseProvider):
                 model=model,
                 usage=usage,
                 finish_reason=finish_reason,
+                tool_calls=tool_calls_response,
             )
             
         except httpx.HTTPStatusError as e:
