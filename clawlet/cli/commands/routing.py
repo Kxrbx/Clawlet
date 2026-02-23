@@ -28,13 +28,13 @@ def routing_cmd(
     # Handle enable/disable
     if enable:
         config.routing.enabled = True
-        config.to_yaml(config_path)
+        config.save(config_path)
         console.print("[green]✓ Multi-agent routing enabled[/green]")
         return
     
     if disable:
         config.routing.enabled = False
-        config.to_yaml(config_path)
+        config.save(config_path)
         console.print("[green]✓ Multi-agent routing disabled[/green]")
         return
     

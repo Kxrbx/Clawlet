@@ -360,7 +360,7 @@ async def update_settings(settings: SettingsUpdate, api_key: str = Depends(get_a
     if settings.temperature:
         config.agent.temperature = settings.temperature
     
-    config.to_yaml(config.config_path)
+    config.save(config.config_path)
     logger.info(f"Settings updated: {settings}")
     
     return {"success": True, "message": "Settings updated"}

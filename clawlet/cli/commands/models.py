@@ -87,7 +87,7 @@ def models(
                 )
             
             # Save config
-            config.to_yaml(config_path)
+            config.save(config_path)
             
             console.print()
             console.print(f"[green]✓ Model updated to:[/green] [{SAKURA_PINK}]{new_model}[/{SAKURA_PINK}]")

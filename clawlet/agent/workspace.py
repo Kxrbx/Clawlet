@@ -207,7 +207,7 @@ class Workspace:
         if template_config:
             # Use template config
             self.config = template_config
-            self.config.to_yaml(self.config_path)
+            self.config.save(self.config_path)
         else:
             # Create minimal config that inherits from parent
             self._create_default_config()
