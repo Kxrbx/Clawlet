@@ -5,10 +5,20 @@ Clawlet CLI commands.
 import asyncio
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 import getpass
+
+# Fix Windows console encoding for emoji support
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        # Fallback: set environment variable
+        os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 import typer
 from rich.console import Console
