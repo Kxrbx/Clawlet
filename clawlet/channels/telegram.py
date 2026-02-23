@@ -91,25 +91,44 @@ class TelegramChannel(BaseChannel):
         """Start the Telegram bot."""
         logger.info(f"Starting Telegram channel...")
         
-        # Create application
-        self.app = Application.builder().token(self.token).build()
-        
-        # Add handlers
-        self.app.add_handler(CommandHandler("start", self._handle_start))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
-        
-        # Initialize and start
-        await self.app.initialize()
-        await self.app.start()
-        
-        # Start polling in background
-        await self.app.updater.start_polling()
-        
-        # Start outbound loop
-        self._running = True
-        self._outbound_task = asyncio.create_task(self._run_outbound_loop())
-        
-        logger.info("Telegram channel started successfully")
+        try:
+            # Create application
+            logger.debug("DEBUG: Creating Application builder...")
+            self.app = Application.builder().token(self.token).build()
+            logger.debug("DEBUG: Application created, checking updater...")
+            
+            # Check if updater exists (debug)
+            if self.app.updater is None:
+                logger.warning("DEBUG: Application.updater is None - this may cause issues!")
+            else:
+                logger.debug("DEBUG: Updater exists, ready for polling")
+            
+            # Add handlers
+            self.app.add_handler(CommandHandler("start", self._handle_start))
+            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
+            
+            # Initialize and start
+            logger.debug("DEBUG: Initializing application...")
+            await self.app.initialize()
+            logger.debug("DEBUG: Starting application...")
+            await self.app.start()
+            
+            # Start polling in background
+            logger.debug("DEBUG: Starting polling...")
+            await self.app.updater.start_polling()
+            logger.debug("DEBUG: Polling started successfully")
+            
+            # Start outbound loop
+            self._running = True
+            self._outbound_task = asyncio.create_task(self._run_outbound_loop())
+            
+            logger.info("Telegram channel started successfully")
+        except Exception as e:
+            logger.error(f"DEBUG: Exception during Telegram start: {type(e).__name__}: {e}")
+            # Don't re-raise - let the caller decide what to do
+            # But set _running to False to prevent issues
+            self._running = False
+            raise
     
     async def stop(self) -> None:
         """Stop the Telegram bot."""
@@ -125,9 +144,30 @@ class TelegramChannel(BaseChannel):
                 pass
         
         if self.app:
-            await self.app.updater.stop()
-            await self.app.stop()
-            await self.app.shutdown()
+            try:
+                # Check if updater exists and is running before stopping
+                if self.app.updater is not None:
+                    logger.debug("DEBUG: Stopping updater...")
+                    try:
+                        await self.app.updater.stop()
+                        logger.debug("DEBUG: Updater stopped successfully")
+                    except RuntimeError as e:
+                        if "not running" in str(e).lower():
+                            logger.warning(f"DEBUG: Updater was not running: {e}")
+                        else:
+                            raise
+                else:
+                    logger.warning("DEBUG: Updater is None, skipping stop")
+                
+                logger.debug("DEBUG: Stopping application...")
+                await self.app.stop()
+                logger.debug("DEBUG: Application stopped")
+                
+                logger.debug("DEBUG: Shutting down application...")
+                await self.app.shutdown()
+                logger.debug("DEBUG: Application shutdown complete")
+            except Exception as e:
+                logger.error(f"DEBUG: Error during Telegram stop: {type(e).__name__}: {e}")
         
         logger.info("Telegram channel stopped")
     
