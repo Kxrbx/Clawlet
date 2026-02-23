@@ -82,6 +82,7 @@ class AgentLoop:
         model: Optional[str] = None,
         max_iterations: int = 10,
         memory: Optional[MemoryManager] = None,
+        streaming: bool = False,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -91,6 +92,7 @@ class AgentLoop:
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         self.memory = memory or MemoryManager(self.workspace)
+        self.streaming = streaming
         
         self._running = False
         self._task = None
@@ -254,14 +256,26 @@ class AgentLoop:
             messages = self._build_messages()
             
             try:
-                # Call LLM provider
-                response: LLMResponse = await self.provider.complete(
-                    messages=messages,
-                    model=self.model,
-                    temperature=0.7,
-                )
+                # Call LLM provider (streaming or non-streaming)
+                if self.streaming:
+                    response: LLMResponse = await self._process_streaming_response(
+                        messages=messages,
+                        model=self.model,
+                        temperature=0.7,
+                    )
+                else:
+                    response: LLMResponse = await self.provider.complete(
+                        messages=messages,
+                        model=self.model,
+                        temperature=0.7,
+                    )
                 
                 response_content = response.content
+                
+                # Check for streaming errors (empty response with error finish_reason)
+                if not response_content and hasattr(response, 'finish_reason') and response.finish_reason == "error":
+                    logger.error("Streaming response failed with error")
+                    raise Exception("Streaming response failed")
                 
                 # Check for tool calls in response
                 tool_calls = self._extract_tool_calls(response_content)
@@ -327,6 +341,57 @@ class AgentLoop:
             ToolCall(id=p.id, name=p.name, arguments=p.arguments)
             for p in parsed
         ]
+    
+    async def _process_streaming_response(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+    ) -> LLMResponse:
+        """Process a streaming response from the LLM provider.
+        
+        Accumulates all chunks into a full response before processing
+        tool calls (which come after content in streaming mode).
+        
+        Args:
+            messages: The messages to send to the LLM
+            model: The model to use
+            temperature: The temperature setting
+            
+        Returns:
+            LLMResponse with accumulated content
+        """
+        logger.debug("Starting streaming response processing")
+        
+        # Accumulate chunks
+        accumulated_content = ""
+        try:
+            async for chunk in self.provider.stream(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+            ):
+                accumulated_content += chunk
+                logger.debug(f"Stream chunk received: {len(chunk)} chars, total: {len(accumulated_content)}")
+        except Exception as e:
+            logger.error(f"Error during streaming response: {e}")
+            # Return empty content on error - the caller will handle the failure
+            return LLMResponse(
+                content="",
+                model=model,
+                usage={},
+                finish_reason="error"
+            )
+        
+        logger.debug(f"Streaming complete, total content: {len(accumulated_content)} chars")
+        
+        # Return as LLMResponse for consistent handling
+        return LLMResponse(
+            content=accumulated_content,
+            model=model,
+            usage={},  # Usage info not available in streaming
+            finish_reason="stop"
+        )
     
     async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call."""

@@ -376,6 +376,7 @@ class Workspace:
             tools=tools,
             model=model,
             max_iterations=self.config.agent.max_iterations if self.config else 10,
+            streaming=self.config.agent.streaming if self.config else False,
         )
         
         self._running = True

@@ -320,6 +320,7 @@ class AgentSettings(BaseModel):
     context_window: int = Field(default=20, ge=5, le=100)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_history: int = Field(default=100, ge=10, le=1000)
+    streaming: bool = Field(default=False, description="Enable streaming responses from LLM providers")
 
 
 class HeartbeatSettings(BaseModel):

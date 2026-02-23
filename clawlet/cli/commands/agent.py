@@ -217,6 +217,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             model=effective_model,
             memory=memory,
             tools=tools,
+            streaming=config.agent.streaming if config else False,
         )
         
         # Run the agent
