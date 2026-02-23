@@ -30,6 +30,11 @@ class FileTool:
     
     def __init__(self, allowed_dir=None):
         """Initialize all file tools."""
+        # Convert string to Path if needed
+        from pathlib import Path
+        if allowed_dir is not None and not isinstance(allowed_dir, Path):
+            allowed_dir = Path(allowed_dir)
+        
         # DEBUG: Log allowed_dir received
         import logging
         logger = logging.getLogger("clawlet")

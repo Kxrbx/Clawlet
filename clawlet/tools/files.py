@@ -27,6 +27,11 @@ def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path,
     if allowed_dir is None:
         return file_path, None
     
+    # Ensure allowed_dir is a Path object
+    if not isinstance(allowed_dir, Path):
+        allowed_dir = Path(allowed_dir)
+        logger.debug(f"[_secure_resolve] converted allowed_dir to Path: {allowed_dir}")
+    
     try:
         # Resolve with strict=True to follow all symlinks and ensure path exists
         # This will raise FileNotFoundError if the path doesn't exist (including broken symlinks)
