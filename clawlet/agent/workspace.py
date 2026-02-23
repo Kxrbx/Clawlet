@@ -356,6 +356,12 @@ class Workspace:
         # Create tool registry if not provided
         if tools is None:
             from clawlet.tools import create_default_tool_registry
+            
+            # DEBUG: Log what workspace path is being used
+            logger.debug(f"[DEBUG] Creating tool registry with allowed_dir: {self.path}")
+            logger.debug(f"[DEBUG] allowed_dir type: {type(self.path)}")
+            # END DEBUG
+            
             tools = create_default_tool_registry(
                 allowed_dir=str(self.path),
                 config=self.config

@@ -30,6 +30,12 @@ class FileTool:
     
     def __init__(self, allowed_dir=None):
         """Initialize all file tools."""
+        # DEBUG: Log allowed_dir received
+        import logging
+        logger = logging.getLogger("clawlet")
+        logger.debug(f"[DEBUG] FileTool received allowed_dir: {allowed_dir} (type: {type(allowed_dir)})")
+        # END DEBUG
+        
         self.read = ReadFileTool(allowed_dir)
         self.write = WriteFileTool(allowed_dir)
         self.edit = EditFileTool(allowed_dir)

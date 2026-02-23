@@ -19,6 +19,11 @@ def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path,
     1. Using strict=True to ensure the path exists and follows all symlinks
     2. Verifying the final resolved path is still within allowed_dir
     """
+    # DEBUG: Log allowed_dir type
+    from loguru import logger
+    logger.debug(f"[_secure_resolve] allowed_dir: {allowed_dir} (type: {type(allowed_dir)})")
+    # END DEBUG
+    
     if allowed_dir is None:
         return file_path, None
     

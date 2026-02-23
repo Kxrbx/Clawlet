@@ -303,10 +303,14 @@ class AgentLoop:
                         temperature=0.7,
                     )
                 else:
+                    # DEBUG: Log what's being passed to provider
+                    openai_tools = self.tools.to_openai_tools() if self.tools else []
+                    logger.debug(f"[DEBUG] Calling provider.complete with tools: {len(openai_tools)} tools")
                     response: LLMResponse = await self.provider.complete(
                         messages=messages,
                         model=self.model,
                         temperature=0.7,
+                        tools=openai_tools if openai_tools else None,
                     )
                 
                 response_content = response.content
@@ -402,6 +406,9 @@ class AgentLoop:
         """
         logger.debug("Starting streaming response processing")
         
+        # Get tools for streaming
+        openai_tools = self.tools.to_openai_tools() if self.tools else []
+        
         # Accumulate chunks
         accumulated_content = ""
         try:
@@ -409,6 +416,7 @@ class AgentLoop:
                 messages=messages,
                 model=model,
                 temperature=temperature,
+                tools=openai_tools if openai_tools else None,
             ):
                 accumulated_content += chunk
                 logger.debug(f"Stream chunk received: {len(chunk)} chars, total: {len(accumulated_content)}")
@@ -453,6 +461,12 @@ class AgentLoop:
         tools_list = self.tools.all_tools() if self.tools else None
         system_prompt = self.identity.build_system_prompt(tools=tools_list)
         messages.append({"role": "system", "content": system_prompt})
+        
+        # DEBUG: Log tools being passed to provider
+        openai_tools = self.tools.to_openai_tools() if self.tools else []
+        logger.debug(f"[DEBUG] Tools available: {[t.get('function', {}).get('name') for t in openai_tools]}")
+        logger.debug(f"[DEBUG] Tools count: {len(openai_tools)}")
+        # END DEBUG
         
         # Add recent history (limited by CONTEXT_WINDOW)
         recent = self._history[-self.CONTEXT_WINDOW:]
