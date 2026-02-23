@@ -51,7 +51,10 @@ class WebSearchTool(BaseTool):
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
         
-        logger.info(f"WebSearchTool initialized (max_results={max_results})")
+        if api_key:
+            logger.info(f"WebSearchTool initialized with API key (max_results={max_results})")
+        else:
+            logger.warning("WebSearchTool initialized WITHOUT API key - searches will fail")
     
     async def __aenter__(self) -> "WebSearchTool":
         """Async context manager entry."""
@@ -109,7 +112,7 @@ class WebSearchTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error="Brave Search API key not configured. Set WEB_SEARCH_API_KEY."
+                error="Brave Search API key not configured. Set WEB_SEARCH_API_KEY or BRAVE_SEARCH_API_KEY environment variable, or configure in config.yaml."
             )
         
         count = count or self.max_results

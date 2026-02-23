@@ -55,12 +55,15 @@ def create_default_tool_registry(allowed_dir: str = None, config=None) -> ToolRe
     registry.register(ShellTool(workspace=allowed_dir))
     
     # Add web search tool (uses Brave Search API)
-    # Get API key from config, environment variable, or None
+    # Get API key from config, or check both WEB_SEARCH_API_KEY and BRAVE_SEARCH_API_KEY env vars
     api_key = None
     if config and config.web_search:
-        api_key = config.web_search.api_key or os.environ.get("BRAVE_SEARCH_API_KEY")
+        api_key = config.web_search.api_key or os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
     else:
-        api_key = os.environ.get("BRAVE_SEARCH_API_KEY")
+        api_key = os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
+    
+    if not api_key:
+        logger.warning("WebSearchTool: No API key found. Set WEB_SEARCH_API_KEY or BRAVE_SEARCH_API_KEY environment variable.")
     
     registry.register(WebSearchTool(api_key=api_key))
     
