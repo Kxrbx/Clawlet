@@ -283,6 +283,101 @@ async def _use_default_models() -> str:
     return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
 
 
+async def _select_lmstudio_model(base_url: str = "http://localhost:1234") -> str:
+    """
+    Select LM Studio model with interactive selection UI.
+    
+    Connects to LM Studio and fetches available models, allowing
+    the user to select from downloaded models.
+    
+    Args:
+        base_url: LM Studio server URL
+        
+    Returns:
+        Selected model name or default
+    """
+    print_section("Choose Model", "Fetching available models...")
+    
+    try:
+        from clawlet.providers.lmstudio import LMStudioProvider
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Connecting to LM Studio...", total=100)
+            
+            provider = LMStudioProvider(base_url=base_url)
+            models = await provider.list_models_detailed()
+            await provider.close()
+            progress.update(task, completed=100, description="Done!")
+        
+        if not models:
+            console.print("  [yellow]! No models found. Make sure you have downloaded models in LM Studio.[/yellow]")
+            return await _use_default_lmstudio_model()
+        
+        console.print(f"\n  [green]✓[/green] Found {len(models)} models")
+        
+        # Format model choices with useful info
+        choices = []
+        for model in models:
+            model_id = model.get("id", "Unknown")
+            model_type = model.get("type", "?")
+            quantization = model.get("quantization", "?")
+            max_ctx = model.get("max_context_length", 0)
+            
+            # Format display string
+            if max_ctx:
+                ctx_str = f"{max_ctx // 1024}K"
+            else:
+                ctx_str = "?"
+            
+            display = f"{model_id} [{model_type} | {quantization} | {ctx_str}]"
+            choices.append(display)
+        
+        # Allow user to select
+        selected = await questionary.select(
+            "  Select a model:",
+            choices=choices,
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if selected:
+            # Extract just the model ID from the display string
+            model_id = selected.split(" [")[0]
+            return model_id
+        
+        return "local-model"
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch LM Studio models: {e}")
+        console.print(f"  [yellow]! Error connecting to LM Studio: {e}[/yellow]")
+        return await _use_default_lmstudio_model()
+
+
+async def _use_default_lmstudio_model() -> str:
+    """Use default model selection for LM Studio."""
+    print_section("Choose Model", "Using default model name")
+    
+    # Use select with common model names as suggestions
+    common_models = [
+        "local-model",
+        "llama3.2",
+        "mistral",
+        "phi3",
+        "qwen2",
+    ]
+    
+    selected = await questionary.select(
+        "  Select a model:",
+        choices=common_models,
+        style=CUSTOM_STYLE,
+    ).ask_async()
+    
+    return selected if selected else "local-model"
+
+
 async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     """
     Run interactive onboarding flow with unique UI.
@@ -435,11 +530,32 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         print_section("LM Studio Setup", "Local AI with GUI")
         console.print("│")
         console.print("│  [dim]Make sure LM Studio server is running (port 1234)[/dim]")
+        console.print("│  [dim]Download models from the LM Studio app first[/dim]")
         console.print("│")
+        
+        # Check if LM Studio is running and fetch models
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await asyncio.wait_for(
+                    client.get("http://localhost:1234/api/v1/models"),
+                    timeout=2.0
+                )
+                response.raise_for_status()
+                console.print("│  [green]✓ LM Studio is running[/green]")
+                
+                # Fetch available models
+                model = await _select_lmstudio_model()
+                console.print(f"│  [green]✓[/green] Model: [bold]{model}[/bold]")
+                
+        except:
+            console.print("│  [yellow]! Could not connect to LM Studio[/yellow]")
+            console.print("│  [dim]Using default model name (will auto-detect when connected)[/dim]")
+            model = "local-model"
         
         provider_config = ProviderConfig(
             primary="lmstudio",
-            lmstudio=LMStudioConfig(),
+            lmstudio=LMStudioConfig(model=model),
         )
         console.print("│  [green]✓ LM Studio configured[/green]")
         print_footer()

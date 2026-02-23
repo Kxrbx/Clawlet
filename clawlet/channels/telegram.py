@@ -75,7 +75,8 @@ class TelegramChannel(BaseChannel):
     def __init__(self, bus: MessageBus, config: dict):
         super().__init__(bus, config)
         
-        self.token = config.get("token")
+        # Strip whitespace from token to avoid URL errors
+        self.token = (config.get("token") or "").strip()
         if not self.token:
             raise ValueError("Telegram token not configured")
         

@@ -192,6 +192,36 @@ class LMStudioProvider(BaseProvider):
             logger.error(f"Error listing LM Studio models: {e}")
             return []
     
+    async def list_models_detailed(self) -> list[dict]:
+        """
+        List available models with full metadata from native API v1.
+        
+        Uses the /api/v1/models endpoint which returns rich model information:
+        - id: Model identifier
+        - type: Model type (llm, vlm, embeddings)
+        - publisher: Model publisher
+        - arch: Model architecture
+        - compatibility_type: Compatibility type (gguf, mlx)
+        - quantization: Quantization level
+        - state: Load state (loaded, not-loaded)
+        - max_context_length: Maximum context length
+        
+        Returns:
+            List of model dictionaries with full metadata
+        """
+        client = await self._get_client()
+        
+        try:
+            response = await client.get(f"{self.base_url}/api/v1/models")
+            response.raise_for_status()
+            
+            data = response.json()
+            return data.get("data", [])
+            
+        except Exception as e:
+            logger.error(f"Error listing LM Studio models: {e}")
+            return []
+    
     async def get_loaded_model(self) -> Optional[str]:
         """Get the currently loaded model."""
         models = await self.list_models()
