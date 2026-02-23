@@ -81,9 +81,6 @@ class MemoryManager:
                 category="system",
                 importance=10,
             )
-            # DEBUG: Log that we loaded MEMORY.md
-            logger.info(f"[DEBUG] Loaded MEMORY.md ({len(content)} chars)")
-            # END DEBUG
         except Exception as e:
             logger.warning(f"Failed to load MEMORY.md: {e}")
     
@@ -223,10 +220,6 @@ class MemoryManager:
         """Save long-term memories to MEMORY.md."""
         memory_file = self.workspace / "MEMORY.md"
         
-        # DEBUG: Log that we're about to save
-        logger.info(f"[DEBUG] save_long_term: Saving {len(self._long_term)} memories to MEMORY.md")
-        # END DEBUG
-        
         try:
             # Build content
             lines = ["# Long-Term Memory\n"]
@@ -247,10 +240,7 @@ class MemoryManager:
                     lines.append(f"- **{entry.key}**: {entry.value}\n")
             
             memory_file.write_text("\n".join(lines), encoding="utf-8")
-            # DEBUG: Log success
-            logger.info(f"[DEBUG] save_long_term: Successfully saved memories to MEMORY.md")
-            # END DEBUG
-            
+        
         except Exception as e:
             logger.error(f"Failed to save memories: {e}")
     

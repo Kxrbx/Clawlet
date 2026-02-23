@@ -306,7 +306,7 @@ export default function App() {
                   </div>
                   {healthQuery.data ? (
                     <div className="space-y-3">
-                      {(healthQuery.data.checks as any[]).map((check: any, i: number) => (
+                      {healthQuery.data.checks.map((check: HealthCheck, i: number) => (
                         <div 
                           key={i} 
                           className={cn(

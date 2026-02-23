@@ -6,6 +6,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, AsyncIterator, Dict, Any
 from dataclasses import dataclass, field
+import threading
 import httpx
 from loguru import logger
 
@@ -40,17 +41,25 @@ class HTTPClientManager:
     """
     
     _instance: Optional["HTTPClientManager"] = None
-    _lock: asyncio.Lock = asyncio.Lock()
+    _lock: asyncio.Lock = None  # Will be initialized lazily
+    _init_lock = threading.Lock()
     
     def __new__(cls, config: Optional[HTTPClientConfig] = None) -> "HTTPClientManager":
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
+            with cls._init_lock:
+                # Double-check after acquiring lock
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
         return cls._instance
     
     def __init__(self, config: Optional[HTTPClientConfig] = None):
         if self._initialized:
             return
+        
+        # Initialize async lock lazily to avoid issues with event loop
+        if HTTPClientManager._lock is None:
+            HTTPClientManager._lock = asyncio.Lock()
         
         self._config = config or HTTPClientConfig()
         self._client: Optional[httpx.AsyncClient] = None
@@ -73,26 +82,29 @@ class HTTPClientManager:
         subsequent requests.
         """
         if self._client is None or self._client.is_closed:
-            limits = httpx.Limits(
-                max_connections=self._config.max_connections,
-                max_keepalive_connections=self._config.max_keepalive_connections,
-                keepalive_expiry=self._config.keepalive_expiry,
-            )
-            
-            timeout = httpx.Timeout(
-                connect=30.0,
-                read=self._config.timeout,
-                write=30.0,
-                pool=60.0,
-            )
-            
-            self._client = httpx.AsyncClient(
-                limits=limits,
-                timeout=timeout,
-                headers=dict(self._config.default_headers),
-                http2=True,  # Enable HTTP/2 for better multiplexing
-            )
-            logger.debug("Shared HTTP client created with connection pooling")
+            async with self._lock:
+                # Double-check after acquiring lock
+                if self._client is None or self._client.is_closed:
+                    limits = httpx.Limits(
+                        max_connections=self._config.max_connections,
+                        max_keepalive_connections=self._config.max_keepalive_connections,
+                        keepalive_expiry=self._config.keepalive_expiry,
+                    )
+                    
+                    timeout = httpx.Timeout(
+                        connect=30.0,
+                        read=self._config.timeout,
+                        write=30.0,
+                        pool=60.0,
+                    )
+                    
+                    self._client = httpx.AsyncClient(
+                        limits=limits,
+                        timeout=timeout,
+                        headers=dict(self._config.default_headers),
+                        http2=True,  # Enable HTTP/2 for better multiplexing
+                    )
+                    logger.debug("Shared HTTP client created with connection pooling")
         
         return self._client
     

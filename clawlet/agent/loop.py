@@ -13,9 +13,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from clawlet.agent.identity import Identity, IdentityLoader
-from clawlet.agent.memory import MemoryManager
-from clawlet.agent.tool_parser import ToolCallParser
+from clawlet.bus.queue import OutboundMessage
 from clawlet.exceptions import (
     ProviderError,
     ProviderConnectionError,
@@ -38,9 +36,6 @@ class Message:
     tool_calls: list = field(default_factory=list)
     
     def to_dict(self) -> dict:
-        import json
-        from loguru import logger
-        
         d = {"role": self.role, "content": self.content}
         if self.tool_calls:
             # Transform tool_calls to OpenAI API format:
@@ -73,12 +68,10 @@ class Message:
                 })
             
             d["tool_calls"] = formatted_tool_calls
-            logger.debug(f"Message.to_dict: role={self.role}, tool_calls={formatted_tool_calls}")
         
         # Include tool_call_id for tool role messages
         if self.role == "tool" and self.metadata.get("tool_call_id"):
             d["tool_call_id"] = self.metadata["tool_call_id"]
-            logger.debug(f"Message.to_dict: tool with tool_call_id={self.metadata['tool_call_id']}")
         
         return d
 
@@ -122,6 +115,10 @@ class AgentLoop:
         max_iterations: int = 10,
         memory: Optional[MemoryManager] = None,
         streaming: bool = False,
+        max_history: int = 100,
+        context_window: int = 20,
+        max_message_size: int = 10 * 1024,
+        max_total_history_size: int = 1024 * 1024,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -132,6 +129,12 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.memory = memory or MemoryManager(self.workspace)
         self.streaming = streaming
+        
+        # History limits - configurable
+        self.max_history = max_history
+        self.context_window = context_window
+        self.max_message_size = max_message_size
+        self.max_total_history_size = max_total_history_size
         
         self._running = False
         self._task = None
@@ -169,7 +172,6 @@ class AgentLoop:
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
                     # Send error response with sanitized message
-                    from clawlet.bus.queue import OutboundMessage
                     user_message = self._get_user_friendly_error(e, "message processing")
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
@@ -184,11 +186,7 @@ class AgentLoop:
     
     def stop(self) -> None:
         """Stop the agent loop."""
-        # DEBUG: Log that we're stopping and save memory
-        logger.info("[DEBUG] Agent loop stopping, saving memory before shutdown")
         self.memory.save_long_term()
-        logger.debug("[DEBUG] Memory saved successfully")
-        # END DEBUG
         
         self._running = False
         logger.info("Agent loop stopping")
@@ -309,9 +307,7 @@ class AgentLoop:
                         temperature=0.7,
                     )
                 else:
-                    # DEBUG: Log what's being passed to provider
                     openai_tools = self.tools.to_openai_tools() if self.tools else []
-                    logger.debug(f"[DEBUG] Calling provider.complete with tools: {len(openai_tools)} tools")
                     response: LLMResponse = await self.provider.complete(
                         messages=messages,
                         model=self.model,
@@ -320,10 +316,6 @@ class AgentLoop:
                     )
                 
                 response_content = response.content
-                
-                # DEBUG: Log response details
-                logger.debug(f"[DEBUG] Response content: {repr(response_content[:200]) if response_content else '(empty)'}")
-                logger.debug(f"[DEBUG] Response finish_reason: {getattr(response, 'finish_reason', 'N/A')}")
                 
                 # Check for streaming errors (empty response with error finish_reason)
                 if not response_content and hasattr(response, 'finish_reason') and response.finish_reason == "error":
@@ -337,7 +329,6 @@ class AgentLoop:
                 
                 if hasattr(response, 'tool_calls') and response.tool_calls:
                     # Convert API tool_calls format to ToolCall objects
-                    logger.debug(f"[DEBUG] Using tool_calls from API response")
                     for tc in response.tool_calls:
                         # OpenAI API format: {id, type, function: {name, arguments}}
                         tc_id = tc.get("id", f"call_{id(tc)}")
@@ -356,94 +347,76 @@ class AgentLoop:
                     # Fall back to parsing from content text
                     tool_calls = self._extract_tool_calls(response_content)
                 
-                # DEBUG: Log tool call extraction results
-                logger.debug(f"[DEBUG] Extracted tool_calls: {len(tool_calls)} calls")
-                if tool_calls:
-                    for tc in tool_calls:
-                        logger.debug(f"[DEBUG] Tool call: {tc.name} with args: {tc.arguments}")
-                        # Validate tool exists in registry
-                        tool_exists = self.tools.get(tc.name) is not None if self.tools else False
-                        logger.debug(f"[DEBUG] Tool '{tc.name}' exists in registry: {tool_exists}")
-                        if not tool_exists:
-                            logger.warning(f"[DIAGNOSTIC] Tool '{tc.name}' not found in registry - possible false positive!")
+                # Filter out tool calls that don't exist in the registry
+                valid_tool_calls = []
+                for tc in tool_calls:
+                    tool_exists = self.tools.get(tc.name) is not None if self.tools else False
+                    if tool_exists:
+                        valid_tool_calls.append(tc)
+                    else:
+                        logger.warning(f"[OPTIMIZE] Filtering out invalid tool '{tc.name}' - not in registry")
                 
-                # DEBUG: Log if response content exists alongside tool calls
-                if tool_calls and response_content and len(response_content.strip()) > 20:
-                    logger.warning(f"[DIAGNOSTIC] Response has both content ({len(response_content)} chars) AND {len(tool_calls)} tool calls - checking if we should continue")
-                    logger.debug(f"[DIAGNOSTIC] Response content preview: {response_content[:200]}...")
+                # Check if we should use the response content instead of tool calls
+                has_meaningful_content = response_content and len(response_content.strip()) > 50
+                has_only_invalid_tools = len(valid_tool_calls) == 0
                 
-                if tool_calls:
-                    # Filter out tool calls that don't exist in the registry
-                    valid_tool_calls = []
-                    for tc in tool_calls:
-                        tool_exists = self.tools.get(tc.name) is not None if self.tools else False
-                        if tool_exists:
-                            valid_tool_calls.append(tc)
-                        else:
-                            logger.warning(f"[OPTIMIZE] Filtering out invalid tool '{tc.name}' - not in registry")
-                    
-                    # Check if we should use the response content instead of tool calls
-                    # If response has meaningful content (not just empty/tool noise), prefer it
-                    has_meaningful_content = response_content and len(response_content.strip()) > 50
-                    has_only_invalid_tools = len(valid_tool_calls) == 0
-                    
-                    if has_meaningful_content and has_only_invalid_tools:
-                        # Only content, no valid tools - use content as final response
-                        logger.info("[OPTIMIZE] Response has meaningful content but only invalid tool calls - using content as response")
+                if has_meaningful_content and has_only_invalid_tools:
+                    # Only content, no valid tools - use content as final response
+                    logger.info("[OPTIMIZE] Response has meaningful content but only invalid tool calls - using content as response")
+                    final_assistant_msg = Message(role="assistant", content=response_content)
+                    final_assistant_msg = self._truncate_message(final_assistant_msg)
+                    self._history.append(final_assistant_msg)
+                    final_response = response_content
+                    break
+                
+                if has_meaningful_content and not has_only_invalid_tools:
+                    # Both content AND valid tool calls - prefer content for simple tasks
+                    # Only use tools if content is very short (seems like an instruction)
+                    if len(response_content.strip()) < 100:
+                        logger.info("[OPTIMIZE] Short content with valid tools - using tools")
+                    else:
+                        # Content seems complete - use it instead of tools
+                        logger.info("[OPTIMIZE] Content appears complete, ignoring tool calls")
                         final_assistant_msg = Message(role="assistant", content=response_content)
                         final_assistant_msg = self._truncate_message(final_assistant_msg)
                         self._history.append(final_assistant_msg)
                         final_response = response_content
                         break
+                
+                # Use only valid tool calls
+                tool_calls = valid_tool_calls
+                
+                if not tool_calls:
+                    # No valid tool calls and no meaningful content
+                    logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
+                    final_response = response_content or "I couldn't process that request."
+                    break
+                
+                # Add assistant message with tool calls (truncate if needed)
+                assistant_msg = Message(
+                    role="assistant",
+                    content=response_content,
+                    tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
+                )
+                assistant_msg = self._truncate_message(assistant_msg)
+                self._history.append(assistant_msg)
+                
+                # Execute each tool call
+                for tc in tool_calls:
+                    result = await self._execute_tool(tc)
                     
-                    if has_meaningful_content and not has_only_invalid_tools:
-                        # Both content AND valid tool calls - prefer content for simple tasks
-                        # Only use tools if content is very short (seems like an instruction)
-                        if len(response_content.strip()) < 100:
-                            logger.info("[OPTIMIZE] Short content with valid tools - using tools")
-                        else:
-                            # Content seems complete - use it instead of tools
-                            logger.info("[OPTIMIZE] Content appears complete, ignoring tool calls")
-                            final_assistant_msg = Message(role="assistant", content=response_content)
-                            final_assistant_msg = self._truncate_message(final_assistant_msg)
-                            self._history.append(final_assistant_msg)
-                            final_response = response_content
-                            break
-                    
-                    # Use only valid tool calls
-                    tool_calls = valid_tool_calls
-                    
-                    if not tool_calls:
-                        # No valid tool calls and no meaningful content
-                        logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
-                        final_response = response_content or "I couldn't process that request."
-                        break
-                    
-                    # Add assistant message with tool calls (truncate if needed)
-                    assistant_msg = Message(
-                        role="assistant",
-                        content=response_content,
-                        tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
+                    # Add tool result to history (truncate if needed - tool results can be large)
+                    tool_content = result.output if result.success else f"Error: {result.error}"
+                    tool_msg = Message(
+                        role="tool",
+                        content=tool_content,
+                        metadata={"tool_call_id": tc.id, "tool_name": tc.name}
                     )
-                    assistant_msg = self._truncate_message(assistant_msg)
-                    self._history.append(assistant_msg)
-                    
-                    # Execute each tool call
-                    for tc in tool_calls:
-                        result = await self._execute_tool(tc)
-                        
-                        # Add tool result to history (truncate if needed - tool results can be large)
-                        tool_content = result.output if result.success else f"Error: {result.error}"
-                        tool_msg = Message(
-                            role="tool",
-                            content=tool_content,
-                            metadata={"tool_call_id": tc.id, "tool_name": tc.name}
-                        )
-                        tool_msg = self._truncate_message(tool_msg)
-                        self._history.append(tool_msg)
-                    
-                    # Continue loop to get next response
-                    continue
+                    tool_msg = self._truncate_message(tool_msg)
+                    self._history.append(tool_msg)
+                
+                # Continue loop to get next response
+                continue
                 
                 # No tool calls - this is the final response
                 final_assistant_msg = Message(role="assistant", content=response_content)
@@ -462,7 +435,6 @@ class AgentLoop:
         
         logger.info(f"Final response: {len(final_response)} chars (iterations: {iteration})")
         
-        from clawlet.bus.queue import OutboundMessage
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -557,14 +529,8 @@ class AgentLoop:
         system_prompt = self.identity.build_system_prompt(tools=tools_list)
         messages.append({"role": "system", "content": system_prompt})
         
-        # DEBUG: Log tools being passed to provider
-        openai_tools = self.tools.to_openai_tools() if self.tools else []
-        logger.debug(f"[DEBUG] Tools available: {[t.get('function', {}).get('name') for t in openai_tools]}")
-        logger.debug(f"[DEBUG] Tools count: {len(openai_tools)}")
-        # END DEBUG
-        
         # Add recent history (limited by CONTEXT_WINDOW)
-        recent = self._history[-self.CONTEXT_WINDOW:]
+        recent = self._history[-self.context_window:]
         for msg in recent:
             messages.append(msg.to_dict())
         
@@ -581,8 +547,8 @@ class AgentLoop:
         self._history = [self._truncate_message(msg) for msg in self._history]
         
         # Trim by message count
-        if len(self._history) > self.MAX_HISTORY:
-            self._history = self._history[-self.MAX_HISTORY:]
+        if len(self._history) > self.max_history:
+            self._history = self._history[-self.max_history:]
             logger.debug(f"Trimmed history to {len(self._history)} messages (count limit)")
         
         # Trim by total size
@@ -595,14 +561,14 @@ class AgentLoop:
                     f"{stats['memory_kb']}KB ({stats['utilization_percent']}% of max)")
     
     def _trim_by_size(self) -> None:
-        """Trim history to stay within MAX_TOTAL_HISTORY_SIZE."""
+        """Trim history to stay within max_total_history_size."""
         current_size = self.get_memory_usage()
         
-        if current_size <= self.MAX_TOTAL_HISTORY_SIZE:
+        if current_size <= self.max_total_history_size:
             return
         
         # Remove oldest messages until under limit
-        while current_size > self.MAX_TOTAL_HISTORY_SIZE and len(self._history) > 1:
+        while current_size > self.max_total_history_size and len(self._history) > 1:
             removed_msg = self._history.pop(0)
             removed_size = self._estimate_message_size(removed_msg)
             current_size -= removed_size
@@ -610,7 +576,7 @@ class AgentLoop:
         logger.info(f"Trimmed history by size: {len(self._history)} messages, ~{current_size / 1024:.1f}KB")
     
     def _truncate_message(self, msg: Message) -> Message:
-        """Truncate a message if it exceeds MAX_MESSAGE_SIZE.
+        """Truncate a message if it exceeds max_message_size.
         
         Args:
             msg: The message to potentially truncate
@@ -620,12 +586,12 @@ class AgentLoop:
         """
         content_size = len(msg.content.encode('utf-8'))
         
-        if content_size <= self.MAX_MESSAGE_SIZE:
+        if content_size <= self.max_message_size:
             return msg
         
         # Calculate how much to keep (leave room for truncation notice)
         truncation_notice = f"\n\n[... Content truncated. Original size: {content_size} bytes ...]"
-        max_content_size = self.MAX_MESSAGE_SIZE - len(truncation_notice.encode('utf-8'))
+        max_content_size = self.max_message_size - len(truncation_notice.encode('utf-8'))
         
         if max_content_size < 0:
             max_content_size = 0
@@ -698,10 +664,10 @@ class AgentLoop:
             "memory_bytes": memory_bytes,
             "memory_kb": round(memory_bytes / 1024, 2),
             "memory_mb": round(memory_bytes / (1024 * 1024), 2),
-            "max_messages": self.MAX_HISTORY,
-            "max_size_bytes": self.MAX_TOTAL_HISTORY_SIZE,
-            "max_size_mb": self.MAX_TOTAL_HISTORY_SIZE / (1024 * 1024),
-            "utilization_percent": round((memory_bytes / self.MAX_TOTAL_HISTORY_SIZE) * 100, 2) if self.MAX_TOTAL_HISTORY_SIZE > 0 else 0
+            "max_messages": self.max_history,
+            "max_size_bytes": self.max_total_history_size,
+            "max_size_mb": self.max_total_history_size / (1024 * 1024),
+            "utilization_percent": round((memory_bytes / self.max_total_history_size) * 100, 2) if self.max_total_history_size > 0 else 0
         }
     
     async def close(self):
