@@ -197,6 +197,12 @@ class TelegramChannel(BaseChannel):
                 logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
                 return
             
+            # Stop typing indicator before sending message
+            try:
+                await self.app.bot.send_chat_action(chat_id=chat_id, action="cancel")
+            except Exception as e:
+                logger.debug(f"Could not cancel typing action: {e}")
+            
             # Try HTML parse_mode with converted Markdown
             parse_mode = "HTML"
             html_content = convert_markdown_to_html(msg.content)
@@ -238,6 +244,12 @@ class TelegramChannel(BaseChannel):
         content = update.message.text
         
         logger.info(f"Received Telegram message from {chat_id}: {content[:50]}...")
+        
+        # Send typing indicator to show bot is processing
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception as e:
+            logger.debug(f"Could not send typing action: {e}")
         
         # Create inbound message
         msg = InboundMessage(

@@ -373,27 +373,16 @@ class AgentLoop:
                     break
                 
                 if has_meaningful_content and not has_only_invalid_tools:
-                    # Both content AND valid tool calls - prefer content for simple tasks
-                    # Only use tools if content is very short (seems like an instruction)
-                    if len(response_content.strip()) < 100:
-                        logger.info("[OPTIMIZE] Short content with valid tools - using tools")
-                    else:
-                        # Content seems complete - use it instead of tools
-                        logger.info("[OPTIMIZE] Content appears complete, ignoring tool calls")
-                        final_assistant_msg = Message(role="assistant", content=response_content)
-                        final_assistant_msg = self._truncate_message(final_assistant_msg)
-                        self._history.append(final_assistant_msg)
-                        final_response = response_content
+                    # Valid tool calls present - always execute them
+                    # Content may be used as prefix after tool execution
+                    logger.info("[OPTIMIZE] Valid tool calls present - executing tools")
+                    tool_calls = valid_tool_calls
+
+                    if not tool_calls:
+                        # No valid tool calls and no meaningful content
+                        logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
+                        final_response = response_content or "I couldn't process that request."
                         break
-                
-                # Use only valid tool calls
-                tool_calls = valid_tool_calls
-                
-                if not tool_calls:
-                    # No valid tool calls and no meaningful content
-                    logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
-                    final_response = response_content or "I couldn't process that request."
-                    break
                 
                 # Add assistant message with tool calls (truncate if needed)
                 assistant_msg = Message(
