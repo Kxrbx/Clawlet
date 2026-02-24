@@ -175,6 +175,10 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     # Config stores channels as a dict with keys like 'telegram', 'discord', etc.
     telegram_cfg = config.channels.get("telegram", {})
     
+    from loguru import logger
+    logger.debug(f"DEBUG: Full config.channels: {config.channels}")
+    logger.debug(f"DEBUG: telegram_cfg from channels: {telegram_cfg}")
+    
     # Handle both raw dict and Pydantic model formats
     if isinstance(telegram_cfg, dict):
         telegram_enabled = telegram_cfg.get("enabled", False)
@@ -184,7 +188,6 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         telegram_enabled = getattr(telegram_cfg, 'enabled', False)
         telegram_token = getattr(telegram_cfg, 'token', '')
     
-    from loguru import logger
     logger.debug(f"Telegram config: enabled={telegram_enabled}")
     
     telegram_channel = None
