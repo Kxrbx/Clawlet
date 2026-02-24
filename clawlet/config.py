@@ -323,8 +323,6 @@ class HeartbeatSettings(BaseModel):
 class Config(BaseModel):
     """Main configuration."""
     provider: ProviderConfig
-    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
-    discord: DiscordConfig = Field(default_factory=DiscordConfig)
     channels: dict = Field(default_factory=lambda: {
         "telegram": TelegramConfig(),
         "discord": DiscordConfig(),
@@ -335,6 +333,26 @@ class Config(BaseModel):
     
     # Track the source file path for reload
     config_path: Optional[Path] = None
+    
+    def __init__(self, **data):
+        # Handle root-level telegram/discord fields by moving them to channels dict
+        # This makes the config adaptive to both formats
+        if 'channels' not in data:
+            data['channels'] = {}
+        
+        # If telegram is at root level, move it to channels
+        if 'telegram' in data:
+            if 'telegram' not in data['channels'] or not data['channels'].get('telegram'):
+                data['channels']['telegram'] = data['telegram']
+            del data['telegram']
+        
+        # If discord is at root level, move it to channels
+        if 'discord' in data:
+            if 'discord' not in data['channels'] or not data['channels'].get('discord'):
+                data['channels']['discord'] = data['discord']
+            del data['discord']
+        
+        super().__init__(**data)
     
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":
