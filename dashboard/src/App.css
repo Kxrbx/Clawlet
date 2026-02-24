@@ -1,42 +1,72 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* Dashboard-specific styles */
+.dashboard-container {
+  @apply min-h-screen;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Card styles */
+.dashboard-card {
+  @apply bg-white rounded-2xl shadow-sm border border-gray-100 p-6;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
+.dashboard-card:hover {
+  @apply shadow-md transition-shadow;
+}
+
+/* Sidebar styles */
+.sidebar {
+  @apply fixed left-0 top-0 h-full bg-white shadow-xl z-50 transition-all duration-300;
+}
+
+.sidebar-item {
+  @apply w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200;
+}
+
+.sidebar-item.active {
+  @apply bg-gradient-to-r from-sakura-pink/10 to-sakura-magenta/10 text-sakura-magenta;
+}
+
+.sidebar-item.inactive {
+  @apply text-gray-600 hover:bg-gray-50 hover:text-gray-900;
+}
+
+/* Tab content */
+.tab-content {
+  @apply animate-fadeIn;
+}
+
+/* Status badge */
+.status-badge {
+  @apply inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium;
+}
+
+.status-badge.healthy {
+  @apply bg-green-100 text-green-700;
+}
+
+.status-badge.degraded {
+  @apply bg-yellow-100 text-yellow-700;
+}
+
+.status-badge.unhealthy {
+  @apply bg-red-100 text-red-700;
+}
+
+/* Loading states */
+.loading-spinner {
+  @apply animate-spin h-5 w-5 text-sakura-pink;
+}
+
+.loading-overlay {
+  @apply absolute inset-0 bg-white/50 flex items-center justify-center;
+}
+
+/* Responsive utilities */
+@media (max-width: 768px) {
+  .sidebar {
+    @apply w-20;
   }
-  to {
-    transform: rotate(360deg);
+  
+  .main-content {
+    @apply ml-20;
   }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
 }

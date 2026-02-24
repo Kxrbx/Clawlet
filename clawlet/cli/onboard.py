@@ -20,7 +20,7 @@ from questionary import Style
 
 from loguru import logger
 
-from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig
+from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig, OpenAIConfig, AnthropicConfig, MiniMaxConfig, MoonshotConfig, GoogleConfig, QwenConfig, ZAIConfig, CopilotConfig, VercelConfig, OpenCodeZenConfig, XiaomiConfig, SyntheticConfig, VeniceAIConfig, BraveSearchConfig
 
 
 # Sakura pink color scheme
@@ -283,6 +283,101 @@ async def _use_default_models() -> str:
     return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
 
 
+async def _select_lmstudio_model(base_url: str = "http://localhost:1234") -> str:
+    """
+    Select LM Studio model with interactive selection UI.
+    
+    Connects to LM Studio and fetches available models, allowing
+    the user to select from downloaded models.
+    
+    Args:
+        base_url: LM Studio server URL
+        
+    Returns:
+        Selected model name or default
+    """
+    print_section("Choose Model", "Fetching available models...")
+    
+    try:
+        from clawlet.providers.lmstudio import LMStudioProvider
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Connecting to LM Studio...", total=100)
+            
+            provider = LMStudioProvider(base_url=base_url)
+            models = await provider.list_models_detailed()
+            await provider.close()
+            progress.update(task, completed=100, description="Done!")
+        
+        if not models:
+            console.print("  [yellow]! No models found. Make sure you have downloaded models in LM Studio.[/yellow]")
+            return await _use_default_lmstudio_model()
+        
+        console.print(f"\n  [green]✓[/green] Found {len(models)} models")
+        
+        # Format model choices with useful info
+        choices = []
+        for model in models:
+            model_id = model.get("id", "Unknown")
+            model_type = model.get("type", "?")
+            quantization = model.get("quantization", "?")
+            max_ctx = model.get("max_context_length", 0)
+            
+            # Format display string
+            if max_ctx:
+                ctx_str = f"{max_ctx // 1024}K"
+            else:
+                ctx_str = "?"
+            
+            display = f"{model_id} [{model_type} | {quantization} | {ctx_str}]"
+            choices.append(display)
+        
+        # Allow user to select
+        selected = await questionary.select(
+            "  Select a model:",
+            choices=choices,
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if selected:
+            # Extract just the model ID from the display string
+            model_id = selected.split(" [")[0]
+            return model_id
+        
+        return "local-model"
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch LM Studio models: {e}")
+        console.print(f"  [yellow]! Error connecting to LM Studio: {e}[/yellow]")
+        return await _use_default_lmstudio_model()
+
+
+async def _use_default_lmstudio_model() -> str:
+    """Use default model selection for LM Studio."""
+    print_section("Choose Model", "Using default model name")
+    
+    # Use select with common model names as suggestions
+    common_models = [
+        "local-model",
+        "llama3.2",
+        "mistral",
+        "phi3",
+        "qwen2",
+    ]
+    
+    selected = await questionary.select(
+        "  Select a model:",
+        choices=common_models,
+        style=CUSTOM_STYLE,
+    ).ask_async()
+    
+    return selected if selected else "local-model"
+
+
 async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     """
     Run interactive onboarding flow with unique UI.
@@ -292,6 +387,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     steps = [
         "Provider",
         "API Key",
+        "Web Search",
         "Channel",
         "Identity",
         "Create",
@@ -325,18 +421,48 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     print_step_indicator(1, 5, steps)
     print_section("Choose Your AI Provider", "Where should your agent get its intelligence?")
     
-    print_option("1", "OpenRouter", "Cloud API - Best models, requires API key")
-    print_option("2", "Ollama", "Local - Free, runs on your machine")
-    print_option("3", "LM Studio", "Local - Free, runs on your machine")
+    print_option("1", "OpenRouter", "Cloud API - Best models")
+    print_option("2", "OpenAI", "Direct GPT-5 access")
+    print_option("3", "Anthropic", "Direct Claude access")
+    print_option("4", "MiniMax", "Chinese - abab7")
+    print_option("5", "Moonshot AI", "Kimi K2.5")
+    print_option("6", "Google", "Gemini 4 Pro")
+    print_option("7", "Qwen", "Alibaba - Qwen4")
+    print_option("8", "Z.AI", "GLM-5")
+    print_option("9", "Copilot", "GitHub OAuth")
+    print_option("10", "Vercel", "AI Gateway")
+    print_option("11", "OpenCode Zen", "Zen 3.0")
+    print_option("12", "Xiaomi", "Mi Agent 2")
+    print_option("13", "Synthetic", "Privacy-focused")
+    print_option("14", "Venice AI", "Uncensored")
+    print_option("15", "Ollama", "Local - Free")
+    print_option("16", "LM Studio", "Local - Free")
     print_footer()
     
     choice = Prompt.ask(
         "\n  Select",
-        choices=["1", "2", "3"],
+        choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"],
         default="1",
     )
     
-    provider_choice = {"1": "openrouter", "2": "ollama", "3": "lmstudio"}[choice]
+    provider_choice = {
+        "1": "openrouter",
+        "2": "openai",
+        "3": "anthropic",
+        "4": "minimax",
+        "5": "moonshot",
+        "6": "google",
+        "7": "qwen",
+        "8": "zai",
+        "9": "copilot",
+        "10": "vercel",
+        "11": "opencode_zen",
+        "12": "xiaomi",
+        "13": "synthetic",
+        "14": "venice",
+        "15": "ollama",
+        "16": "lmstudio",
+    }[choice]
     console.print(f"  [green]✓[/green] Selected: [bold]{provider_choice}[/bold]")
     
     provider_config = None
@@ -404,19 +530,376 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         print_section("LM Studio Setup", "Local AI with GUI")
         console.print("│")
         console.print("│  [dim]Make sure LM Studio server is running (port 1234)[/dim]")
+        console.print("│  [dim]Download models from the LM Studio app first[/dim]")
         console.print("│")
+        
+        # Check if LM Studio is running and fetch models
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await asyncio.wait_for(
+                    client.get("http://localhost:1234/api/v1/models"),
+                    timeout=2.0
+                )
+                response.raise_for_status()
+                console.print("│  [green]✓ LM Studio is running[/green]")
+                
+                # Fetch available models
+                model = await _select_lmstudio_model()
+                console.print(f"│  [green]✓[/green] Model: [bold]{model}[/bold]")
+                
+        except:
+            console.print("│  [yellow]! Could not connect to LM Studio[/yellow]")
+            console.print("│  [dim]Using default model name (will auto-detect when connected)[/dim]")
+            model = "local-model"
         
         provider_config = ProviderConfig(
             primary="lmstudio",
-            lmstudio=LMStudioConfig(),
+            lmstudio=LMStudioConfig(model=model),
         )
         console.print("│  [green]✓ LM Studio configured[/green]")
         print_footer()
+        
+    elif provider_choice == "openai":
+        print_section("OpenAI API Key", "Get your key at platform.openai.com/api-keys")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_OPENAI_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="gpt-5")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="openai",
+            openai=OpenAIConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "anthropic":
+        print_section("Anthropic API Key", "Get your key at console.anthropic.com")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_ANTHROPIC_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="claude-sonnet-5-20260203")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="anthropic",
+            anthropic=AnthropicConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "minimax":
+        print_section("MiniMax API Key", "Get your key at minimax.chat")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_MINIMAX_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="abab7-preview")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="minimax",
+            minimax=MiniMaxConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "moonshot":
+        print_section("Moonshot AI API Key", "Get your key at moonshot.ai")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_MOONSHOT_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="kimi-k2.5")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="moonshot",
+            moonshot=MoonshotConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "google":
+        print_section("Google API Key", "Get your key at aistudio.google.com")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_GOOGLE_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="gemini-4-pro")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="google",
+            google=GoogleConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "qwen":
+        print_section("Qwen API Key", "Get your key from Alibaba Cloud")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_QWEN_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="qwen4")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="qwen",
+            qwen=QwenConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "zai":
+        print_section("Z.AI API Key", "Get your key at z.ai")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_ZAI_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="glm-5")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="zai",
+            zai=ZAIConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "copilot":
+        print_section("GitHub Copilot Token", "Get your token at github.com/settings/tokens")
+        console.print("│")
+        console.print("│  [dim]Required scopes: repo, read:user[/dim]")
+        console.print("│")
+        
+        access_token = await questionary.password(
+            "  Enter your GitHub access token:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not access_token:
+            console.print("  [yellow]! No token provided, you'll need to add it later[/yellow]")
+            access_token = "YOUR_GITHUB_ACCESS_TOKEN"
+        else:
+            console.print("  [green]✓[/green] Token saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="gpt-4.2")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="copilot",
+            copilot=CopilotConfig(access_token=access_token, model=model),
+        )
+        
+    elif provider_choice == "vercel":
+        print_section("Vercel API Key", "Get your key at vercel.com/settings/tokens")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_VERCEL_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="openai/gpt-5")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="vercel",
+            vercel=VercelConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "opencode_zen":
+        print_section("OpenCode Zen API Key", "Get your key at opencode.ai")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_OPENCODE_ZEN_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="zen-3.0")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="opencode_zen",
+            opencode_zen=OpenCodeZenConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "xiaomi":
+        print_section("Xiaomi API Key", "Get your key at mi.com")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_XIAOMI_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="mi-agent-2")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="xiaomi",
+            xiaomi=XiaomiConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "synthetic":
+        print_section("Synthetic API Key", "Get your key at synthetic.ai")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_SYNTHETIC_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="synthetic-llm-2")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="synthetic",
+            synthetic=SyntheticConfig(api_key=api_key, model=model),
+        )
+        
+    elif provider_choice == "venice":
+        print_section("Venice AI API Key", "Get your key at venice.ai")
+        console.print("│")
+        
+        api_key = await questionary.password(
+            "  Enter your API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        
+        if not api_key:
+            console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
+            api_key = "YOUR_VENICE_API_KEY"
+        else:
+            console.print("  [green]✓[/green] Key saved")
+        
+        console.print()
+        model = Prompt.ask("  Model name", default="venice-llama-4")
+        console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
+        
+        provider_config = ProviderConfig(
+            primary="venice",
+            venice_ai=VeniceAIConfig(api_key=api_key, model=model),
+        )
     
     # ============================================
-    # Step 3: Channel Setup
+    # Step 3: Brave Search API (Optional)
     # ============================================
-    print_step_indicator(3, 5, steps)
+    print_step_indicator(3, 6, steps)
+    print_section("Web Search", "Enable web search for your agent?")
+
+    brave_use = await questionary.confirm(
+        "  Use Brave Search API for web searches?",
+        default=False,
+        style=CUSTOM_STYLE,
+    ).ask_async()
+
+    brave_api_key = None
+    if brave_use:
+        console.print("│  [dim]Get your free key at brave.com/search/api[/dim]")
+        brave_api_key = await questionary.password(
+            "  Enter your Brave Search API key:",
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        if brave_api_key:
+            console.print("  [green]✓[/green] Brave Search configured")
+
+    # ============================================
+    # Step 4: Channel Setup
+    # ============================================
+    print_step_indicator(4, 6, steps)
     print_section("Messaging Channels", "Where should your agent respond?")
     console.print("│")
     console.print("│  [dim]You can skip this and set up channels later[/dim]")
@@ -455,7 +938,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 4: Agent Identity
     # ============================================
-    print_step_indicator(4, 5, steps)
+    print_step_indicator(5, 6, steps)
     print_section("Agent Identity", "Give your agent a personality")
     console.print("│")
     
@@ -480,7 +963,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 5: Create Workspace
     # ============================================
-    print_step_indicator(5, 5, steps)
+    print_step_indicator(6, 6, steps)
     print_section("Creating Workspace", "Setting up your files...")
     console.print()
     
@@ -496,8 +979,14 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         (workspace / "memory").mkdir(exist_ok=True)
         progress.update(task, advance=1, description="Writing config...")
         
-        config = Config(provider=provider_config, channels={})
-        config.to_yaml(workspace / "config.yaml")
+        config = Config(
+            provider=provider_config,
+            web_search=BraveSearchConfig(
+                api_key=brave_api_key if brave_api_key else "",
+                enabled=bool(brave_api_key),
+            ) if brave_use else BraveSearchConfig()
+        )
+        config.save(workspace / "config.yaml")
         progress.update(task, advance=1, description="Creating identity files...")
         
         create_identity_files(
@@ -580,7 +1069,7 @@ def create_identity_files(
     (workspace / "MEMORY.md").write_text("# MEMORY.md - Long-Term Memory\n\n## Key Information\n- Add important facts here\n- Decisions made\n- Lessons learned\n\n## Recent Updates\n- [Date] Initial setup\n\n---\n🌸 _Memories persist across sessions._\n", encoding="utf-8")
     
     # HEARTBEAT.md
-    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md - Periodic Tasks\n\n## Check Interval\nEvery 2 hours\n\n## Tasks\n- [ ] Check for important updates\n- [ ] Review recent activity\n## Quiet Hours\n2am - 9am UTC\n\n---\n🌸 _Heartbeats help your agent stay proactive._\n", encoding="utf-8")
+    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md - Periodic Tasks\n\n## Check Interval\nEvery 30 minutes\n\n## Tasks\n- [ ] Check for important updates\n- [ ] Review recent activity\n## Quiet Hours\n2am - 9am UTC\n\n---\n🌸 _Heartbeats help your agent stay proactive._\n", encoding="utf-8")
     
     # Update config with channel tokens
     if telegram_token or discord_token:
@@ -590,20 +1079,22 @@ def create_identity_files(
         with open(config_path, encoding='utf-8') as f:
             config_data = yaml.safe_load(f)
         
-        if "channels" not in config_data:
-            config_data["channels"] = {}
-        
+        # Write to individual channel fields instead of 'channels:' key
+        # This matches the ClawletConfig schema
         if telegram_token:
-            config_data["channels"]["telegram"] = {
+            config_data["telegram"] = {
                 "enabled": True,
                 "token": telegram_token,
             }
         
         if discord_token:
-            config_data["channels"]["discord"] = {
+            config_data["discord"] = {
                 "enabled": True,
                 "token": discord_token,
             }
+        
+        # Remove legacy 'channels:' key if it exists to avoid confusion
+        config_data.pop("channels", None)
         
         with open(config_path, 'w') as f:
             yaml.dump(config_data, f, default_flow_style=False)

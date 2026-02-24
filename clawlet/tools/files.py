@@ -8,6 +8,52 @@ from typing import Optional
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
+def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path, Optional[str]]:
+    """
+    Securely resolve a path, following symlinks and verifying it's within allowed_dir.
+    
+    Returns:
+        tuple: (resolved_path, error_message) - error_message is None if safe
+    
+    This prevents path traversal attacks via symlinks by:
+    1. Using strict=True to ensure the path exists and follows all symlinks
+    2. Verifying the final resolved path is still within allowed_dir
+    """
+    
+    if allowed_dir is None:
+        return file_path, None
+    
+    # Ensure allowed_dir is a Path object
+    if not isinstance(allowed_dir, Path):
+        allowed_dir = Path(allowed_dir)
+        logger.debug(f"[_secure_resolve] converted allowed_dir to Path: {allowed_dir}")
+    
+    try:
+        # Resolve with strict=True to follow all symlinks and ensure path exists
+        # This will raise FileNotFoundError if the path doesn't exist (including broken symlinks)
+        resolved_path = file_path.resolve(strict=True)
+        
+        # Get the allowed_dir resolved path
+        allowed_resolved = allowed_dir.resolve()
+        
+        # Check if resolved path is within allowed_dir
+        resolved_str = str(resolved_path)
+        allowed_str = str(allowed_resolved)
+        
+        # Ensure the resolved path starts with allowed_dir
+        if not resolved_str.startswith(allowed_str):
+            return resolved_path, f"Access denied: symlink points outside allowed directory"
+        
+        return resolved_path, None
+        
+    except FileNotFoundError:
+        # This handles broken symlinks or non-existent paths
+        return file_path, f"Path not found or is a broken symlink: {file_path}"
+    except OSError as e:
+        # Handle other OS errors (permission issues, circular symlinks, etc.)
+        return file_path, f"Path resolution error: {e}"
+
+
 class ReadFileTool(BaseTool):
     """Tool to read file contents."""
     
@@ -40,26 +86,20 @@ class ReadFileTool(BaseTool):
         try:
             file_path = Path(path)
             
-            # Security check
-            if self.allowed_dir and not str(file_path.resolve()).startswith(str(self.allowed_dir.resolve())):
+            # Security check - use secure resolve to prevent symlink attacks
+            resolved_path, error = _secure_resolve(file_path, self.allowed_dir)
+            if error:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Access denied: path outside allowed directory"
+                    error=error
                 )
             
-            if not file_path.exists():
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"File not found: {path}"
-                )
-            
-            content = file_path.read_text(encoding="utf-8")
+            content = resolved_path.read_text(encoding="utf-8")
             return ToolResult(
                 success=True,
                 output=content,
-                data={"path": str(file_path), "size": len(content)}
+                data={"path": str(resolved_path), "size": len(content)}
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))
@@ -99,26 +139,32 @@ class WriteFileTool(BaseTool):
     async def execute(self, path: str, content: str, **kwargs) -> ToolResult:
         """Write a file."""
         try:
+            from loguru import logger
+            
             file_path = Path(path)
             
-            # Security check
-            if self.allowed_dir and not str(file_path.resolve()).startswith(str(self.allowed_dir.resolve())):
+            # Security check - use secure resolve to prevent symlink attacks
+            resolved_path, error = _secure_resolve(file_path, self.allowed_dir)
+            if error:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Access denied: path outside allowed directory"
+                    error=error
                 )
             
             # Create parent directories
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path.parent.mkdir(parents=True, exist_ok=True)
             
-            file_path.write_text(content, encoding="utf-8")
+            resolved_path.write_text(content, encoding="utf-8")
+            
             return ToolResult(
                 success=True,
                 output=f"Successfully wrote {len(content)} bytes to {path}",
-                data={"path": str(file_path), "size": len(content)}
+                data={"path": str(resolved_path), "size": len(content)}
             )
         except Exception as e:
+            from loguru import logger
+            logger.error(f"write_file: Failed to write {path}: {e}")
             return ToolResult(success=False, output="", error=str(e))
 
 
@@ -160,24 +206,20 @@ class EditFileTool(BaseTool):
     async def execute(self, path: str, old_text: str, new_text: str, **kwargs) -> ToolResult:
         """Edit a file."""
         try:
+            from loguru import logger
+            
             file_path = Path(path)
             
-            # Security check
-            if self.allowed_dir and not str(file_path.resolve()).startswith(str(self.allowed_dir.resolve())):
+            # Security check - use secure resolve to prevent symlink attacks
+            resolved_path, error = _secure_resolve(file_path, self.allowed_dir)
+            if error:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Access denied: path outside allowed directory"
+                    error=error
                 )
             
-            if not file_path.exists():
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"File not found: {path}"
-                )
-            
-            content = file_path.read_text()
+            content = resolved_path.read_text()
             
             if old_text not in content:
                 return ToolResult(
@@ -187,14 +229,16 @@ class EditFileTool(BaseTool):
                 )
             
             new_content = content.replace(old_text, new_text, 1)
-            file_path.write_text(new_content)
+            resolved_path.write_text(new_content)
             
             return ToolResult(
                 success=True,
                 output=f"Successfully edited {path}",
-                data={"path": str(file_path)}
+                data={"path": str(resolved_path)}
             )
         except Exception as e:
+            from loguru import logger
+            logger.error(f"edit_file: Failed to edit {path}: {e}")
             return ToolResult(success=False, output="", error=str(e))
 
 
@@ -230,22 +274,16 @@ class ListDirTool(BaseTool):
         try:
             dir_path = Path(path)
             
-            # Security check
-            if self.allowed_dir and not str(dir_path.resolve()).startswith(str(self.allowed_dir.resolve())):
+            # Security check - use secure resolve to prevent symlink attacks
+            resolved_path, error = _secure_resolve(dir_path, self.allowed_dir)
+            if error:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Access denied: path outside allowed directory"
+                    error=error
                 )
             
-            if not dir_path.exists():
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Directory not found: {path}"
-                )
-            
-            if not dir_path.is_dir():
+            if not resolved_path.is_dir():
                 return ToolResult(
                     success=False,
                     output="",
@@ -253,7 +291,7 @@ class ListDirTool(BaseTool):
                 )
             
             items = []
-            for item in sorted(dir_path.iterdir()):
+            for item in sorted(resolved_path.iterdir()):
                 item_type = "dir" if item.is_dir() else "file"
                 items.append(f"{item.name} ({item_type})")
             
@@ -261,7 +299,7 @@ class ListDirTool(BaseTool):
             return ToolResult(
                 success=True,
                 output=output,
-                data={"path": str(dir_path), "count": len(items)}
+                data={"path": str(resolved_path), "count": len(items)}
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))

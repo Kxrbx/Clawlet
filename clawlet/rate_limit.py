@@ -61,7 +61,11 @@ class RateLimiter:
     - Per-channel rate limiting  
     - Global rate limiting
     - Multiple rate limit tiers
+    - Automatic cleanup of stale entries
     """
+    
+    # Maximum number of entries to prevent memory growth
+    MAX_ENTRIES = 10000
     
     def __init__(
         self,
@@ -101,6 +105,16 @@ class RateLimiter:
         if time.time() - self._last_cleanup > self._cleanup_interval:
             self._cleanup()
         
+        # Limit total entries to prevent memory growth
+        if len(self._entries) >= self.MAX_ENTRIES:
+            logger.warning(f"Rate limiter entries limit reached ({self.MAX_ENTRIES}), running aggressive cleanup")
+            self._cleanup(aggressive=True)
+            
+            # If still at limit after aggressive cleanup, reject the new key
+            if len(self._entries) >= self.MAX_ENTRIES:
+                logger.error(f"Rate limiter cannot accept new key {key}: too many entries")
+                return False, 60.0  # Retry after 1 minute
+        
         entry = self._entries[key]
         entry.cleanup(limit.window_seconds)
         
@@ -133,14 +147,30 @@ class RateLimiter:
         key = f"tool:{tool_name}:{user_id}"
         self._entries[key].record()
     
-    def _cleanup(self) -> None:
-        """Clean up expired entries."""
+    def _cleanup(self, aggressive: bool = False) -> None:
+        """
+        Clean up expired entries.
+        
+        Args:
+            aggressive: If True, also remove entries older than 2x window_seconds
+        """
         max_window = max(self.default_limit.window_seconds, self.tool_limit.window_seconds)
         cutoff = time.time() - max_window
+        
+        # For aggressive cleanup, use 2x window_seconds cutoff
+        aggressive_cutoff = time.time() - (2 * max_window) if aggressive else None
         
         # Clean up each entry
         for key, entry in list(self._entries.items()):
             entry.cleanup(max_window)
+            
+            # For aggressive cleanup, also check for stale entries
+            if aggressive and aggressive_cutoff is not None:
+                # Remove entries that have no recent timestamps
+                if not entry.timestamps or min(entry.timestamps) < aggressive_cutoff:
+                    del self._entries[key]
+                    continue
+            
             if not entry.timestamps:
                 del self._entries[key]
         

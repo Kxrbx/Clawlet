@@ -3,6 +3,7 @@ Telegram channel implementation.
 """
 
 import asyncio
+import re
 from typing import Optional
 
 from loguru import logger
@@ -13,13 +14,80 @@ from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
 from clawlet.channels.base import BaseChannel
 
 
+def convert_markdown_to_html(text: str) -> str:
+    """Convert common Markdown formatting to Telegram HTML.
+    
+    Supports:
+    - **bold** or __bold__ -> <b>bold</b>
+    - *italic* or _italic_ -> <i>italic</i>
+    - `inline code` -> <code>inline code</code>
+    - ```code block``` -> <pre>code block</pre>
+    - [text](url) -> <a href="url">text</a>
+    - # Heading -> <b>Heading</b>
+    - - list item -> • list item
+    - ~~strikethrough~~ -> <s>strikethrough</s>
+    
+    Also escapes HTML special characters to prevent injection.
+    """
+    if not text:
+        return text
+    
+    # DEBUG: Log the input for diagnosing parsing errors
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[HTML_CONVERT] Input text: {repr(text[:500])}")
+    
+    # First escape HTML special characters (but preserve our own tags later)
+    # We escape in a way that protects against HTML injection
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
+    
+    # DEBUG: Log after escaping
+    logger.debug(f"[HTML_CONVERT] After escape: {repr(text[:500])}")
+    
+    # Convert Markdown to HTML (order matters - more specific patterns first)
+    
+    # Code blocks (```...```) -> <pre>...</pre>
+    text = re.sub(r'```(\w*)\n?([\s\S]*?)```', r'<pre>\2</pre>', text)
+    
+    # Inline code (`...`) -> <code>...</code>
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    
+    # Bold (**...** or __...__) -> <b>...</b>
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'__([^_]+)__', r'<b>\1</b>', text)
+    
+    # Italic (*...* or _..._) -> <i>...</i> (being careful not to match already bold)
+    text = re.sub(r'(?<![*_])\*([^*]+)\*(?![*_])', r'<i>\1</i>', text)
+    text = re.sub(r'(?<![*_])_([^_]+)_(?![*_])', r'<i>\1</i>', text)
+    
+    # Links [text](url) -> <a href="url">text</a>
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+    
+    # Unordered lists: - item or * item -> • item
+    text = re.sub(r'^[\-\*]\s+', '• ', text, flags=re.MULTILINE)
+    
+    # Headers: # H1, ## H2, ### H3 -> <b>H1</b>, <b>H2</b>, <b>H3</b>
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
+    
+    # Strikethrough ~~text~~ -> <s>text</s>
+    text = re.sub(r'~~([^~]+)~~', r'<s>\1</s>', text)
+    
+    # DEBUG: Log the final output
+    logger.debug(f"[HTML_CONVERT] Final output: {repr(text[:500])}")
+    
+    return text
+
+
 class TelegramChannel(BaseChannel):
     """Telegram channel using python-telegram-bot."""
     
     def __init__(self, bus: MessageBus, config: dict):
         super().__init__(bus, config)
         
-        self.token = config.get("token")
+        # Strip whitespace from token to avoid URL errors
+        self.token = (config.get("token") or "").strip()
         if not self.token:
             raise ValueError("Telegram token not configured")
         
@@ -34,25 +102,44 @@ class TelegramChannel(BaseChannel):
         """Start the Telegram bot."""
         logger.info(f"Starting Telegram channel...")
         
-        # Create application
-        self.app = Application.builder().token(self.token).build()
-        
-        # Add handlers
-        self.app.add_handler(CommandHandler("start", self._handle_start))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
-        
-        # Initialize and start
-        await self.app.initialize()
-        await self.app.start()
-        
-        # Start polling in background
-        await self.app.updater.start_polling()
-        
-        # Start outbound loop
-        self._running = True
-        self._outbound_task = asyncio.create_task(self._run_outbound_loop())
-        
-        logger.info("Telegram channel started successfully")
+        try:
+            # Create application
+            logger.debug("DEBUG: Creating Application builder...")
+            self.app = Application.builder().token(self.token).build()
+            logger.debug("DEBUG: Application created, checking updater...")
+            
+            # Check if updater exists (debug)
+            if self.app.updater is None:
+                logger.warning("DEBUG: Application.updater is None - this may cause issues!")
+            else:
+                logger.debug("DEBUG: Updater exists, ready for polling")
+            
+            # Add handlers
+            self.app.add_handler(CommandHandler("start", self._handle_start))
+            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
+            
+            # Initialize and start
+            logger.debug("DEBUG: Initializing application...")
+            await self.app.initialize()
+            logger.debug("DEBUG: Starting application...")
+            await self.app.start()
+            
+            # Start polling in background
+            logger.debug("DEBUG: Starting polling...")
+            await self.app.updater.start_polling()
+            logger.debug("DEBUG: Polling started successfully")
+            
+            # Start outbound loop
+            self._running = True
+            self._outbound_task = asyncio.create_task(self._run_outbound_loop())
+            
+            logger.info("Telegram channel started successfully")
+        except Exception as e:
+            logger.error(f"DEBUG: Exception during Telegram start: {type(e).__name__}: {e}")
+            # Don't re-raise - let the caller decide what to do
+            # But set _running to False to prevent issues
+            self._running = False
+            raise
     
     async def stop(self) -> None:
         """Stop the Telegram bot."""
@@ -68,27 +155,75 @@ class TelegramChannel(BaseChannel):
                 pass
         
         if self.app:
-            await self.app.updater.stop()
-            await self.app.stop()
-            await self.app.shutdown()
+            try:
+                # Check if updater exists and is running before stopping
+                if self.app.updater is not None:
+                    logger.debug("DEBUG: Stopping updater...")
+                    try:
+                        await self.app.updater.stop()
+                        logger.debug("DEBUG: Updater stopped successfully")
+                    except RuntimeError as e:
+                        if "not running" in str(e).lower():
+                            logger.warning(f"DEBUG: Updater was not running: {e}")
+                        else:
+                            raise
+                else:
+                    logger.warning("DEBUG: Updater is None, skipping stop")
+                
+                logger.debug("DEBUG: Stopping application...")
+                await self.app.stop()
+                logger.debug("DEBUG: Application stopped")
+                
+                logger.debug("DEBUG: Shutting down application...")
+                await self.app.shutdown()
+                logger.debug("DEBUG: Application shutdown complete")
+            except Exception as e:
+                logger.error(f"DEBUG: Error during Telegram stop: {type(e).__name__}: {e}")
         
         logger.info("Telegram channel stopped")
     
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message to Telegram."""
+        """Send a message to Telegram with proper formatting."""
         logger.info(f"Telegram send: to={msg.chat_id}, content={msg.content[:50]}...")
+        
+        # DEBUG: Log content for diagnosis
+        content_preview = msg.content[:200] if msg.content else "(empty)"
+        logger.debug(f"Telegram message content (raw): {content_preview}")
+        
         try:
             try:
                 chat_id = int(msg.chat_id)
             except (ValueError, TypeError) as e:
                 logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
                 return
-            await self.app.bot.send_message(
-                chat_id=chat_id,
-                text=msg.content,
-                parse_mode="Markdown"
-            )
-            logger.info(f"Sent Telegram message to {chat_id}")
+            
+            # Stop typing indicator before sending message
+            try:
+                await self.app.bot.send_chat_action(chat_id=chat_id, action="cancel")
+            except Exception as e:
+                logger.debug(f"Could not cancel typing action: {e}")
+            
+            # Try HTML parse_mode with converted Markdown
+            parse_mode = "HTML"
+            html_content = convert_markdown_to_html(msg.content)
+            logger.debug(f"Converted HTML content: {html_content[:100]}...")
+            
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id,
+                    text=html_content,
+                    parse_mode=parse_mode
+                )
+                logger.info(f"Sent Telegram message to {chat_id} (HTML format)")
+            except Exception as parse_error:
+                # Fall back to plain text if HTML parsing fails
+                logger.warning(f"HTML parsing failed, falling back to plain text: {parse_error}")
+                await self.app.bot.send_message(
+                    chat_id=chat_id,
+                    text=msg.content,
+                    parse_mode=None
+                )
+                logger.info(f"Sent Telegram message to {chat_id} (plain text)")
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
     
@@ -109,6 +244,12 @@ class TelegramChannel(BaseChannel):
         content = update.message.text
         
         logger.info(f"Received Telegram message from {chat_id}: {content[:50]}...")
+        
+        # Send typing indicator to show bot is processing
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception as e:
+            logger.debug(f"Could not send typing action: {e}")
         
         # Create inbound message
         msg = InboundMessage(

@@ -8,6 +8,8 @@ Available tools:
 - ListDirTool: List directory contents
 - ShellTool: Execute shell commands (safe)
 - WebSearchTool: Search the web via Brave API
+- InstallSkillTool: Install skills from GitHub URLs
+- ListSkillsTool: List installed skills
 """
 
 from clawlet.tools.registry import (
@@ -23,6 +25,9 @@ from clawlet.tools.files import (
 )
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.web_search import WebSearchTool
+from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
+from clawlet.tools.memory import MemoryTools
+from clawlet.skills.registry import SkillRegistry
 
 # Convenience alias for all file operations
 class FileTool:
@@ -30,6 +35,11 @@ class FileTool:
     
     def __init__(self, allowed_dir=None):
         """Initialize all file tools."""
+        # Convert string to Path if needed
+        from pathlib import Path
+        if allowed_dir is not None and not isinstance(allowed_dir, Path):
+            allowed_dir = Path(allowed_dir)
+        
         self.read = ReadFileTool(allowed_dir)
         self.write = WriteFileTool(allowed_dir)
         self.edit = EditFileTool(allowed_dir)
@@ -40,8 +50,18 @@ class FileTool:
         """Get all file tools."""
         return [self.read, self.write, self.edit, self.list]
 
-def create_default_tool_registry(allowed_dir: str = None) -> ToolRegistry:
-    """Create a default tool registry with all standard tools."""
+def create_default_tool_registry(allowed_dir: str = None, config=None, memory_manager=None, skill_registry: SkillRegistry = None) -> ToolRegistry:
+    """Create a default tool registry with all standard tools.
+    
+    Args:
+        allowed_dir: Directory to restrict file operations to
+        config: Configuration object
+        memory_manager: Optional MemoryManager instance for memory tools
+        skill_registry: Optional SkillRegistry to register skill tools with
+    """
+    import logging
+    logger = logging.getLogger("clawlet")
+    
     registry = ToolRegistry()
     
     # Add file tools
@@ -49,11 +69,41 @@ def create_default_tool_registry(allowed_dir: str = None) -> ToolRegistry:
     for tool in file_tool.tools:
         registry.register(tool)
     
-    # Add shell tool
-    registry.register(ShellTool(allowed_dir=allowed_dir))
+    # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
+    registry.register(ShellTool(workspace=allowed_dir))
     
-    # Add web search tool (requires BRAVE_API_KEY env var)
-    registry.register(WebSearchTool())
+    # Add web search tool (uses Brave Search API)
+    # Get API key from config, or check both WEB_SEARCH_API_KEY and BRAVE_SEARCH_API_KEY env vars
+    import os
+    api_key = None
+    if config and config.web_search:
+        api_key = config.web_search.api_key or os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
+    else:
+        api_key = os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
+    
+    if not api_key:
+        logger.warning("WebSearchTool: No API key found. Set WEB_SEARCH_API_KEY or BRAVE_SEARCH_API_KEY environment variable.")
+    
+    registry.register(WebSearchTool(api_key=api_key))
+    
+    # Add skill management tools
+    registry.register(InstallSkillTool())
+    registry.register(ListSkillsTool())
+    
+    # Add memory tools if memory_manager is provided
+    if memory_manager is not None:
+        memory_tools = MemoryTools(memory_manager)
+        for tool in memory_tools.all_tools():
+            registry.register(tool)
+        logger.info(f"Registered {len(memory_tools.all_tools())} memory tools")
+    
+    # Register skill tools if skill_registry is provided
+    if skill_registry is not None:
+        # Set the tool registry on the skill registry
+        skill_registry._tool_registry = registry
+        # Register all skill tools
+        registered_count = skill_registry.register_tools_with_registry()
+        logger.info(f"Registered {registered_count} skill tools from SkillRegistry")
     
     return registry
 
@@ -68,5 +118,8 @@ __all__ = [
     "FileTool",
     "ShellTool",
     "WebSearchTool",
+    "InstallSkillTool",
+    "ListSkillsTool",
+    "MemoryTools",
     "create_default_tool_registry",
 ]

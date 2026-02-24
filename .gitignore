@@ -50,3 +50,9 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+.kilocode/mcp.json
+plans/openclaw-vs-clawlet-comparison.md
+plans/first-contact-profile-collection.md
+plans/
+reviews/
+tests/

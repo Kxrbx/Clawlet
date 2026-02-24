@@ -80,7 +80,6 @@ class MemoryManager:
                 category="system",
                 importance=10,
             )
-            logger.debug(f"Loaded MEMORY.md ({len(content)} chars)")
         except Exception as e:
             logger.warning(f"Failed to load MEMORY.md: {e}")
     
@@ -246,8 +245,7 @@ class MemoryManager:
                     lines.append(f"- **{entry.key}**: {entry.value}\n")
             
             memory_file.write_text("\n".join(lines), encoding="utf-8")
-            logger.info(f"Saved {len(self._long_term)} memories to MEMORY.md")
-            
+        
         except Exception as e:
             logger.error(f"Failed to save memories: {e}")
     

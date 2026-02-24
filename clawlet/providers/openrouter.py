@@ -66,7 +66,7 @@ class OpenRouterProvider(BaseProvider):
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
-                    "HTTP-Referer": "https://clawlet.ai",
+                    "HTTP-Referer": "https://github.com/Kxrbx/Clawlet",
                     "X-Title": "Clawlet",
                 },
                 timeout=120.0,
@@ -95,6 +95,13 @@ class OpenRouterProvider(BaseProvider):
         
         logger.info(f"OpenRouter request: model={model}, messages={len(messages)}")
         
+        # DEBUG: Log tool_calls format in messages
+        for i, msg in enumerate(messages):
+            if msg.get("tool_calls"):
+                logger.debug(f"Message {i} ({msg.get('role')}) has tool_calls: {msg['tool_calls']}")
+            if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                logger.debug(f"Message {i} (tool) has tool_call_id: {msg['tool_call_id']}")
+        
         try:
             # Log headers with secrets masked
             logger.debug(f"OpenRouter request headers: {mask_secrets(str(client.headers))}")
@@ -105,7 +112,19 @@ class OpenRouterProvider(BaseProvider):
             
             data = response.json()
             
-            content = data["choices"][0]["message"]["content"]
+            # DEBUG: Log full response structure to diagnose tool_calls issue
+            logger.debug(f"[DEBUG] OpenRouter response keys: {data.keys()}")
+            
+            # Check for tool_calls in response
+            message = data["choices"][0]["message"]
+            logger.debug(f"[DEBUG] OpenRouter choices[0] message keys: {message.keys()}")
+            
+            tool_calls_response = message.get("tool_calls")
+            logger.debug(f"[DEBUG] tool_calls in response: {tool_calls_response is not None}")
+            if tool_calls_response:
+                logger.debug(f"[DEBUG] tool_calls content: {tool_calls_response}")
+            
+            content = message.get("content") or ""
             usage = data.get("usage", {})
             finish_reason = data["choices"][0].get("finish_reason", "stop")
             
@@ -116,6 +135,7 @@ class OpenRouterProvider(BaseProvider):
                 model=model,
                 usage=usage,
                 finish_reason=finish_reason,
+                tool_calls=tool_calls_response,
             )
             
         except httpx.HTTPStatusError as e:
