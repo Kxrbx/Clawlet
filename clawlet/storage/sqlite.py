@@ -44,6 +44,11 @@ class StorageBackend(ABC):
     async def close(self) -> None:
         """Close the storage connection."""
         pass
+    
+    @abstractmethod
+    def is_initialized(self) -> bool:
+        """Check if storage is initialized and ready to use."""
+        pass
 
 
 class SQLiteStorage(StorageBackend):
@@ -120,6 +125,10 @@ class SQLiteStorage(StorageBackend):
         if self._db:
             await self._db.close()
             logger.info("SQLite storage closed")
+    
+    def is_initialized(self) -> bool:
+        """Check if storage is initialized and ready."""
+        return self._db is not None
     
     async def health_check(self) -> None:
         """Check database health."""

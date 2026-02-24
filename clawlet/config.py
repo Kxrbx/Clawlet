@@ -11,6 +11,28 @@ import yaml
 from loguru import logger
 
 
+def _validate_api_key_strict(api_key: str, provider_name: str = "") -> str:
+    """
+    Validate API key with strict format checks.
+    Raises ValueError if the key is invalid.
+    """
+    if not api_key or api_key.strip() != api_key:
+        raise ValueError(f"{provider_name} API key is required and must not have leading/trailing whitespace")
+    
+    if any(c.isspace() for c in api_key):
+        raise ValueError(f"{provider_name} API key contains internal whitespace")
+    
+    lower_key = api_key.lower()
+    placeholder_patterns = ["test", "xxx", "dummy", "placeholder", "demo", "example"]
+    if lower_key in placeholder_patterns:
+        raise ValueError(f"{provider_name} API key appears to be a placeholder")
+    
+    if lower_key.startswith("your_") or api_key.startswith("YOUR_"):
+        raise ValueError(f"{provider_name} API key appears to be a placeholder (starts with 'YOUR_')")
+    
+    return api_key
+
+
 class OpenRouterConfig(BaseModel):
     """OpenRouter provider configuration."""
     api_key: str = Field(..., description="OpenRouter API key")
@@ -20,9 +42,7 @@ class OpenRouterConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_OPENROUTER_API_KEY":
-            raise ValueError("OpenRouter API key is required")
-        return v
+        return _validate_api_key_strict(v, "OpenRouter")
 
 
 class OllamaConfig(BaseModel):
@@ -47,9 +67,7 @@ class OpenAIConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_OPENAI_API_KEY":
-            raise ValueError("OpenAI API key is required")
-        return v
+        return _validate_api_key_strict(v, "OpenAI")
 
 
 class AnthropicConfig(BaseModel):
@@ -61,9 +79,7 @@ class AnthropicConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_ANTHROPIC_API_KEY":
-            raise ValueError("Anthropic API key is required")
-        return v
+        return _validate_api_key_strict(v, "Anthropic")
 
 
 class MiniMaxConfig(BaseModel):
@@ -75,9 +91,7 @@ class MiniMaxConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_MINIMAX_API_KEY":
-            raise ValueError("MiniMax API key is required")
-        return v
+        return _validate_api_key_strict(v, "MiniMax")
 
 
 class MoonshotConfig(BaseModel):
@@ -89,9 +103,7 @@ class MoonshotConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_MOONSHOT_API_KEY":
-            raise ValueError("Moonshot API key is required")
-        return v
+        return _validate_api_key_strict(v, "Moonshot")
 
 
 class GoogleConfig(BaseModel):
@@ -103,9 +115,7 @@ class GoogleConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_GOOGLE_API_KEY":
-            raise ValueError("Google API key is required")
-        return v
+        return _validate_api_key_strict(v, "Google")
 
 
 class QwenConfig(BaseModel):
@@ -117,9 +127,7 @@ class QwenConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_QWEN_API_KEY":
-            raise ValueError("Qwen API key is required")
-        return v
+        return _validate_api_key_strict(v, "Qwen")
 
 
 class ZAIConfig(BaseModel):
@@ -131,9 +139,7 @@ class ZAIConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_ZAI_API_KEY":
-            raise ValueError("Z.AI API key is required")
-        return v
+        return _validate_api_key_strict(v, "Z.AI")
 
 
 class CopilotConfig(BaseModel):
@@ -144,9 +150,7 @@ class CopilotConfig(BaseModel):
     @field_validator('access_token')
     @classmethod
     def validate_token(cls, v: str) -> str:
-        if not v or v == "YOUR_GITHUB_TOKEN":
-            raise ValueError("GitHub Access Token is required")
-        return v
+        return _validate_api_key_strict(v, "GitHub Token")
 
 
 class VercelConfig(BaseModel):
@@ -158,9 +162,7 @@ class VercelConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_VERCEL_API_KEY":
-            raise ValueError("Vercel API key is required")
-        return v
+        return _validate_api_key_strict(v, "Vercel")
 
 
 class OpenCodeZenConfig(BaseModel):
@@ -172,9 +174,7 @@ class OpenCodeZenConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_OPENCODE_ZEN_API_KEY":
-            raise ValueError("OpenCode Zen API key is required")
-        return v
+        return _validate_api_key_strict(v, "OpenCode Zen")
 
 
 class XiaomiConfig(BaseModel):
@@ -186,9 +186,7 @@ class XiaomiConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_XIAOMI_API_KEY":
-            raise ValueError("Xiaomi API key is required")
-        return v
+        return _validate_api_key_strict(v, "Xiaomi")
 
 
 class SyntheticConfig(BaseModel):
@@ -200,9 +198,7 @@ class SyntheticConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_SYNTHETIC_API_KEY":
-            raise ValueError("Synthetic AI API key is required")
-        return v
+        return _validate_api_key_strict(v, "Synthetic AI")
 
 
 class VeniceAIConfig(BaseModel):
@@ -214,9 +210,7 @@ class VeniceAIConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        if not v or v == "YOUR_VENICE_API_KEY":
-            raise ValueError("Venice AI API key is required")
-        return v
+        return _validate_api_key_strict(v, "Venice AI")
 
 
 class BraveSearchConfig(BaseModel):
@@ -227,8 +221,10 @@ class BraveSearchConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str, info) -> str:
-        if info.data.get('enabled') and not v:
-            raise ValueError("Brave Search API key is required when enabled")
+        if info.data.get('enabled'):
+            if not v:
+                raise ValueError("Brave Search API key is required when enabled")
+            return _validate_api_key_strict(v, "Brave Search")
         return v
 
 
@@ -432,17 +428,26 @@ def load_config(workspace: Optional[Path] = None) -> Config:
     if config_path.exists():
         logger.info(f"Loading config from {config_path}")
         
-        # Security check: warn if config is world-readable
+        # Security check: enforce config file permissions (0600)
         try:
             import stat
             st = config_path.stat()
             mode = st.st_mode
-            # Check if others have read permission (S_IROTH)
+            # Check if others have read permission (S_IROTH) or group has any access beyond owner?
+            # For simplicity, check if world-readable
             if mode & stat.S_IROTH:
                 logger.warning(
                     f"Config file {config_path} is readable by others. "
-                    f"Please restrict permissions: chmod 600 {config_path}"
+                    f"Attempting to restrict permissions to 0600."
                 )
+                try:
+                    config_path.chmod(0o600)
+                except Exception as chmod_err:
+                    logger.error(f"Failed to restrict config permissions: {chmod_err}")
+                    raise PermissionError(
+                        f"Config file has insecure permissions (octal: {oct(mode)[-3:]}) "
+                        f"and could not be fixed. Aborting for security."
+                    ) from chmod_err
         except Exception as e:
             logger.debug(f"Could not check config file permissions: {e}")
         
