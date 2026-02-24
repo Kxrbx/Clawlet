@@ -19,10 +19,6 @@ def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path,
     1. Using strict=True to ensure the path exists and follows all symlinks
     2. Verifying the final resolved path is still within allowed_dir
     """
-    # DEBUG: Log allowed_dir type
-    from loguru import logger
-    logger.debug(f"[_secure_resolve] allowed_dir: {allowed_dir} (type: {type(allowed_dir)})")
-    # END DEBUG
     
     if allowed_dir is None:
         return file_path, None
@@ -159,15 +155,7 @@ class WriteFileTool(BaseTool):
             # Create parent directories
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # DEBUG: Log that we're about to write
-            logger.info(f"[DEBUG] write_file: Writing {len(content)} bytes to {resolved_path}")
-            # END DEBUG
-            
             resolved_path.write_text(content, encoding="utf-8")
-            
-            # DEBUG: Log that we successfully wrote
-            logger.info(f"[DEBUG] write_file: Successfully wrote to {resolved_path}")
-            # END DEBUG
             
             return ToolResult(
                 success=True,
@@ -176,7 +164,7 @@ class WriteFileTool(BaseTool):
             )
         except Exception as e:
             from loguru import logger
-            logger.error(f"[DEBUG] write_file: Failed to write {path}: {e}")
+            logger.error(f"write_file: Failed to write {path}: {e}")
             return ToolResult(success=False, output="", error=str(e))
 
 
@@ -240,16 +228,8 @@ class EditFileTool(BaseTool):
                     error=f"Text not found in file: {old_text[:50]}..."
                 )
             
-            # DEBUG: Log that we're about to edit
-            logger.info(f"[DEBUG] edit_file: Editing {resolved_path}")
-            # END DEBUG
-            
             new_content = content.replace(old_text, new_text, 1)
             resolved_path.write_text(new_content)
-            
-            # DEBUG: Log that we successfully edited
-            logger.info(f"[DEBUG] edit_file: Successfully edited {resolved_path}")
-            # END DEBUG
             
             return ToolResult(
                 success=True,
@@ -258,7 +238,7 @@ class EditFileTool(BaseTool):
             )
         except Exception as e:
             from loguru import logger
-            logger.error(f"[DEBUG] edit_file: Failed to edit {path}: {e}")
+            logger.error(f"edit_file: Failed to edit {path}: {e}")
             return ToolResult(success=False, output="", error=str(e))
 
 

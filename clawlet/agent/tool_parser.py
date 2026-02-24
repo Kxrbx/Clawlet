@@ -54,6 +54,15 @@ class ToolCallParser:
         re.IGNORECASE
     )
     
+    # Common tool call indicators for early exit check
+    # These are the minimal patterns that indicate tool calls might be present
+    TOOL_CALL_INDICATORS = [
+        '<tool_call',      # XML-style and MCP format
+        '{"name":',       # JSON object with name field
+        'tool:',           # Simple key-value format
+        '<function=',      # MCP-like format
+    ]
+    
     def parse(self, content: str) -> list[ParsedToolCall]:
         """Parse all tool calls from content.
         
@@ -63,11 +72,18 @@ class ToolCallParser:
         Returns:
             List of ParsedToolCall objects
         """
+        # Early exit: Check for tool call indicators before running regex patterns
+        if not self._contains_tool_call_indicators(content):
+            logger.debug("No tool call indicators found in response, skipping regex matching")
+            return []
+        
         tool_calls = []
         
-        # Try each pattern in order
+        # Try most common formats first (JSON blocks and XML) for better hit rate
         json_calls = self._parse_json_blocks(content)
         xml_calls = self._parse_xml_format(content)
+        
+        # Only try less common formats if needed
         simple_calls = self._parse_simple_format(content)
         mcp_calls = self._parse_mcp_format(content)
         
@@ -76,15 +92,27 @@ class ToolCallParser:
         tool_calls.extend(simple_calls)
         tool_calls.extend(mcp_calls)
         
-        # DEBUG: Log which patterns matched
-        if json_calls or xml_calls or simple_calls or mcp_calls:
-            logger.warning(f"[DIAGNOSTIC] Tool parser matches - JSON: {len(json_calls)}, XML: {len(xml_calls)}, Simple: {len(simple_calls)}, MCP: {len(mcp_calls)}")
-            logger.debug(f"[DIAGNOSTIC] Raw content sample: {content[:300]}...")
-        
         if tool_calls:
             logger.info(f"Extracted {len(tool_calls)} tool call(s)")
+        else:
+            logger.debug("Tool call indicators found but no valid tool calls parsed")
         
         return tool_calls
+    
+    def _contains_tool_call_indicators(self, content: str) -> bool:
+        """Quick check for tool call indicators to avoid unnecessary regex matching.
+        
+        Args:
+            content: The content to check
+            
+        Returns:
+            True if any indicator is found, False otherwise
+        """
+        # Use simple string search for performance (faster than regex)
+        for indicator in self.TOOL_CALL_INDICATORS:
+            if indicator in content:
+                return True
+        return False
     
     def _parse_json_blocks(self, content: str) -> list[ParsedToolCall]:
         """Parse JSON blocks from content.

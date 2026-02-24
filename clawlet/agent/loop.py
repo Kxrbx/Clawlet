@@ -360,11 +360,45 @@ class AgentLoop:
                         logger.warning(f"[OPTIMIZE] Filtering out invalid tool '{tc.name}' - not in registry")
                 
                 # Check if we should use the response content instead of tool calls
+                has_valid_tools = len(valid_tool_calls) > 0
+                has_any_tool_calls = len(tool_calls) > 0
+                has_invalid_tools = has_any_tool_calls and not has_valid_tools
                 has_meaningful_content = response_content and len(response_content.strip()) > 50
-                has_only_invalid_tools = len(valid_tool_calls) == 0
                 
-                if has_meaningful_content and has_only_invalid_tools:
-                    # Only content, no valid tools - use content as final response
+                # State machine approach: handle each case clearly
+                # Case 1: Valid tool calls → execute them and continue loop
+                if has_valid_tools:
+                    logger.info("[OPTIMIZE] Valid tool calls present - executing tools")
+                    tool_calls = valid_tool_calls
+
+                    # Add assistant message with tool calls (truncate if needed)
+                    assistant_msg = Message(
+                        role="assistant",
+                        content=response_content,
+                        tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
+                    )
+                    assistant_msg = self._truncate_message(assistant_msg)
+                    self._history.append(assistant_msg)
+                    
+                    # Execute each tool call
+                    for tc in tool_calls:
+                        result = await self._execute_tool(tc)
+                        
+                        # Add tool result to history (truncate if needed - tool results can be large)
+                        tool_content = result.output if result.success else f"Error: {result.error}"
+                        tool_msg = Message(
+                            role="tool",
+                            content=tool_content,
+                            metadata={"tool_call_id": tc.id, "tool_name": tc.name}
+                        )
+                        tool_msg = self._truncate_message(tool_msg)
+                        self._history.append(tool_msg)
+                    
+                    # Continue loop to get next response
+                    continue
+                
+                # Case 2: Invalid tools + meaningful content → use content as response
+                if has_invalid_tools and has_meaningful_content:
                     logger.info("[OPTIMIZE] Response has meaningful content but only invalid tool calls - using content as response")
                     final_assistant_msg = Message(role="assistant", content=response_content)
                     final_assistant_msg = self._truncate_message(final_assistant_msg)
@@ -372,45 +406,14 @@ class AgentLoop:
                     final_response = response_content
                     break
                 
-                if has_meaningful_content and not has_only_invalid_tools:
-                    # Valid tool calls present - always execute them
-                    # Content may be used as prefix after tool execution
-                    logger.info("[OPTIMIZE] Valid tool calls present - executing tools")
-                    tool_calls = valid_tool_calls
-
-                    if not tool_calls:
-                        # No valid tool calls and no meaningful content
-                        logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
-                        final_response = response_content or "I couldn't process that request."
-                        break
+                # Case 3: Invalid tools + no meaningful content → fallback
+                if has_invalid_tools and not has_meaningful_content:
+                    logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
+                    final_response = response_content or "I couldn't process that request."
+                    break
                 
-                # Add assistant message with tool calls (truncate if needed)
-                assistant_msg = Message(
-                    role="assistant",
-                    content=response_content,
-                    tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
-                )
-                assistant_msg = self._truncate_message(assistant_msg)
-                self._history.append(assistant_msg)
-                
-                # Execute each tool call
-                for tc in tool_calls:
-                    result = await self._execute_tool(tc)
-                    
-                    # Add tool result to history (truncate if needed - tool results can be large)
-                    tool_content = result.output if result.success else f"Error: {result.error}"
-                    tool_msg = Message(
-                        role="tool",
-                        content=tool_content,
-                        metadata={"tool_call_id": tc.id, "tool_name": tc.name}
-                    )
-                    tool_msg = self._truncate_message(tool_msg)
-                    self._history.append(tool_msg)
-                
-                # Continue loop to get next response
-                continue
-                
-                # No tool calls - this is the final response
+                # Case 4: No tool calls at all → return content as final response
+                # This is the final response with no tool calls
                 final_assistant_msg = Message(role="assistant", content=response_content)
                 final_assistant_msg = self._truncate_message(final_assistant_msg)
                 self._history.append(final_assistant_msg)

@@ -90,7 +90,7 @@ class WebSearchTool(BaseTool):
                     "description": "The search query",
                 },
                 "count": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Number of results (default: 5)",
                 },
             },

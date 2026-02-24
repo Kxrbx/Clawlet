@@ -302,10 +302,6 @@ class Workspace:
         Returns:
             Loaded Identity object
         """
-        # DEBUG: Log that we're reloading identity
-        logger.info("[DEBUG] load_identity: Reloading identity from disk")
-        # END DEBUG
-        
         loader = IdentityLoader(self.path)
         # Always call load_all() to ensure we get fresh data from disk
         self.identity = loader.load_all()
@@ -353,29 +349,42 @@ class Workspace:
             self.load_config()
         
         # Load identity if not loaded - always reload to get latest changes
-        # DEBUG: Log the state of identity before loading
-        logger.info(f"[DEBUG] start: self.identity is None = {self.identity is None}")
-        # END DEBUG
-        
         # Always reload identity to pick up any changes from previous sessions
         self.load_identity()
         
         # Import here to avoid circular imports
         from clawlet.agent.loop import AgentLoop
+        from clawlet.agent.memory import MemoryManager
         from clawlet.tools.registry import ToolRegistry
+        
+        # Create memory manager for this workspace
+        memory_manager = MemoryManager(workspace=self.path)
+        
+        # Create skill registry and load skills
+        from clawlet.skills.registry import SkillRegistry
+        skill_registry = SkillRegistry()
+        
+        # Load bundled skills
+        skill_registry.load_bundled_skills()
+        
+        # Load skill directories from config
+        if self.config and self.config.skills:
+            skill_dirs = self.config.skills.directories
+            for skill_dir in skill_dirs:
+                expanded_dir = Path(skill_dir).expanduser()
+                skill_registry.add_skill_directory(expanded_dir)
+        
+        logger.info(f"Loaded {len(skill_registry.skills)} skills with {len(skill_registry.get_all_tools())} tools")
         
         # Create tool registry if not provided
         if tools is None:
             from clawlet.tools import create_default_tool_registry
             
-            # DEBUG: Log what workspace path is being used
-            logger.debug(f"[DEBUG] Creating tool registry with allowed_dir: {self.path}")
-            logger.debug(f"[DEBUG] allowed_dir type: {type(self.path)}")
-            # END DEBUG
-            
             tools = create_default_tool_registry(
                 allowed_dir=str(self.path),
-                config=self.config
+                config=self.config,
+                memory_manager=memory_manager,
+                skill_registry=skill_registry
             )
             logger.info(f"Created default tool registry with {len(tools.all_tools())} tools for workspace '{self.name}'")
             logger.debug(f"Registered tools: {[t.name for t in tools.all_tools()]}")
