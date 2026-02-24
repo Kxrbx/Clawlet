@@ -3,43 +3,16 @@ Dashboard API server with FastAPI.
 """
 
 from contextlib import asynccontextmanager
-from typing import Optional, Callable
+from typing import Optional
 import asyncio
-import json
 import os
 import subprocess
-from pathlib import Path
-from functools import wraps
 
-# CORS origins from environment (comma-separated list)
-# Default to localhost origins for development
-DEFAULT_CORS_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
-
-
-def get_cors_origins() -> list[str]:
-    """Get CORS origins from environment variable or use defaults."""
-    env_origins = os.environ.get("CLAWLET_CORS_ORIGINS", "")
-    if env_origins:
-        return [origin.strip() for origin in env_origins.split(",") if origin.strip()]
-    return DEFAULT_CORS_ORIGINS
-
-
-# Configuration for API key enforcement
-def get_require_api_key() -> bool:
-    """Check if API key is required from environment variable."""
-    return os.environ.get("CLAWLET_REQUIRE_API_KEY", "false").lower() in ("true", "1", "yes")
-
-
-# Configuration for health history
-MAX_HEALTH_HISTORY_LINES = int(os.environ.get("CLAWLET_MAX_HEALTH_HISTORY_LINES", "1000"))
-
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import List
-from fastapi.security import APIKeyHeader
 import uvicorn
 
 from loguru import logger
@@ -48,10 +21,7 @@ from clawlet import Config, load_config
 from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
 from clawlet.providers.models_cache import get_models_cache
-
-
-# API Key header
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+from clawlet.metrics import format_prometheus
 
 
 # Pydantic models
@@ -105,88 +75,27 @@ class CacheInfoResponse(BaseModel):
 # Global state
 config: Optional[Config] = None
 health_checker: Optional[HealthChecker] = None
-agent_process: Optional[subprocess.Popen] = None
 agent_status: dict = {
     "running": False,
     "provider": "openrouter",
     "model": "anthropic/claude-sonnet-4",
     "messages_processed": 0,
     "uptime_seconds": 0,
-    "pid": None,
 }
-
-# Endpoints that don't require authentication
-PUBLIC_ENDPOINTS = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
-
-
-async def get_api_key(request: Request, api_key: str = Depends(api_key_header)) -> Optional[str]:
-    """
-    Dependency to verify API key authentication.
-    
-    Returns the API key if valid, otherwise raises 401 Unauthorized.
-    If no API key is configured, authentication is optional (passes).
-    """
-    global config
-    
-    # Load config if not loaded yet
-    if config is None:
-        try:
-            config = load_config()
-        except Exception as e:
-            logger.warning(f"Failed to load config for auth: {e}")
-            # If config can't be loaded, allow the request (fail open)
-            return api_key
-    
-    # Get configuration
-    dashboard_api_key = getattr(config, 'dashboard_api_key', None)
-    dashboard_auth_required = getattr(config, 'dashboard_auth_required', False)
-    
-    # Check environment variable for requiring API key
-    env_require_api_key = get_require_api_key()
-    if env_require_api_key:
-        dashboard_auth_required = True
-    
-    # If no API key is configured and auth is not required, allow access
-    if not dashboard_api_key and not dashboard_auth_required:
-        return api_key
-    
-    # If API key is configured but auth is not explicitly required,
-    # still require it for security
-    if dashboard_api_key and not dashboard_auth_required:
-        dashboard_auth_required = True
-    
-    # If we get here, auth is required
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized: API key required. Provide X-API-Key header."
-        )
-    
-    # Verify the API key
-    if api_key != dashboard_api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized: Invalid API key."
-        )
-    
-    return api_key
+agent_process: Optional[subprocess.Popen] = None  # <-- ajouté
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager."""
     # Startup
-    global config, health_checker, agent_process
+    global config, health_checker
     
     try:
         config = load_config()
         health_checker = HealthChecker()
         
         logger.info("Dashboard API started")
-        if config.dashboard_api_key:
-            logger.info("Dashboard API authentication enabled")
-        else:
-            logger.info("Dashboard API authentication is optional (no API key configured)")
         yield
         
     finally:
@@ -202,11 +111,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS with environment-based origins
-cors_origins = get_cors_origins()
+# Add CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -217,27 +125,17 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def get_health():
-    """Get system health status (public, no auth required for monitoring)."""
+    """Get system health status."""
     try:
         result = await quick_health_check()
-        # Record to history file with rotation
+        # Record to history file
         try:
             from pathlib import Path
             history_file = Path.home() / ".clawlet" / "health_history.jsonl"
             history_file.parent.mkdir(parents=True, exist_ok=True)
             import json
-            
-            # Append the new health record
             with open(history_file, "a") as f:
                 f.write(json.dumps(result) + "\n")
-            
-            # Rotate if file exceeds max lines
-            if MAX_HEALTH_HISTORY_LINES > 0:
-                lines = history_file.read_text().strip().split("\n")
-                if len(lines) > MAX_HEALTH_HISTORY_LINES:
-                    # Keep only the most recent lines
-                    lines = lines[-MAX_HEALTH_HISTORY_LINES:]
-                    history_file.write_text("\n".join(lines) + "\n")
         except Exception as e:
             logger.debug(f"Failed to write health history: {e}")
         return HealthResponse(**result)
@@ -247,7 +145,7 @@ async def get_health():
 
 
 @app.get("/health/history")
-async def get_health_history(limit: int = 50, api_key: str = Depends(get_api_key)):
+async def get_health_history(limit: int = 50):
     """Get recent health history."""
     try:
         from pathlib import Path
@@ -263,7 +161,7 @@ async def get_health_history(limit: int = 50, api_key: str = Depends(get_api_key
 
 
 @app.get("/health/detailed")
-async def get_detailed_health(api_key: str = Depends(get_api_key)):
+async def get_detailed_health():
     """Get detailed health checks with provider/storage."""
     if health_checker is None:
         raise HTTPException(status_code=503, detail="Health checker not initialized")
@@ -279,13 +177,13 @@ async def get_detailed_health(api_key: str = Depends(get_api_key)):
 # Agent endpoints
 
 @app.get("/agent/status", response_model=AgentStatus)
-async def get_agent_status(api_key: str = Depends(get_api_key)):
+async def get_agent_status():
     """Get current agent status."""
     return AgentStatus(**agent_status)
 
 
 @app.post("/agent/start")
-async def start_agent(api_key: str = Depends(get_api_key)):
+async def start_agent():
     """Start the agent."""
     global agent_process
     
@@ -296,6 +194,7 @@ async def start_agent(api_key: str = Depends(get_api_key)):
     config = load_config()
     
     # Start agent as subprocess
+    import subprocess
     try:
         agent_process = subprocess.Popen(
             ["python", "-m", "clawlet"],
@@ -317,13 +216,26 @@ async def start_agent(api_key: str = Depends(get_api_key)):
 
 
 @app.post("/agent/stop")
-async def stop_agent(api_key: str = Depends(get_api_key)):
+async def stop_agent():
     """Stop the agent."""
+    global agent_process, agent_status
+    
     if not agent_status["running"]:
         return {"success": False, "message": "Agent not running"}
     
-    # TODO: Implement actual agent stop
+    if agent_process and agent_process.poll() is None:
+        try:
+            agent_process.terminate()
+            try:
+                agent_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                agent_process.kill()
+        except Exception as e:
+            logger.error(f"Error stopping agent: {e}")
+            return {"success": False, "message": f"Error stopping agent: {e}"}
+    
     agent_status["running"] = False
+    agent_status["pid"] = None
     
     logger.info("Agent stopped via API")
     return {"success": True, "message": "Agent stopped"}
@@ -332,7 +244,7 @@ async def stop_agent(api_key: str = Depends(get_api_key)):
 # Settings endpoints
 
 @app.get("/settings", response_model=SettingsResponse)
-async def get_settings(api_key: str = Depends(get_api_key)):
+async def get_settings():
     """Get current settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -347,7 +259,7 @@ async def get_settings(api_key: str = Depends(get_api_key)):
 
 
 @app.post("/settings")
-async def update_settings(settings: SettingsUpdate, api_key: str = Depends(get_api_key)):
+async def update_settings(settings: SettingsUpdate):
     """Update settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -360,14 +272,14 @@ async def update_settings(settings: SettingsUpdate, api_key: str = Depends(get_a
     if settings.temperature:
         config.agent.temperature = settings.temperature
     
-    config.save(config.config_path)
+    config.to_yaml(config.config_path)
     logger.info(f"Settings updated: {settings}")
     
     return {"success": True, "message": "Settings updated"}
 
 
 @app.get("/config/yaml")
-async def get_config_yaml(api_key: str = Depends(get_api_key)):
+async def get_config_yaml():
     """Get full config.yaml content."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -379,7 +291,7 @@ async def get_config_yaml(api_key: str = Depends(get_api_key)):
 
 
 @app.post("/config/yaml")
-async def update_config_yaml(content: dict, api_key: str = Depends(get_api_key)):
+async def update_config_yaml(content: dict):
     """Update config.yaml entirely."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -400,14 +312,15 @@ async def update_config_yaml(content: dict, api_key: str = Depends(get_api_key))
 # Models endpoints
 
 @app.get("/models", response_model=ModelsResponse)
-async def get_models(provider: str = "openrouter", force_refresh: bool = False, api_key: str = Depends(get_api_key)):
+async def get_models(provider: str = "openrouter", force_refresh: bool = False):
     """Get available models for a provider."""
     if provider == "openrouter":
         from clawlet.providers.openrouter import OpenRouterProvider
         
         cache = get_models_cache()
         models = cache.get_models(force_refresh=force_refresh)
-        updated_at = cached.get("updated_at", "") if cached else ""
+        cache_info = cache.get_cache_info() or {}
+        updated_at = cache_info.get("updated_at", "")
         
         return ModelsResponse(models=models, updated_at=updated_at)
     else:
@@ -415,7 +328,7 @@ async def get_models(provider: str = "openrouter", force_refresh: bool = False, 
 
 
 @app.get("/models/cache-info", response_model=CacheInfoResponse)
-async def get_cache_info(provider: str = "openrouter", api_key: str = Depends(get_api_key)):
+async def get_cache_info(provider: str = "openrouter"):
     """Get models cache information."""
     if provider == "openrouter":
         cache = get_models_cache()
@@ -436,7 +349,7 @@ async def get_cache_info(provider: str = "openrouter", api_key: str = Depends(ge
 # Logs endpoint
 
 @app.get("/logs")
-async def get_logs(limit: int = 100, api_key: str = Depends(get_api_key)):
+async def get_logs(limit: int = 100):
     """Get recent logs."""
     # TODO: Implement actual log retrieval
     return {
@@ -459,7 +372,7 @@ async def get_logs(limit: int = 100, api_key: str = Depends(get_api_key)):
 # Console endpoint (WebSocket would be better, but HTTP for now)
 
 @app.get("/console")
-async def get_console_output(api_key: str = Depends(get_api_key)):
+async def get_console_output():
     """Get recent console output."""
     # TODO: Implement actual console output retrieval
     return {
@@ -475,9 +388,15 @@ async def get_console_output(api_key: str = Depends(get_api_key)):
 
 # Root
 
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus-style metrics endpoint."""
+    return Response(content=format_prometheus(), media_type="text/plain")
+
+
 @app.get("/")
 async def root():
-    """Root endpoint (public, no auth required)."""
+    """Root endpoint."""
     return {
         "name": "Clawlet Dashboard API",
         "version": "0.1.0",

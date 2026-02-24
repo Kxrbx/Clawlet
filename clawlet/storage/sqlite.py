@@ -3,7 +3,6 @@ Storage backend interfaces and SQLite implementation.
 """
 
 import aiosqlite
-import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -90,13 +89,13 @@ class SQLiteStorage(StorageBackend):
         return cursor.lastrowid
     
     async def get_messages(self, session_id: str, limit: int = 100) -> List[Message]:
-        """Get messages for a session."""
+        """Get messages for a session in chronological order."""
         cursor = await self._db.execute(
             """
             SELECT id, session_id, role, content, created_at 
             FROM messages 
             WHERE session_id = ? 
-            ORDER BY created_at DESC 
+            ORDER BY created_at ASC, id ASC 
             LIMIT ?
             """,
             (session_id, limit)
@@ -105,7 +104,7 @@ class SQLiteStorage(StorageBackend):
         rows = await cursor.fetchall()
         
         messages = []
-        for row in reversed(rows):  # Reverse to get chronological order
+        for row in rows:  # Already in chronological order
             messages.append(Message(
                 id=row[0],
                 session_id=row[1],
@@ -121,3 +120,12 @@ class SQLiteStorage(StorageBackend):
         if self._db:
             await self._db.close()
             logger.info("SQLite storage closed")
+    
+    async def health_check(self) -> None:
+        """Check database health."""
+        if not self._db:
+            raise RuntimeError("Database not initialized")
+        try:
+            await self._db.execute("SELECT 1")
+        except Exception as e:
+            raise RuntimeError(f"DB health check failed: {e}")

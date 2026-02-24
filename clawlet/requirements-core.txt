@@ -1,0 +1,15 @@
+# Core dependencies for Clawlet agent
+loguru==0.7.2
+pydantic==2.9.2
+pydantic-settings==2.6.0
+typer==0.9.4
+rich==13.9.4
+httpx==0.27.2
+aiosqlite==0.20.0
+pyyaml==6.0.2
+python-telegram-bot==21.6
+fastapi==0.115.6
+uvicorn==0.32.0
+questionary==2.0.1
+# Optional: tenacity for retries (not yet used)
+tenacity==9.0.0

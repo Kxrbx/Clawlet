@@ -8,6 +8,7 @@ import httpx
 from loguru import logger
 
 from clawlet.providers.base import BaseProvider, LLMResponse
+from clawlet.utils.security import mask_secrets
 
 
 # Default models list (fallback when API is unavailable)
@@ -102,6 +103,8 @@ class OpenRouterProvider(BaseProvider):
                 logger.debug(f"Message {i} (tool) has tool_call_id: {msg['tool_call_id']}")
         
         try:
+            # Log headers with secrets masked
+            logger.debug(f"OpenRouter request headers: {mask_secrets(str(client.headers))}")
             logger.debug(f"Sending request to OpenRouter API...")
             response = await client.post("/chat/completions", json=payload)
             logger.debug(f"OpenRouter response received: status={response.status_code}")
@@ -136,7 +139,10 @@ class OpenRouterProvider(BaseProvider):
             )
             
         except httpx.HTTPStatusError as e:
-            logger.error(f"OpenRouter HTTP error: {e.response.status_code} - {e.response.text}")
+            error_text = mask_secrets(e.response.text)
+            if len(error_text) > 500:
+                error_text = error_text[:500] + "... [truncated]"
+            logger.error(f"OpenRouter HTTP error: {e.response.status_code} - {error_text}")
             raise
         except Exception as e:
             logger.error(f"OpenRouter error: {e}")

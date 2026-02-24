@@ -2,32 +2,31 @@
 Agent loop - the core processing engine.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
-import os
 import re
-import signal
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional, TYPE_CHECKING
+import httpx
 
 from loguru import logger
 
-from clawlet.bus.queue import OutboundMessage
+if TYPE_CHECKING:
+    from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
+
 from clawlet.agent.identity import Identity
-from clawlet.agent.memory import MemoryManager
-from clawlet.agent.tool_parser import ToolCallParser
-from clawlet.exceptions import (
-    ProviderError,
-    ProviderConnectionError,
-    ProviderAuthError,
-    ProviderRateLimitError,
-    ToolExecutionError,
-    AgentError,
-    ClawletError,
-)
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult
+from clawlet.agent.memory import MemoryManager
+from clawlet.storage.sqlite import SQLiteStorage
+from clawlet.config import StorageConfig
+from clawlet.metrics import get_metrics
+
 
 
 @dataclass
@@ -41,41 +40,7 @@ class Message:
     def to_dict(self) -> dict:
         d = {"role": self.role, "content": self.content}
         if self.tool_calls:
-            # Transform tool_calls to OpenAI API format:
-            # {"id": "...", "type": "function", "function": {"name": "...", "arguments": "{...}"}}
-            formatted_tool_calls = []
-            for tc in self.tool_calls:
-                # Handle both dict and object formats
-                if isinstance(tc, dict):
-                    tc_id = tc.get("id")
-                    tc_name = tc.get("name")
-                    tc_args = tc.get("arguments", {})
-                else:
-                    tc_id = tc.id
-                    tc_name = tc.name
-                    tc_args = tc.arguments
-                
-                # Convert arguments dict to JSON string
-                if isinstance(tc_args, dict):
-                    args_str = json.dumps(tc_args)
-                else:
-                    args_str = str(tc_args)
-                
-                formatted_tool_calls.append({
-                    "id": tc_id,
-                    "type": "function",
-                    "function": {
-                        "name": tc_name,
-                        "arguments": args_str
-                    }
-                })
-            
-            d["tool_calls"] = formatted_tool_calls
-        
-        # Include tool_call_id for tool role messages
-        if self.role == "tool" and self.metadata.get("tool_call_id"):
-            d["tool_call_id"] = self.metadata["tool_call_id"]
-        
+            d["tool_calls"] = self.tool_calls
         return d
 
 
@@ -103,10 +68,6 @@ class AgentLoop:
     MAX_HISTORY = 100  # Maximum messages to keep
     CONTEXT_WINDOW = 20  # Messages to include in LLM context
     
-    # Memory management limits
-    MAX_MESSAGE_SIZE = 10 * 1024  # 10KB max per message content
-    MAX_TOTAL_HISTORY_SIZE = 1024 * 1024  # 1MB max total history size
-    
     def __init__(
         self,
         bus: "MessageBus",
@@ -116,12 +77,7 @@ class AgentLoop:
         tools: Optional[ToolRegistry] = None,
         model: Optional[str] = None,
         max_iterations: int = 10,
-        memory: Optional[MemoryManager] = None,
-        streaming: bool = False,
-        max_history: int = 100,
-        context_window: int = 20,
-        max_message_size: int = 10 * 1024,
-        max_total_history_size: int = 1024 * 1024,
+        storage_config: Optional[StorageConfig] = None,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -130,30 +86,69 @@ class AgentLoop:
         self.tools = tools or ToolRegistry()
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
-        self.memory = memory or MemoryManager(self.workspace)
-        self.streaming = streaming
         
-        # History limits - configurable
-        self.max_history = max_history
-        self.context_window = context_window
-        self.max_message_size = max_message_size
-        self.max_total_history_size = max_total_history_size
+        # Initialize memory manager (long-term persistence to MEMORY.md)
+        self.memory = MemoryManager(workspace)
         
+        # Initialize storage backend (SQLite for message history)
+        if storage_config is None:
+            storage_config = StorageConfig(backend="sqlite")
+        
+        if storage_config.backend == "sqlite":
+            db_path = Path(storage_config.sqlite.path).expanduser()
+            self.storage = SQLiteStorage(db_path)
+        elif storage_config.backend == "postgres":
+            from clawlet.storage.postgres import PostgresStorage
+            pg = storage_config.postgres
+            self.storage = PostgresStorage(
+                host=pg.host,
+                port=pg.port,
+                database=pg.database,
+                user=pg.user,
+                password=pg.password,
+            )
+        else:
+            raise ValueError(f"Unsupported storage backend: {storage_config.backend}")
+        
+        # Initialize storage and load recent history
         self._running = False
-        self._task = None
         self._history: list[Message] = []
-        self._tool_parser = ToolCallParser()
+        self._session_id = self._generate_session_id()
+        
+        # Circuit breaker for provider failures
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 5
+        self._circuit_open_until: Optional[datetime] = None
+        self._circuit_timeout_seconds = 30
         
         logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
-        logger.debug(f"Available tools: {[t.name for t in self.tools.all_tools()]}")
-        
-        # Set up signal handlers for graceful shutdown
-        self.setup_signal_handlers()
     
+    async def _initialize_storage(self) -> None:
+        """Initialize storage and load recent history."""
+        try:
+            await self.storage.initialize()
+            # Load recent messages from storage to populate history
+            stored_messages = await self.storage.get_messages(self._session_id, limit=self.MAX_HISTORY)
+            # stored are in chronological order (oldest first due to reversal), convert to our Message format
+            for msg in stored_messages:
+                self._history.append(Message(
+                    role=msg.role,
+                    content=msg.content,
+                    metadata={},
+                    tool_calls=[]
+                ))
+            logger.info(f"Loaded {len(self._history)} messages from storage")
+        except Exception as e:
+            logger.error(f"Failed to initialize storage: {e}")
+            # Continue without storage — will use in-memory only
+
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
+        # Ensure storage is initialized
+        if not hasattr(self.storage, '_db') or self.storage._db is None:
+            await self._initialize_storage()
+        
         self._running = True
-        self._task = asyncio.current_task()
         logger.info("Agent loop started")
         
         while self._running:
@@ -174,12 +169,12 @@ class AgentLoop:
                         await self.bus.publish_outbound(response)
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
-                    # Send error response with sanitized message
-                    user_message = self._get_user_friendly_error(e, "message processing")
+                    # Send error response
+                    from clawlet.bus.queue import OutboundMessage
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=user_message
+                        content=f"Sorry, I encountered an error: {str(e)}"
                     ))
             except asyncio.TimeoutError:
                 continue
@@ -189,79 +184,113 @@ class AgentLoop:
     
     def stop(self) -> None:
         """Stop the agent loop."""
-        self.memory.save_long_term()
-        
         self._running = False
         logger.info("Agent loop stopping")
-    
-    def setup_signal_handlers(self) -> None:
-        """Set up signal handlers for graceful shutdown."""
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-            self.stop()
-            raise KeyboardInterrupt()
+
+
+    def _generate_session_id(self) -> str:
+        """Generate a unique session ID based on workspace and start time."""
+        import hashlib
+        seed = f"{self.workspace}-{datetime.now(UTC).isoformat()}"
+        return hashlib.md5(seed.encode()).hexdigest()[:12]
+
+    async def _initialize_storage(self) -> None:
+        """Initialize storage and load recent history."""
+        try:
+            await self.storage.initialize()
+            # Load recent messages from storage to populate history
+            stored_messages = await self.storage.get_messages(self._session_id, limit=self.MAX_HISTORY)
+            for msg in stored_messages:
+                self._history.append(Message(
+                    role=msg.role,
+                    content=msg.content,
+                    metadata={},
+                    tool_calls=[]
+                ))
+            logger.info(f"Loaded {len(self._history)} messages from storage")
+        except Exception as e:
+            logger.error(f"Failed to initialize storage: {e}")
+
+    async def _persist_message(self, role: str, content: str, metadata: dict = None) -> None:
+        """Persist a message to storage and long-term memory."""
+        # Save to storage
+        try:
+            if hasattr(self.storage, "_db") and self.storage._db:
+                await self.storage.store_message(
+                    session_id=self._session_id,
+                    role=role,
+                    content=content
+                )
+        except Exception as e:
+            logger.warning(f"Failed to store message in DB: {e}")
         
-        # Register signal handlers
-        if hasattr(signal, 'SIGTERM'):
-            signal.signal(signal.SIGTERM, signal_handler)
-        if hasattr(signal, 'SIGINT'):
-            signal.signal(signal.SIGINT, signal_handler)
-        logger.debug("Signal handlers registered for graceful shutdown")
-    
-    def _get_user_friendly_error(self, error: Exception, context: str = "") -> str:
-        """Generate a user-friendly error message while logging details internally.
-        
-        This method sanitizes error messages to prevent leaking internal
-        information to users, while still logging detailed errors for debugging.
-        
-        Args:
-            error: The exception that was raised
-            context: Optional context about where the error occurred
+        # Save to long-term memory (MEMORY.md) — only important messages
+        if role in ("assistant", "user"):
+            importance = 5
+            if role == "assistant":
+                importance = 7
+            if len(content) > 200:
+                importance += 1
+            keywords = ["important", "remember", "todo", "task", "remind", "note", "save", "key", "critical"]
+            if any(k in content.lower() for k in keywords):
+                importance += 2
             
-        Returns:
-            A sanitized, user-friendly error message
-        """
-        # Log the detailed error internally
-        error_type = type(error).__name__
-        error_details = str(error)
-        
-        if isinstance(error, ProviderConnectionError):
-            logger.error(f"Provider connection error in {context}: {error_details}")
-            return "Sorry, I'm having trouble connecting to the AI service. Please try again."
-        
-        elif isinstance(error, ProviderAuthError):
-            logger.error(f"Provider authentication error in {context}: {error_details}")
-            return "Sorry, there's an issue with the AI service configuration. Please contact support."
-        
-        elif isinstance(error, ProviderRateLimitError):
-            retry_after = getattr(error, 'retry_after', None)
-            logger.warning(f"Rate limit exceeded in {context}: {error_details}")
-            if retry_after:
-                return f"Sorry, I'm receiving too many requests. Please try again in {retry_after} seconds."
-            return "Sorry, I'm receiving too many requests. Please try again later."
-        
-        elif isinstance(error, ProviderError):
-            logger.error(f"Provider error in {context}: {error_type} - {error_details}")
-            return "Sorry, I encountered an issue with the AI service. Please try again."
-        
-        elif isinstance(error, ToolExecutionError):
-            tool_name = error.details.get("tool", "unknown")
-            logger.error(f"Tool execution error in {context}: {tool_name} - {error_details}")
-            return f"Sorry, I encountered an error while trying to use a tool. Please try again."
-        
-        elif isinstance(error, AgentError):
-            logger.error(f"Agent error in {context}: {error_type} - {error_details}")
-            return "Sorry, I encountered an error processing your request. Please try again."
-        
-        elif isinstance(error, ClawletError):
-            logger.error(f"Clawlet error in {context}: {error_type} - {error_details}")
-            return "Sorry, I encountered an error. Please try again."
-        
-        else:
-            # For unknown exceptions, log full details but show generic message
-            logger.exception(f"Unexpected error in {context}: {error_type} - {error_details}")
-            return "Sorry, I encountered an unexpected error. Please try again."
+            key = f"{role}_{len(self._history)}_{int(datetime.now(UTC).timestamp())}"
+            try:
+                self.memory.remember(
+                    key=key,
+                    value=content,
+                    category="conversation",
+                    importance=importance
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save to memory: {e}")
     
+    async def _call_provider_with_retry(self, messages: list[dict]) -> LLMResponse:
+        """Call LLM provider with retry, exponential backoff, and circuit breaker."""
+        # Check circuit breaker first
+        now = datetime.now(UTC)
+        if self._circuit_open_until and now < self._circuit_open_until:
+            raise RuntimeError(f"Circuit breaker open until {self._circuit_open_until.isoformat()}")
+        elif self._circuit_open_until and now >= self._circuit_open_until:
+            logger.info("Circuit breaker timeout elapsed, resetting")
+            self._circuit_open_until = None
+            self._consecutive_errors = 0
+        
+        max_retries = 3
+        base_delay = 2  # seconds
+        start_time = time.time()
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = await self.provider.complete(
+                    messages=messages,
+                    model=self.model,
+                    temperature=0.7,
+                )
+                # Success: reset error counter
+                self._consecutive_errors = 0
+                elapsed = time.time() - start_time
+                if elapsed > 10.0:
+                    logger.warning(f"LLM call took {elapsed:.2f}s (exceeds 10s threshold)")
+                else:
+                    logger.debug(f"LLM call completed in {elapsed:.2f}s")
+                return response
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                self._consecutive_errors += 1
+                logger.warning(f"Provider call failed (attempt {attempt}/{max_retries}): {e}")
+                if attempt >= max_retries:
+                    # Check if we need to trip circuit breaker
+                    if self._consecutive_errors >= self._max_consecutive_errors:
+                        self._circuit_open_until = now + timedelta(seconds=self._circuit_timeout_seconds)
+                        logger.error(f"Circuit breaker tripped! Open until {self._circuit_open_until.isoformat()}")
+                    raise
+                # Exponential backoff
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.info(f"Retrying in {delay}s...")
+                await asyncio.sleep(delay)
+        raise RuntimeError("Unreachable: retry loop exhausted")
+
     async def _process_message(self, msg: "InboundMessage") -> Optional["OutboundMessage"]:
         """
         Process a single inbound message with tool calling support.
@@ -276,12 +305,20 @@ class AgentLoop:
         channel = msg.channel
         chat_id = msg.chat_id
         
+        # Get metrics instance
+        metrics = get_metrics()
+        
+        # Validate input size (max 10k chars)
+        if len(user_message) > 10000:
+            logger.warning(f"Message from {chat_id} exceeds 10k chars, truncating")
+            user_message = user_message[:10000]
+        
         logger.info(f"Processing message from {channel}/{chat_id}: {user_message[:50]}...")
         
-        # Truncate user message if needed before adding to history
-        user_msg = Message(role="user", content=user_message)
-        user_msg = self._truncate_message(user_msg)
-        self._history.append(user_msg)
+        # Add to history
+        self._history.append(Message(role="user", content=user_message))
+        # Persist message
+        asyncio.create_task(self._persist_message("user", user_message))
         
         # Trim history periodically
         self._trim_history()
@@ -289,147 +326,72 @@ class AgentLoop:
         # Iterative tool calling loop
         iteration = 0
         final_response = None
+        is_error = False
         
         while iteration < self.max_iterations:
             iteration += 1
-            
-            # Periodic memory save every 5 iterations
-            if iteration % 5 == 0:
-                self.memory.save_long_term()
-                logger.debug(f"Memory saved at iteration {iteration}")
             
             # Build messages for LLM
             messages = self._build_messages()
             
             try:
-                # Call LLM provider (streaming or non-streaming)
-                if self.streaming:
-                    response: LLMResponse = await self._process_streaming_response(
-                        messages=messages,
-                        model=self.model,
-                        temperature=0.7,
-                    )
-                else:
-                    openai_tools = self.tools.to_openai_tools() if self.tools else []
-                    response: LLMResponse = await self.provider.complete(
-                        messages=messages,
-                        model=self.model,
-                        temperature=0.7,
-                        tools=openai_tools if openai_tools else None,
-                    )
+                # Call LLM provider with retry and circuit breaker
+                response: LLMResponse = await self._call_provider_with_retry(messages)
                 
                 response_content = response.content
                 
-                # Check for streaming errors (empty response with error finish_reason)
-                if not response_content and hasattr(response, 'finish_reason') and response.finish_reason == "error":
-                    logger.error("Streaming response failed with error")
-                    raise Exception("Streaming response failed")
-                
                 # Check for tool calls in response
-                # First check if tool_calls exist in the response object (from API)
-                # Then fall back to parsing from content text
-                tool_calls = []
+                tool_calls = self._extract_tool_calls(response_content)
                 
-                if hasattr(response, 'tool_calls') and response.tool_calls:
-                    # Convert API tool_calls format to ToolCall objects
-                    for tc in response.tool_calls:
-                        # OpenAI API format: {id, type, function: {name, arguments}}
-                        tc_id = tc.get("id", f"call_{id(tc)}")
-                        func = tc.get("function", {})
-                        tc_name = func.get("name", "")
-                        tc_args = func.get("arguments", "{}")
-                        
-                        # Parse arguments as JSON
-                        try:
-                            args_dict = json.loads(tc_args) if isinstance(tc_args, str) else tc_args
-                        except json.JSONDecodeError:
-                            args_dict = {"raw": tc_args}
-                        
-                        tool_calls.append(ToolCall(id=tc_id, name=tc_name, arguments=args_dict))
-                else:
-                    # Fall back to parsing from content text
-                    tool_calls = self._extract_tool_calls(response_content)
-                
-                # Filter out tool calls that don't exist in the registry
-                valid_tool_calls = []
-                for tc in tool_calls:
-                    tool_exists = self.tools.get(tc.name) is not None if self.tools else False
-                    if tool_exists:
-                        valid_tool_calls.append(tc)
-                    else:
-                        logger.warning(f"[OPTIMIZE] Filtering out invalid tool '{tc.name}' - not in registry")
-                
-                # Check if we should use the response content instead of tool calls
-                has_valid_tools = len(valid_tool_calls) > 0
-                has_any_tool_calls = len(tool_calls) > 0
-                has_invalid_tools = has_any_tool_calls and not has_valid_tools
-                has_meaningful_content = response_content and len(response_content.strip()) > 50
-                
-                # State machine approach: handle each case clearly
-                # Case 1: Valid tool calls → execute them and continue loop
-                if has_valid_tools:
-                    logger.info("[OPTIMIZE] Valid tool calls present - executing tools")
-                    tool_calls = valid_tool_calls
-
-                    # Add assistant message with tool calls (truncate if needed)
-                    assistant_msg = Message(
+                if tool_calls:
+                    # Add assistant message with tool calls
+                    self._history.append(Message(
                         role="assistant",
                         content=response_content,
                         tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
-                    )
-                    assistant_msg = self._truncate_message(assistant_msg)
-                    self._history.append(assistant_msg)
+                    ))
+                    asyncio.create_task(self._persist_message("assistant", response_content))
                     
                     # Execute each tool call
                     for tc in tool_calls:
                         result = await self._execute_tool(tc)
                         
-                        # Add tool result to history (truncate if needed - tool results can be large)
-                        tool_content = result.output if result.success else f"Error: {result.error}"
-                        tool_msg = Message(
+                        # Add tool result to history
+                        self._history.append(Message(
                             role="tool",
-                            content=tool_content,
+                            content=result.output if result.success else f"Error: {result.error}",
                             metadata={"tool_call_id": tc.id, "tool_name": tc.name}
-                        )
-                        tool_msg = self._truncate_message(tool_msg)
-                        self._history.append(tool_msg)
+                        ))
+                        asyncio.create_task(self._persist_message("tool", result.output if result.success else f"Error: {result.error}"))
                     
                     # Continue loop to get next response
                     continue
                 
-                # Case 2: Invalid tools + meaningful content → use content as response
-                if has_invalid_tools and has_meaningful_content:
-                    logger.info("[OPTIMIZE] Response has meaningful content but only invalid tool calls - using content as response")
-                    final_assistant_msg = Message(role="assistant", content=response_content)
-                    final_assistant_msg = self._truncate_message(final_assistant_msg)
-                    self._history.append(final_assistant_msg)
-                    final_response = response_content
-                    break
-                
-                # Case 3: Invalid tools + no meaningful content → fallback
-                if has_invalid_tools and not has_meaningful_content:
-                    logger.warning("[OPTIMIZE] No valid tool calls and no meaningful content")
-                    final_response = response_content or "I couldn't process that request."
-                    break
-                
-                # Case 4: No tool calls at all → return content as final response
-                # This is the final response with no tool calls
-                final_assistant_msg = Message(role="assistant", content=response_content)
-                final_assistant_msg = self._truncate_message(final_assistant_msg)
-                self._history.append(final_assistant_msg)
+                # No tool calls - this is the final response
+                self._history.append(Message(role="assistant", content=response_content))
+                asyncio.create_task(self._persist_message("assistant", response_content))
                 final_response = response_content
                 break
                 
             except Exception as e:
                 logger.error(f"Error in agent loop iteration {iteration}: {e}")
-                final_response = self._get_user_friendly_error(e, f"agent loop iteration {iteration}")
+                final_response = f"Sorry, I encountered an error: {str(e)}"
+                is_error = True
                 break
         
         if final_response is None:
             final_response = "I reached my maximum number of iterations. Please try again."
+            is_error = True
         
         logger.info(f"Final response: {len(final_response)} chars (iterations: {iteration})")
         
+        # Update metrics
+        if is_error:
+            metrics.inc_errors()
+        else:
+            metrics.inc_messages()
+        
+        from clawlet.bus.queue import OutboundMessage
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -437,70 +399,45 @@ class AgentLoop:
         )
     
     def _extract_tool_calls(self, content: str) -> list[ToolCall]:
-        """Extract tool calls from LLM response content.
+        """Extract tool calls from LLM response content."""
+        tool_calls = []
         
-        Delegates to ToolCallParser for parsing various formats.
-        """
-        parsed = self._tool_parser.parse(content)
-        return [
-            ToolCall(id=p.id, name=p.name, arguments=p.arguments)
-            for p in parsed
-        ]
-    
-    async def _process_streaming_response(
-        self,
-        messages: list[dict],
-        model: str,
-        temperature: float,
-    ) -> LLMResponse:
-        """Process a streaming response from the LLM provider.
+        # Pattern for tool calls in various formats
+        # Format 1: <tool_call name="..." arguments="..."/>
+        pattern1 = r'<tool_call\s+name="([^"]+)"\s+arguments=\'([^\']+)\'\s*/?>'
+        matches1 = re.findall(pattern1, content)
         
-        Accumulates all chunks into a full response before processing
-        tool calls (which come after content in streaming mode).
+        for i, (name, args_str) in enumerate(matches1):
+            try:
+                args = json.loads(args_str)
+                tool_calls.append(ToolCall(
+                    id=f"call_{i}",
+                    name=name,
+                    arguments=args,
+                ))
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse tool arguments: {args_str}")
         
-        Args:
-            messages: The messages to send to the LLM
-            model: The model to use
-            temperature: The temperature setting
-            
-        Returns:
-            LLMResponse with accumulated content
-        """
-        logger.debug("Starting streaming response processing")
+        # Format 2: JSON block with tool_call
+        pattern2 = r'```json\s*\n(tool_call)?\s*\n?([\s\S]*?)\n```'
+        matches2 = re.findall(pattern2, content, re.IGNORECASE)
         
-        # Get tools for streaming
-        openai_tools = self.tools.to_openai_tools() if self.tools else []
+        for i, (_, json_str) in enumerate(matches2):
+            try:
+                data = json.loads(json_str)
+                if isinstance(data, dict) and "name" in data:
+                    tool_calls.append(ToolCall(
+                        id=f"call_json_{i}",
+                        name=data["name"],
+                        arguments=data.get("arguments", data.get("parameters", {})),
+                    ))
+            except json.JSONDecodeError:
+                pass
         
-        # Accumulate chunks
-        accumulated_content = ""
-        try:
-            async for chunk in self.provider.stream(
-                messages=messages,
-                model=model,
-                temperature=temperature,
-                tools=openai_tools if openai_tools else None,
-            ):
-                accumulated_content += chunk
-                logger.debug(f"Stream chunk received: {len(chunk)} chars, total: {len(accumulated_content)}")
-        except Exception as e:
-            logger.error(f"Error during streaming response: {e}")
-            # Return empty content on error - the caller will handle the failure
-            return LLMResponse(
-                content="",
-                model=model,
-                usage={},
-                finish_reason="error"
-            )
+        if tool_calls:
+            logger.info(f"Extracted {len(tool_calls)} tool call(s)")
         
-        logger.debug(f"Streaming complete, total content: {len(accumulated_content)} chars")
-        
-        # Return as LLMResponse for consistent handling
-        return LLMResponse(
-            content=accumulated_content,
-            model=model,
-            usage={},  # Usage info not available in streaming
-            finish_reason="stop"
-        )
+        return tool_calls
     
     async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call."""
@@ -514,7 +451,7 @@ class AgentLoop:
             logger.warning(f"Tool {tool_call.name} failed: {result.error}")
         
         return result
-
+    
     def _build_messages(self) -> list[dict]:
         """Build messages list for LLM."""
         messages = []
@@ -525,116 +462,18 @@ class AgentLoop:
         messages.append({"role": "system", "content": system_prompt})
         
         # Add recent history (limited by CONTEXT_WINDOW)
-        recent = self._history[-self.context_window:]
+        recent = self._history[-self.CONTEXT_WINDOW:]
         for msg in recent:
             messages.append(msg.to_dict())
         
         return messages
     
     def _trim_history(self) -> None:
-        """Trim history to prevent memory issues.
-        
-        Trims based on:
-        1. Maximum number of messages (MAX_HISTORY)
-        2. Maximum total history size in bytes (MAX_TOTAL_HISTORY_SIZE)
-        """
-        # First, truncate oversized messages
-        self._history = [self._truncate_message(msg) for msg in self._history]
-        
-        # Trim by message count
-        if len(self._history) > self.max_history:
-            self._history = self._history[-self.max_history:]
-            logger.debug(f"Trimmed history to {len(self._history)} messages (count limit)")
-        
-        # Trim by total size
-        self._trim_by_size()
-        
-        # Log memory usage after trimming
-        # Note: Removed debug level check since loguru doesn't have simple level property
-        stats = self.get_history_stats()
-        logger.debug(f"History stats: {stats['message_count']} messages, "
-                    f"{stats['memory_kb']}KB ({stats['utilization_percent']}% of max)")
-    
-    def _trim_by_size(self) -> None:
-        """Trim history to stay within max_total_history_size."""
-        current_size = self.get_memory_usage()
-        
-        if current_size <= self.max_total_history_size:
-            return
-        
-        # Remove oldest messages until under limit
-        while current_size > self.max_total_history_size and len(self._history) > 1:
-            removed_msg = self._history.pop(0)
-            removed_size = self._estimate_message_size(removed_msg)
-            current_size -= removed_size
-        
-        logger.info(f"Trimmed history by size: {len(self._history)} messages, ~{current_size / 1024:.1f}KB")
-    
-    def _truncate_message(self, msg: Message) -> Message:
-        """Truncate a message if it exceeds max_message_size.
-        
-        Args:
-            msg: The message to potentially truncate
-            
-        Returns:
-            Message with truncated content if needed
-        """
-        content_size = len(msg.content.encode('utf-8'))
-        
-        if content_size <= self.max_message_size:
-            return msg
-        
-        # Calculate how much to keep (leave room for truncation notice)
-        truncation_notice = f"\n\n[... Content truncated. Original size: {content_size} bytes ...]"
-        max_content_size = self.max_message_size - len(truncation_notice.encode('utf-8'))
-        
-        if max_content_size < 0:
-            max_content_size = 0
-        
-        truncated_content = msg.content[:max_content_size] + truncation_notice
-        
-        logger.debug(f"Truncated message from {content_size} to {len(truncated_content.encode('utf-8'))} bytes")
-        
-        # Return a new message with truncated content
-        return Message(
-            role=msg.role,
-            content=truncated_content,
-            metadata=msg.metadata,
-            tool_calls=msg.tool_calls
-        )
-    
-    def _estimate_message_size(self, msg: Message) -> int:
-        """Estimate the size of a message in bytes.
-        
-        Args:
-            msg: The message to estimate
-            
-        Returns:
-            Approximate size in bytes
-        """
-        size = len(msg.content.encode('utf-8'))
-        
-        # Add size for tool calls
-        if msg.tool_calls:
-            size += len(str(msg.tool_calls).encode('utf-8'))
-        
-        # Add size for metadata
-        if msg.metadata:
-            size += len(str(msg.metadata).encode('utf-8'))
-        
-        return size
-    
-    def get_memory_usage(self) -> int:
-        """Get the current memory usage of the history in bytes.
-        
-        Returns:
-            Total size of all messages in bytes
-        """
-        total_size = 0
-        for msg in self._history:
-            total_size += self._estimate_message_size(msg)
-        
-        return total_size
+        """Trim history to prevent unbounded growth."""
+        if len(self._history) > self.MAX_HISTORY:
+            # Keep the most recent messages
+            self._history = self._history[-self.MAX_HISTORY:]
+            logger.debug(f"Trimmed history to {len(self._history)} messages")
     
     def clear_history(self) -> None:
         """Clear all history."""
@@ -645,31 +484,20 @@ class AgentLoop:
         """Get current history length."""
         return len(self._history)
     
-    def get_history_stats(self) -> dict:
-        """Get detailed statistics about the history.
-        
-        Returns:
-            Dictionary with history statistics
-        """
-        memory_bytes = self.get_memory_usage()
-        message_count = len(self._history)
-        
-        return {
-            "message_count": message_count,
-            "memory_bytes": memory_bytes,
-            "memory_kb": round(memory_bytes / 1024, 2),
-            "memory_mb": round(memory_bytes / (1024 * 1024), 2),
-            "max_messages": self.max_history,
-            "max_size_bytes": self.max_total_history_size,
-            "max_size_mb": self.max_total_history_size / (1024 * 1024),
-            "utilization_percent": round((memory_bytes / self.max_total_history_size) * 100, 2) if self.max_total_history_size > 0 else 0
-        }
-    
     async def close(self):
         """Clean up resources."""
-        # Save memory on shutdown
-        self.memory.save_long_term()
-        logger.info("Memory saved on shutdown")
+        # Save long-term memories
+        try:
+            self.memory.save_long_term()
+        except Exception as e:
+            logger.error(f"Failed to save long-term memory: {e}")
         
+        # Close storage
+        try:
+            await self.storage.close()
+        except Exception as e:
+            logger.error(f"Failed to close storage: {e}")
+        
+        # Close provider
         if hasattr(self.provider, 'close'):
             await self.provider.close()
