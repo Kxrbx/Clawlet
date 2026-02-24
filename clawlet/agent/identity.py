@@ -2,7 +2,7 @@
 Identity loader for reading SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md files.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 

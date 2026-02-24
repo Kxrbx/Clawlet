@@ -10,7 +10,7 @@ import subprocess
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import List
 import uvicorn
@@ -21,6 +21,7 @@ from clawlet import Config, load_config
 from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
 from clawlet.providers.models_cache import get_models_cache
+from clawlet.metrics import format_prometheus
 
 
 # Pydantic models
@@ -386,6 +387,12 @@ async def get_console_output():
 
 
 # Root
+
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus-style metrics endpoint."""
+    return Response(content=format_prometheus(), media_type="text/plain")
+
 
 @app.get("/")
 async def root():

@@ -2,13 +2,15 @@
 Clawlet CLI commands.
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 import getpass
 
 import typer
@@ -22,6 +24,9 @@ from clawlet import __version__
 # Sakura color scheme
 SAKURA_PINK = "#FF69B4"
 SAKURA_LIGHT = "#FFB7C5"
+
+if TYPE_CHECKING:
+    from clawlet.agent.loop import AgentLoop
 
 app = typer.Typer(
     name="clawlet",
@@ -1155,6 +1160,108 @@ heartbeat:
   quiet_hours_start: 2  # 2am UTC
   quiet_hours_end: 9    # 9am UTC
 """
+
+
+# ── Sessions management ───────────────────────────────────────────────────────
+
+@app.command()
+def sessions(
+    workspace: Optional[Path] = typer.Option(None, "--workspace", help="Workspace directory"),
+    export: Optional[Path] = typer.Option(None, "--export", help="Export sessions to JSON file"),
+    limit: int = typer.Option(10, "--limit", help="Number of recent sessions to list"),
+):
+    """🌸 List and export conversation sessions from storage."""
+    workspace_path = workspace or get_workspace_path()
+    
+    # Determine DB path from config
+    config_path = workspace_path / "config.yaml"
+    if not config_path.exists():
+        console.print("[red]Config file not found[/red]")
+        raise typer.Exit(1)
+    
+    try:
+        import yaml
+        from clawlet.config import Config
+        from clawlet.storage.sqlite import SQLiteStorage
+        from clawlet.storage.postgres import PostgresStorage
+        from pathlib import Path
+        
+        config = Config.from_yaml(config_path)
+        
+        # Select storage backend
+        if config.storage.backend == "sqlite":
+            db_path = Path(config.storage.sqlite.path).expanduser()
+            storage = SQLiteStorage(db_path)
+        elif config.storage.backend == "postgres":
+            pg = config.storage.postgres
+            storage = PostgresStorage(
+                host=pg.host,
+                port=pg.port,
+                database=pg.database,
+                user=pg.user,
+                password=pg.password,
+            )
+        else:
+            console.print(f"[red]Unsupported storage backend: {config.storage.backend}[/red]")
+            raise typer.Exit(1)
+        
+        # Note: Need to run async init; we'll do it synchronously for CLI
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(storage.initialize())
+        
+        # For SQLite, we can query distinct session_ids directly
+        if config.storage.backend == "sqlite":
+            import aiosqlite
+            async def get_recent_sessions():
+                async with aiosqlite.connect(db_path) as db:
+                    # Get distinct session_ids ordered by latest activity
+                    cursor = await db.execute("""
+                        SELECT session_id, COUNT(*) as msg_count, MAX(created_at) as last_seen
+                        FROM messages
+                        GROUP BY session_id
+                        ORDER BY last_seen DESC
+                        LIMIT ?
+                    """, (limit,))
+                    rows = await cursor.fetchall()
+                    return rows
+            rows = loop.run_until_complete(get_recent_sessions())
+        else:
+            console.print("[yellow]Postgres sessions listing not implemented yet[/yellow]")
+            rows = []
+        
+        if not rows:
+            console.print("[dim]No sessions found[/dim]")
+        else:
+            print_section("Recent Sessions", f"Showing up to {limit} sessions")
+            for session_id, count, last_seen in rows:
+                console.print(f"│  {session_id[:12]}...  [{count} messages]  last: {last_seen}")
+            print_footer()
+        
+        # Export if requested
+        if export:
+            import json
+            # Export all messages for all sessions (or limit?)
+            export_data = []
+            if config.storage.backend == "sqlite":
+                async def export_all():
+                    async with aiosqlite.connect(db_path) as db:
+                        cursor = await db.execute("SELECT * FROM messages ORDER BY created_at DESC")
+                        rows = await cursor.fetchall()
+                        # Convert to dict
+                        cols = [desc[0] for desc in cursor.description]
+                        return [dict(zip(cols, row)) for row in rows]
+                all_msgs = loop.run_until_complete(export_all())
+                export.write_text(json.dumps(all_msgs, indent=2))
+                console.print(f"[green]✓ Exported {len(all_msgs)} messages to {export}[/green]")
+        
+        loop.run_until_complete(storage.close())
+        loop.close()
+        
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

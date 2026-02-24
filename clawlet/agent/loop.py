@@ -7,8 +7,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 import httpx
@@ -24,6 +25,7 @@ from clawlet.tools.registry import ToolRegistry, ToolResult
 from clawlet.agent.memory import MemoryManager
 from clawlet.storage.sqlite import SQLiteStorage
 from clawlet.config import StorageConfig
+from clawlet.metrics import get_metrics
 
 
 
@@ -189,7 +191,7 @@ class AgentLoop:
     def _generate_session_id(self) -> str:
         """Generate a unique session ID based on workspace and start time."""
         import hashlib
-        seed = f"{self.workspace}-{datetime.utcnow().isoformat()}"
+        seed = f"{self.workspace}-{datetime.now(UTC).isoformat()}"
         return hashlib.md5(seed.encode()).hexdigest()[:12]
 
     async def _initialize_storage(self) -> None:
@@ -233,18 +235,21 @@ class AgentLoop:
             if any(k in content.lower() for k in keywords):
                 importance += 2
             
-            key = f"{role}_{len(self._history)}_{int(datetime.utcnow().timestamp())}"
-            self.memory.remember(
-                key=key,
-                value=content,
-                category="conversation",
-                importance=importance
-            )
+            key = f"{role}_{len(self._history)}_{int(datetime.now(UTC).timestamp())}"
+            try:
+                self.memory.remember(
+                    key=key,
+                    value=content,
+                    category="conversation",
+                    importance=importance
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save to memory: {e}")
     
     async def _call_provider_with_retry(self, messages: list[dict]) -> LLMResponse:
         """Call LLM provider with retry, exponential backoff, and circuit breaker."""
         # Check circuit breaker first
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         if self._circuit_open_until and now < self._circuit_open_until:
             raise RuntimeError(f"Circuit breaker open until {self._circuit_open_until.isoformat()}")
         elif self._circuit_open_until and now >= self._circuit_open_until:
@@ -254,6 +259,7 @@ class AgentLoop:
         
         max_retries = 3
         base_delay = 2  # seconds
+        start_time = time.time()
         
         for attempt in range(1, max_retries + 1):
             try:
@@ -264,6 +270,11 @@ class AgentLoop:
                 )
                 # Success: reset error counter
                 self._consecutive_errors = 0
+                elapsed = time.time() - start_time
+                if elapsed > 10.0:
+                    logger.warning(f"LLM call took {elapsed:.2f}s (exceeds 10s threshold)")
+                else:
+                    logger.debug(f"LLM call completed in {elapsed:.2f}s")
                 return response
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 self._consecutive_errors += 1
@@ -294,6 +305,9 @@ class AgentLoop:
         channel = msg.channel
         chat_id = msg.chat_id
         
+        # Get metrics instance
+        metrics = get_metrics()
+        
         # Validate input size (max 10k chars)
         if len(user_message) > 10000:
             logger.warning(f"Message from {chat_id} exceeds 10k chars, truncating")
@@ -312,6 +326,7 @@ class AgentLoop:
         # Iterative tool calling loop
         iteration = 0
         final_response = None
+        is_error = False
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -361,12 +376,20 @@ class AgentLoop:
             except Exception as e:
                 logger.error(f"Error in agent loop iteration {iteration}: {e}")
                 final_response = f"Sorry, I encountered an error: {str(e)}"
+                is_error = True
                 break
         
         if final_response is None:
             final_response = "I reached my maximum number of iterations. Please try again."
+            is_error = True
         
         logger.info(f"Final response: {len(final_response)} chars (iterations: {iteration})")
+        
+        # Update metrics
+        if is_error:
+            metrics.inc_errors()
+        else:
+            metrics.inc_messages()
         
         from clawlet.bus.queue import OutboundMessage
         return OutboundMessage(
