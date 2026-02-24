@@ -89,6 +89,10 @@ class PostgresStorage:
             self._pool = None
             logger.info("PostgreSQL connection pool closed")
     
+    def is_initialized(self) -> bool:
+        """Check if storage is initialized and ready."""
+        return self._pool is not None
+    
     async def _create_tables(self) -> None:
         """Create necessary tables."""
         async with self._pool.acquire() as conn:

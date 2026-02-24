@@ -85,6 +85,10 @@ class AgentLoop:
         self.provider = provider
         self.tools = tools or ToolRegistry()
         self.model = model or provider.get_default_model()
+        # Validate model parameter
+        if not self.model or not isinstance(self.model, str) or not self.model.strip():
+            raise ValueError("Model must be a non-empty string")
+        self.model = self.model.strip()
         self.max_iterations = max_iterations
         
         # Initialize memory manager (long-term persistence to MEMORY.md)
@@ -121,32 +125,27 @@ class AgentLoop:
         self._circuit_open_until: Optional[datetime] = None
         self._circuit_timeout_seconds = 30
         
+        # Tool circuit breaker tracking
+        self._tool_failures: dict[str, int] = {}
+        self._tool_circuit_open_until: dict[str, datetime] = {}
+        self._tool_failure_threshold = 3
+        self._tool_circuit_timeout_seconds = 60
+        
+        # Persistence failure tracking
+        self._persist_failures = 0
+        
+        # Event to signal that storage initialization is complete
+        self._storage_ready = asyncio.Event()
+        
         logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
     
-    async def _initialize_storage(self) -> None:
-        """Initialize storage and load recent history."""
-        try:
-            await self.storage.initialize()
-            # Load recent messages from storage to populate history
-            stored_messages = await self.storage.get_messages(self._session_id, limit=self.MAX_HISTORY)
-            # stored are in chronological order (oldest first due to reversal), convert to our Message format
-            for msg in stored_messages:
-                self._history.append(Message(
-                    role=msg.role,
-                    content=msg.content,
-                    metadata={},
-                    tool_calls=[]
-                ))
-            logger.info(f"Loaded {len(self._history)} messages from storage")
-        except Exception as e:
-            logger.error(f"Failed to initialize storage: {e}")
-            # Continue without storage — will use in-memory only
-
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         # Ensure storage is initialized
-        if not hasattr(self.storage, '_db') or self.storage._db is None:
+        if not self.storage.is_initialized():
             await self._initialize_storage()
+        # Signal that storage is ready (whether initialization succeeded or not)
+        self._storage_ready.set()
         
         self._running = True
         logger.info("Agent loop started")
@@ -210,19 +209,37 @@ class AgentLoop:
             logger.info(f"Loaded {len(self._history)} messages from storage")
         except Exception as e:
             logger.error(f"Failed to initialize storage: {e}")
+        finally:
+            # Signal that storage initialization attempt has completed
+            self._storage_ready.set()
 
     async def _persist_message(self, role: str, content: str, metadata: dict = None) -> None:
         """Persist a message to storage and long-term memory."""
+        # Wait for storage to be ready (initialization attempt completed)
+        if not self._storage_ready.is_set():
+            await self._storage_ready.wait()
+        
         # Save to storage
         try:
-            if hasattr(self.storage, "_db") and self.storage._db:
+            if self.storage.is_initialized():
                 await self.storage.store_message(
                     session_id=self._session_id,
                     role=role,
                     content=content
                 )
+                # Reset failure count on success
+                self._persist_failures = 0
+            else:
+                # Storage not initialized (initialization failed), skip DB persistence
+                logger.debug("Storage not initialized, skipping DB persistence")
         except Exception as e:
             logger.warning(f"Failed to store message in DB: {e}")
+            # Increment storage error metric
+            get_metrics().inc_storage_errors()
+            self._persist_failures += 1
+            if self._persist_failures >= 5:
+                logger.error("Too many storage failures, aborting persistence.")
+                raise
         
         # Save to long-term memory (MEMORY.md) — only important messages
         if role in ("assistant", "user"):
@@ -440,15 +457,48 @@ class AgentLoop:
         return tool_calls
     
     async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
-        """Execute a tool call."""
-        logger.info(f"Executing tool: {tool_call.name} with args: {tool_call.arguments}")
+        """Execute a tool call with circuit breaker protection."""
+        tool_name = tool_call.name
+        now = datetime.now(UTC)
         
-        result = await self.tools.execute(tool_call.name, **tool_call.arguments)
+        # Check if circuit is open for this tool
+        if tool_name in self._tool_circuit_open_until:
+            if now < self._tool_circuit_open_until[tool_name]:
+                # Circuit is open, skip execution
+                logger.warning(f"Circuit open for tool '{tool_name}'. Skipping execution.")
+                return ToolResult(success=False, error=f"Tool '{tool_name}' is temporarily unavailable due to repeated failures.")
+            else:
+                # Circuit timeout expired, reset
+                logger.info(f"Circuit breaker timeout for tool '{tool_name}' expired, allowing test call")
+                self._tool_circuit_open_until.pop(tool_name, None)
+                self._tool_failures[tool_name] = 0  # reset failures
+        
+        logger.info(f"Executing tool: {tool_name} with args: {tool_call.arguments}")
+        
+        try:
+            result = await self.tools.execute(tool_name, **tool_call.arguments)
+        except Exception as e:
+            # Unexpected exception, wrap in ToolResult
+            result = ToolResult(success=False, error=str(e))
         
         if result.success:
-            logger.info(f"Tool {tool_call.name} succeeded: {result.output[:100]}...")
+            # Reset failure count on success
+            if tool_name in self._tool_failures:
+                self._tool_failures[tool_name] = 0
+            logger.info(f"Tool {tool_name} succeeded: {result.output[:100]}...")
         else:
-            logger.warning(f"Tool {tool_call.name} failed: {result.error}")
+            # Increment failure count
+            failures = self._tool_failures.get(tool_name, 0) + 1
+            self._tool_failures[tool_name] = failures
+            # Increment tool error metric
+            get_metrics().inc_tool_errors()
+            logger.warning(f"Tool {tool_name} failed: {result.error} (failures: {failures})")
+            
+            if failures >= self._tool_failure_threshold:
+                # Trip circuit breaker
+                open_until = now + timedelta(seconds=self._tool_circuit_timeout_seconds)
+                self._tool_circuit_open_until[tool_name] = open_until
+                logger.error(f"Circuit breaker tripped for tool '{tool_name}'! Open until {open_until.isoformat()}")
         
         return result
     
