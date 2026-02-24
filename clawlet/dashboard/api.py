@@ -7,10 +7,12 @@ from typing import Optional
 import asyncio
 import os
 import subprocess
+import secrets
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List
 import uvicorn
@@ -84,20 +86,90 @@ agent_status: dict = {
 }
 agent_process: Optional[subprocess.Popen] = None  # <-- ajouté
 
+# Dashboard API token (from env or generated)
+DASHBOARD_TOKEN: Optional[str] = None
+
+# Security scheme for Bearer token
+security = HTTPBearer(auto_error=False)
+
+
+def get_cors_origins() -> list[str]:
+    """Get CORS origins from environment variable."""
+    origins_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173")
+    # Split by comma and strip whitespace
+    origins = [origin.strip() for origin in origins_env.split(",") if origin.strip()]
+    if not origins:
+        origins = ["http://localhost:5173"]
+    return origins
+
+
+def get_dashboard_token() -> str:
+    """Get or generate dashboard API token."""
+    global DASHBOARD_TOKEN
+    if DASHBOARD_TOKEN is None:
+        token_env = os.environ.get("CLawlet_DASHBOARD_TOKEN")
+        if token_env:
+            DASHBOARD_TOKEN = token_env
+        else:
+            # Generate a random token and store it
+            # In production, this should be persisted in config
+            DASHBOARD_TOKEN = secrets.token_urlsafe(32)
+            logger.warning(
+                f"Generated random dashboard token (set CLawlet_DASHBOARD_TOKEN to persist): {DASHBOARD_TOKEN}"
+            )
+    return DASHBOARD_TOKEN
+
+
+async def verify_api_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> str:
+    """
+    Verify API token from Authorization header.
+
+    Args:
+        credentials: HTTP Authorization credentials
+
+    Returns:
+        The token if valid
+
+    Raises:
+        HTTPException: 401 if token is missing or invalid
+    """
+    expected_token = get_dashboard_token()
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header. Use: Bearer <token>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if credentials.credentials != expected_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return credentials.credentials
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager."""
     # Startup
     global config, health_checker
-    
+
     try:
         config = load_config()
         health_checker = HealthChecker()
-        
+
+        # Initialize dashboard token on startup
+        get_dashboard_token()
+
         logger.info("Dashboard API started")
         yield
-        
+
     finally:
         # Shutdown
         logger.info("Dashboard API stopped")
@@ -111,10 +183,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS
+# Add CORS with configurable origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,10 +217,11 @@ async def get_health():
 
 
 @app.get("/health/history")
-async def get_health_history(limit: int = 50):
+async def get_health_history(limit: int = 50, token: str = Depends(verify_api_token)):
     """Get recent health history."""
     try:
         from pathlib import Path
+        import json
         history_file = Path.home() / ".clawlet" / "health_history.jsonl"
         if not history_file.exists():
             return {"history": []}
@@ -161,11 +234,11 @@ async def get_health_history(limit: int = 50):
 
 
 @app.get("/health/detailed")
-async def get_detailed_health():
+async def get_detailed_health(token: str = Depends(verify_api_token)):
     """Get detailed health checks with provider/storage."""
     if health_checker is None:
         raise HTTPException(status_code=503, detail="Health checker not initialized")
-    
+
     try:
         result = await health_checker.check_all()
         return result
@@ -177,13 +250,13 @@ async def get_detailed_health():
 # Agent endpoints
 
 @app.get("/agent/status", response_model=AgentStatus)
-async def get_agent_status():
+async def get_agent_status(token: str = Depends(verify_api_token)):
     """Get current agent status."""
     return AgentStatus(**agent_status)
 
 
 @app.post("/agent/start")
-async def start_agent():
+async def start_agent(token: str = Depends(verify_api_token)):
     """Start the agent."""
     global agent_process
     
@@ -216,7 +289,7 @@ async def start_agent():
 
 
 @app.post("/agent/stop")
-async def stop_agent():
+async def stop_agent(token: str = Depends(verify_api_token)):
     """Stop the agent."""
     global agent_process, agent_status
     
@@ -244,7 +317,7 @@ async def stop_agent():
 # Settings endpoints
 
 @app.get("/settings", response_model=SettingsResponse)
-async def get_settings():
+async def get_settings(token: str = Depends(verify_api_token)):
     """Get current settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -259,7 +332,10 @@ async def get_settings():
 
 
 @app.post("/settings")
-async def update_settings(settings: SettingsUpdate):
+async def update_settings(
+    settings: SettingsUpdate,
+    token: str = Depends(verify_api_token)
+):
     """Update settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -279,7 +355,7 @@ async def update_settings(settings: SettingsUpdate):
 
 
 @app.get("/config/yaml")
-async def get_config_yaml():
+async def get_config_yaml(token: str = Depends(verify_api_token)):
     """Get full config.yaml content."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -291,7 +367,10 @@ async def get_config_yaml():
 
 
 @app.post("/config/yaml")
-async def update_config_yaml(content: dict):
+async def update_config_yaml(
+    content: dict,
+    token: str = Depends(verify_api_token)
+):
     """Update config.yaml entirely."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
@@ -312,7 +391,11 @@ async def update_config_yaml(content: dict):
 # Models endpoints
 
 @app.get("/models", response_model=ModelsResponse)
-async def get_models(provider: str = "openrouter", force_refresh: bool = False):
+async def get_models(
+    provider: str = "openrouter",
+    force_refresh: bool = False,
+    token: str = Depends(verify_api_token)
+):
     """Get available models for a provider."""
     if provider == "openrouter":
         from clawlet.providers.openrouter import OpenRouterProvider
@@ -328,7 +411,10 @@ async def get_models(provider: str = "openrouter", force_refresh: bool = False):
 
 
 @app.get("/models/cache-info", response_model=CacheInfoResponse)
-async def get_cache_info(provider: str = "openrouter"):
+async def get_cache_info(
+    provider: str = "openrouter",
+    token: str = Depends(verify_api_token)
+):
     """Get models cache information."""
     if provider == "openrouter":
         cache = get_models_cache()
@@ -349,7 +435,7 @@ async def get_cache_info(provider: str = "openrouter"):
 # Logs endpoint
 
 @app.get("/logs")
-async def get_logs(limit: int = 100):
+async def get_logs(limit: int = 100, token: str = Depends(verify_api_token)):
     """Get recent logs."""
     # TODO: Implement actual log retrieval
     return {
@@ -372,7 +458,7 @@ async def get_logs(limit: int = 100):
 # Console endpoint (WebSocket would be better, but HTTP for now)
 
 @app.get("/console")
-async def get_console_output():
+async def get_console_output(token: str = Depends(verify_api_token)):
     """Get recent console output."""
     # TODO: Implement actual console output retrieval
     return {
@@ -389,7 +475,7 @@ async def get_console_output():
 # Root
 
 @app.get("/metrics")
-async def get_metrics():
+async def get_metrics(token: str = Depends(verify_api_token)):
     """Prometheus-style metrics endpoint."""
     return Response(content=format_prometheus(), media_type="text/plain")
 
