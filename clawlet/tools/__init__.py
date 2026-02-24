@@ -8,6 +8,8 @@ Available tools:
 - ListDirTool: List directory contents
 - ShellTool: Execute shell commands (safe)
 - WebSearchTool: Search the web via Brave API
+- InstallSkillTool: Install skills from GitHub URLs
+- ListSkillsTool: List installed skills
 """
 
 from clawlet.tools.registry import (
@@ -23,6 +25,7 @@ from clawlet.tools.files import (
 )
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.web_search import WebSearchTool
+from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 
 # Convenience alias for all file operations
 class FileTool:
@@ -78,6 +81,10 @@ def create_default_tool_registry(allowed_dir: str = None, config=None) -> ToolRe
     
     registry.register(WebSearchTool(api_key=api_key))
     
+    # Add skill management tools
+    registry.register(InstallSkillTool())
+    registry.register(ListSkillsTool())
+    
     return registry
 
 __all__ = [
@@ -91,5 +98,7 @@ __all__ = [
     "FileTool",
     "ShellTool",
     "WebSearchTool",
+    "InstallSkillTool",
+    "ListSkillsTool",
     "create_default_tool_registry",
 ]

@@ -127,6 +127,71 @@ class SkillRegistry:
         
         self._skills[skill.name] = skill
         logger.info(f"Registered skill: {skill.name}")
+
+    def install_skill(self, github_url: str) -> tuple[bool, str]:
+        """
+        Install a skill from a GitHub URL.
+        
+        Args:
+            github_url: GitHub repository URL (e.g., https://github.com/owner/repo)
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        import re
+        import shutil
+        import subprocess
+        
+        # Parse GitHub URL to extract owner/repo
+        match = re.match(r'https://github\.com/([^/]+)/([^/]+)', github_url)
+        if not match:
+            # Try git@github.com format
+            match = re.match(r'git@github\.com:([^/]+)/([^/]+)', github_url)
+        
+        if not match:
+            return False, f"Invalid GitHub URL format: {github_url}"
+        
+        owner, repo = match.groups()
+        # Remove .git suffix if present
+        repo = repo.replace('.git', '')
+        
+        # Determine target directory
+        user_skills_dir = Path.home() / ".clawlet" / "skills"
+        target_dir = user_skills_dir / repo
+        
+        if target_dir.exists():
+            return True, f"Skill '{repo}' already installed at {target_dir}"
+        
+        # Create skills directory if needed
+        user_skills_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Clone the repository
+        try:
+            logger.info(f"Cloning {github_url} to {target_dir}")
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", github_url, str(target_dir)],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Git clone failed: {result.stderr}")
+                return False, f"Failed to clone repository: {result.stderr}"
+            
+            # Load the skill from the new directory
+            loaded = self.add_skill_directory(target_dir)
+            
+            if loaded > 0:
+                return True, f"Successfully installed skill '{repo}' from {github_url}"
+            else:
+                return True, f"Cloned {repo} but no SKILL.md found. Manual registration required."
+                
+        except subprocess.TimeoutExpired:
+            return False, "Git clone timed out"
+        except Exception as e:
+            logger.error(f"Failed to install skill: {e}")
+            return False, str(e)
     
     def unregister(self, name: str) -> None:
         """
