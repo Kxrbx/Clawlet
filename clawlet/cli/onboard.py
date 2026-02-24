@@ -871,7 +871,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         provider_config = ProviderConfig(
             primary="venice",
-            venice_ai=VeniceAIConfig(api_key=api_key, model=model),
+            venice=VeniceAIConfig(api_key=api_key, model=model),
         )
     
     # ============================================

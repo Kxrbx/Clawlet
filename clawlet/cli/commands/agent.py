@@ -161,9 +161,9 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         from clawlet.providers.synthetic import SyntheticProvider
         api_key = api_key or (config.provider.synthetic.api_key if config.provider.synthetic else "")
         provider = SyntheticProvider(api_key=api_key, default_model=effective_model)
-    elif primary_provider == "venice_ai":
+    elif primary_provider == "venice":
         from clawlet.providers.venice import VeniceProvider
-        api_key = api_key or (config.provider.venice_ai.api_key if config.provider.venice_ai else "")
+        api_key = api_key or (config.provider.venice.api_key if config.provider.venice else "")
         provider = VeniceProvider(api_key=api_key, default_model=effective_model)
     else:
         # Default fallback to openrouter
