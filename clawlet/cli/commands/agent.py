@@ -171,13 +171,18 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         logger.warning(f"Unknown provider '{primary_provider}', falling back to OpenRouter")
         provider = OpenRouterProvider(api_key=api_key, default_model=effective_model)
     
-    # Get Telegram configuration from the channels dict
-    # Config stores channels as a dict with keys like 'telegram', 'discord', etc.
-    telegram_cfg = config.channels.get("telegram", {})
+    # Get Telegram configuration
+    # Config can have telegram at root level OR nested in channels dict
+    # Check both locations for backwards compatibility
+    telegram_cfg = config.channels.get("telegram") if config.channels else None
+    if telegram_cfg is None:
+        # Fallback: check if telegram is at root level
+        telegram_cfg = getattr(config, 'telegram', {})
     
     from loguru import logger
     logger.debug(f"DEBUG: Full config.channels: {config.channels}")
     logger.debug(f"DEBUG: telegram_cfg from channels: {telegram_cfg}")
+    logger.debug(f"DEBUG: telegram_cfg type: {type(telegram_cfg)}")
     
     # Handle both raw dict and Pydantic model formats
     if isinstance(telegram_cfg, dict):

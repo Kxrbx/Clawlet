@@ -323,6 +323,8 @@ class HeartbeatSettings(BaseModel):
 class Config(BaseModel):
     """Main configuration."""
     provider: ProviderConfig
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    discord: DiscordConfig = Field(default_factory=DiscordConfig)
     channels: dict = Field(default_factory=lambda: {
         "telegram": TelegramConfig(),
         "discord": DiscordConfig(),
