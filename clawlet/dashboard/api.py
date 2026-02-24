@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 import asyncio
 import os
+import subprocess
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,6 +81,7 @@ agent_status: dict = {
     "messages_processed": 0,
     "uptime_seconds": 0,
 }
+agent_process: Optional[subprocess.Popen] = None  # <-- ajouté
 
 
 @asynccontextmanager
@@ -215,11 +217,24 @@ async def start_agent():
 @app.post("/agent/stop")
 async def stop_agent():
     """Stop the agent."""
+    global agent_process, agent_status
+    
     if not agent_status["running"]:
         return {"success": False, "message": "Agent not running"}
     
-    # TODO: Implement actual agent stop
+    if agent_process and agent_process.poll() is None:
+        try:
+            agent_process.terminate()
+            try:
+                agent_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                agent_process.kill()
+        except Exception as e:
+            logger.error(f"Error stopping agent: {e}")
+            return {"success": False, "message": f"Error stopping agent: {e}"}
+    
     agent_status["running"] = False
+    agent_status["pid"] = None
     
     logger.info("Agent stopped via API")
     return {"success": True, "message": "Agent stopped"}
@@ -303,7 +318,8 @@ async def get_models(provider: str = "openrouter", force_refresh: bool = False):
         
         cache = get_models_cache()
         models = cache.get_models(force_refresh=force_refresh)
-        updated_at = cached.get("updated_at", "") if cached else ""
+        cache_info = cache.get_cache_info() or {}
+        updated_at = cache_info.get("updated_at", "")
         
         return ModelsResponse(models=models, updated_at=updated_at)
     else:

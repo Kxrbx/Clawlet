@@ -4,6 +4,7 @@ Clawlet CLI commands.
 
 import asyncio
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -200,6 +201,8 @@ def agent(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
     channel: str = typer.Option("telegram", "--channel", "-c", help="Channel to use"),
+    log_file: Optional[Path] = typer.Option(None, "--log-file", help="File to write logs to"),
+    log_level: str = typer.Option("INFO", "--log-level", help="Logging level (DEBUG, INFO, WARNING, ERROR)"),
 ):
     """🌸 Start the Clawlet agent."""
     workspace_path = workspace or get_workspace_path()
@@ -207,6 +210,18 @@ def agent(
     if not workspace_path.exists():
         console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
         raise typer.Exit(1)
+    
+    # Configure logging to file if requested
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(log_file),
+            rotation="10 MB",
+            retention="7 days",
+            level=log_level.upper(),
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+        )
+        logger.info(f"Logging to file: {log_file}")
     
     print_sakura_banner()
     console.print(f"\n[{SAKURA_LIGHT}]Starting agent with {channel} channel...[/{SAKURA_LIGHT}]")
@@ -218,6 +233,36 @@ def agent(
         console.print("\n[yellow]Agent stopped.[/yellow]")
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def logs(
+    log_file: Path = typer.Option(Path.home() / ".clawlet" / "clawlet.log", "--log-file", "-f", help="Log file to read"),
+    lines: int = typer.Option(100, "--lines", "-n", help="Number of lines to display"),
+    follow: bool = typer.Option(False, "--follow", help="Follow log output (tail -f)"),
+):
+    """🌸 Tail the Clawlet agent logs."""
+    if not log_file.exists():
+        console.print(f"[yellow]Log file not found: {log_file}[/yellow]")
+        console.print("Start the agent with --log-file to enable file logging.")
+        raise typer.Exit(1)
+    
+    try:
+        if follow:
+            import subprocess
+            console.print(f"[dim]Following {log_file} (Ctrl+C to stop)...[/dim]")
+            subprocess.run(["tail", "-f", str(log_file)])
+        else:
+            with open(log_file) as f:
+                all_lines = f.readlines()
+                start = max(0, len(all_lines) - lines)
+                for line in all_lines[start:]:
+                    console.print(line.rstrip())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopped following logs.[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error reading log file: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -287,10 +332,24 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         identity=identity,
         provider=provider,
         model=effective_model,
+        storage_config=config.storage,
     )
+    
+    # Set up signal handlers for graceful shutdown
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_agent(agent, s)))
     
     # Run the agent
     await agent.run()
+
+
+async def shutdown_agent(agent: AgentLoop, signum):
+    """Shutdown agent gracefully on signal."""
+    logger.info(f"Received signal {signum}, shutting down...")
+    agent.stop()
+    await agent.close()
+    logger.info("Agent shutdown complete")
 
 
 @app.command()

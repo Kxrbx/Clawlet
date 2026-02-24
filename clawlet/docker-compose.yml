@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  clawlet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clawlet-agent
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-UTC}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_JSON=${LOG_JSON:-0}
+    volumes:
+      # Persist workspace (config, DB, memories)
+      - ~/.clawlet:/root/.clawlet
+    # No ports needed – agent receives messages via channels (Telegram, etc.)
+    # If you enable the dashboard, expose port 8000:
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

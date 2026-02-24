@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Optional, Literal
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings
 import yaml
 
 from loguru import logger
@@ -120,6 +119,9 @@ class Config(BaseModel):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
     
+    # Track the source file path for reload
+    config_path: Optional[Path] = None
+    
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":
         """Load configuration from YAML file."""
@@ -197,11 +199,28 @@ def load_config(workspace: Optional[Path] = None) -> Config:
     
     if config_path.exists():
         logger.info(f"Loading config from {config_path}")
-        return Config.from_yaml(config_path)
+        
+        # Security check: warn if config is world-readable
+        try:
+            import stat
+            st = config_path.stat()
+            mode = st.st_mode
+            # Check if others have read permission (S_IROTH)
+            if mode & stat.S_IROTH:
+                logger.warning(
+                    f"Config file {config_path} is readable by others. "
+                    f"Please restrict permissions: chmod 600 {config_path}"
+                )
+        except Exception as e:
+            logger.debug(f"Could not check config file permissions: {e}")
+        
+        config = Config.from_yaml(config_path)
+        config.config_path = config_path
+        return config
     else:
         logger.warning(f"No config file at {config_path}, using defaults")
         # Create default config with placeholder values
-        return Config(
+        config = Config(
             provider=ProviderConfig(
                 primary="openrouter",
                 openrouter=OpenRouterConfig(
@@ -209,6 +228,8 @@ def load_config(workspace: Optional[Path] = None) -> Config:
                 ),
             ),
         )
+        config.config_path = config_path
+        return config
 
 
 def get_default_config_path() -> Path:

@@ -2,18 +2,29 @@
 Agent loop - the core processing engine.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional, TYPE_CHECKING
+import httpx
 
 from loguru import logger
 
-from clawlet.agent.identity import Identity, IdentityLoader
+if TYPE_CHECKING:
+    from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
+
+from clawlet.agent.identity import Identity
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult
+from clawlet.agent.memory import MemoryManager
+from clawlet.storage.sqlite import SQLiteStorage
+from clawlet.config import StorageConfig
+
 
 
 @dataclass
@@ -64,6 +75,7 @@ class AgentLoop:
         tools: Optional[ToolRegistry] = None,
         model: Optional[str] = None,
         max_iterations: int = 10,
+        storage_config: Optional[StorageConfig] = None,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -73,13 +85,67 @@ class AgentLoop:
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         
+        # Initialize memory manager (long-term persistence to MEMORY.md)
+        self.memory = MemoryManager(workspace)
+        
+        # Initialize storage backend (SQLite for message history)
+        if storage_config is None:
+            storage_config = StorageConfig(backend="sqlite")
+        
+        if storage_config.backend == "sqlite":
+            db_path = Path(storage_config.sqlite.path).expanduser()
+            self.storage = SQLiteStorage(db_path)
+        elif storage_config.backend == "postgres":
+            from clawlet.storage.postgres import PostgresStorage
+            pg = storage_config.postgres
+            self.storage = PostgresStorage(
+                host=pg.host,
+                port=pg.port,
+                database=pg.database,
+                user=pg.user,
+                password=pg.password,
+            )
+        else:
+            raise ValueError(f"Unsupported storage backend: {storage_config.backend}")
+        
+        # Initialize storage and load recent history
         self._running = False
         self._history: list[Message] = []
+        self._session_id = self._generate_session_id()
+        
+        # Circuit breaker for provider failures
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 5
+        self._circuit_open_until: Optional[datetime] = None
+        self._circuit_timeout_seconds = 30
         
         logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
     
+    async def _initialize_storage(self) -> None:
+        """Initialize storage and load recent history."""
+        try:
+            await self.storage.initialize()
+            # Load recent messages from storage to populate history
+            stored_messages = await self.storage.get_messages(self._session_id, limit=self.MAX_HISTORY)
+            # stored are in chronological order (oldest first due to reversal), convert to our Message format
+            for msg in stored_messages:
+                self._history.append(Message(
+                    role=msg.role,
+                    content=msg.content,
+                    metadata={},
+                    tool_calls=[]
+                ))
+            logger.info(f"Loaded {len(self._history)} messages from storage")
+        except Exception as e:
+            logger.error(f"Failed to initialize storage: {e}")
+            # Continue without storage — will use in-memory only
+
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
+        # Ensure storage is initialized
+        if not hasattr(self.storage, '_db') or self.storage._db is None:
+            await self._initialize_storage()
+        
         self._running = True
         logger.info("Agent loop started")
         
@@ -118,7 +184,102 @@ class AgentLoop:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
+
+
+    def _generate_session_id(self) -> str:
+        """Generate a unique session ID based on workspace and start time."""
+        import hashlib
+        seed = f"{self.workspace}-{datetime.utcnow().isoformat()}"
+        return hashlib.md5(seed.encode()).hexdigest()[:12]
+
+    async def _initialize_storage(self) -> None:
+        """Initialize storage and load recent history."""
+        try:
+            await self.storage.initialize()
+            # Load recent messages from storage to populate history
+            stored_messages = await self.storage.get_messages(self._session_id, limit=self.MAX_HISTORY)
+            for msg in stored_messages:
+                self._history.append(Message(
+                    role=msg.role,
+                    content=msg.content,
+                    metadata={},
+                    tool_calls=[]
+                ))
+            logger.info(f"Loaded {len(self._history)} messages from storage")
+        except Exception as e:
+            logger.error(f"Failed to initialize storage: {e}")
+
+    async def _persist_message(self, role: str, content: str, metadata: dict = None) -> None:
+        """Persist a message to storage and long-term memory."""
+        # Save to storage
+        try:
+            if hasattr(self.storage, "_db") and self.storage._db:
+                await self.storage.store_message(
+                    session_id=self._session_id,
+                    role=role,
+                    content=content
+                )
+        except Exception as e:
+            logger.warning(f"Failed to store message in DB: {e}")
+        
+        # Save to long-term memory (MEMORY.md) — only important messages
+        if role in ("assistant", "user"):
+            importance = 5
+            if role == "assistant":
+                importance = 7
+            if len(content) > 200:
+                importance += 1
+            keywords = ["important", "remember", "todo", "task", "remind", "note", "save", "key", "critical"]
+            if any(k in content.lower() for k in keywords):
+                importance += 2
+            
+            key = f"{role}_{len(self._history)}_{int(datetime.utcnow().timestamp())}"
+            self.memory.remember(
+                key=key,
+                value=content,
+                category="conversation",
+                importance=importance
+            )
     
+    async def _call_provider_with_retry(self, messages: list[dict]) -> LLMResponse:
+        """Call LLM provider with retry, exponential backoff, and circuit breaker."""
+        # Check circuit breaker first
+        now = datetime.utcnow()
+        if self._circuit_open_until and now < self._circuit_open_until:
+            raise RuntimeError(f"Circuit breaker open until {self._circuit_open_until.isoformat()}")
+        elif self._circuit_open_until and now >= self._circuit_open_until:
+            logger.info("Circuit breaker timeout elapsed, resetting")
+            self._circuit_open_until = None
+            self._consecutive_errors = 0
+        
+        max_retries = 3
+        base_delay = 2  # seconds
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = await self.provider.complete(
+                    messages=messages,
+                    model=self.model,
+                    temperature=0.7,
+                )
+                # Success: reset error counter
+                self._consecutive_errors = 0
+                return response
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                self._consecutive_errors += 1
+                logger.warning(f"Provider call failed (attempt {attempt}/{max_retries}): {e}")
+                if attempt >= max_retries:
+                    # Check if we need to trip circuit breaker
+                    if self._consecutive_errors >= self._max_consecutive_errors:
+                        self._circuit_open_until = now + timedelta(seconds=self._circuit_timeout_seconds)
+                        logger.error(f"Circuit breaker tripped! Open until {self._circuit_open_until.isoformat()}")
+                    raise
+                # Exponential backoff
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.info(f"Retrying in {delay}s...")
+                await asyncio.sleep(delay)
+        raise RuntimeError("Unreachable: retry loop exhausted")
+
     async def _process_message(self, msg: "InboundMessage") -> Optional["OutboundMessage"]:
         """
         Process a single inbound message with tool calling support.
@@ -133,10 +294,17 @@ class AgentLoop:
         channel = msg.channel
         chat_id = msg.chat_id
         
+        # Validate input size (max 10k chars)
+        if len(user_message) > 10000:
+            logger.warning(f"Message from {chat_id} exceeds 10k chars, truncating")
+            user_message = user_message[:10000]
+        
         logger.info(f"Processing message from {channel}/{chat_id}: {user_message[:50]}...")
         
         # Add to history
         self._history.append(Message(role="user", content=user_message))
+        # Persist message
+        asyncio.create_task(self._persist_message("user", user_message))
         
         # Trim history periodically
         self._trim_history()
@@ -152,12 +320,8 @@ class AgentLoop:
             messages = self._build_messages()
             
             try:
-                # Call LLM provider
-                response: LLMResponse = await self.provider.complete(
-                    messages=messages,
-                    model=self.model,
-                    temperature=0.7,
-                )
+                # Call LLM provider with retry and circuit breaker
+                response: LLMResponse = await self._call_provider_with_retry(messages)
                 
                 response_content = response.content
                 
@@ -171,6 +335,7 @@ class AgentLoop:
                         content=response_content,
                         tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
                     ))
+                    asyncio.create_task(self._persist_message("assistant", response_content))
                     
                     # Execute each tool call
                     for tc in tool_calls:
@@ -182,12 +347,14 @@ class AgentLoop:
                             content=result.output if result.success else f"Error: {result.error}",
                             metadata={"tool_call_id": tc.id, "tool_name": tc.name}
                         ))
+                        asyncio.create_task(self._persist_message("tool", result.output if result.success else f"Error: {result.error}"))
                     
                     # Continue loop to get next response
                     continue
                 
                 # No tool calls - this is the final response
                 self._history.append(Message(role="assistant", content=response_content))
+                asyncio.create_task(self._persist_message("assistant", response_content))
                 final_response = response_content
                 break
                 
@@ -296,5 +463,18 @@ class AgentLoop:
     
     async def close(self):
         """Clean up resources."""
+        # Save long-term memories
+        try:
+            self.memory.save_long_term()
+        except Exception as e:
+            logger.error(f"Failed to save long-term memory: {e}")
+        
+        # Close storage
+        try:
+            await self.storage.close()
+        except Exception as e:
+            logger.error(f"Failed to close storage: {e}")
+        
+        # Close provider
         if hasattr(self.provider, 'close'):
             await self.provider.close()

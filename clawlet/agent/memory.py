@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Any
 from pathlib import Path
-import json
 
 from loguru import logger
 
@@ -105,7 +104,10 @@ class MemoryManager:
         # Add to short-term
         self._short_term.append(entry)
         
-        # Trim if needed
+        # Also add/update in long-term storage for persistence
+        self._long_term[key] = entry
+        
+        # Trim short-term if needed
         if len(self._short_term) > self.max_short_term:
             # Remove lowest importance, oldest entries
             self._short_term.sort(key=lambda e: (e.importance, e.created_at), reverse=True)
@@ -166,20 +168,23 @@ class MemoryManager:
         Returns:
             True if memory was removed
         """
-        # Check short-term
+        removed = False
+        
+        # Remove from short-term
         for i, entry in enumerate(self._short_term):
             if entry.key == key:
                 self._short_term.pop(i)
                 logger.debug(f"Forgot short-term memory: {key}")
-                return True
+                removed = True
+                break  # key unique, stop after first
         
-        # Check long-term
+        # Remove from long-term
         if key in self._long_term:
             del self._long_term[key]
             logger.debug(f"Forgot long-term memory: {key}")
-            return True
+            removed = True
         
-        return False
+        return removed
     
     def set_working(self, key: str, value: Any) -> None:
         """Set a working memory value (current task context)."""
