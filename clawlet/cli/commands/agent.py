@@ -226,8 +226,40 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             tools=tools,
         )
         
-        # Run the agent
-        await agent.run()
+        # Set up signal handlers for graceful shutdown
+        import signal as signal_module
+        loop = asyncio.get_running_loop()
+        shutdown_event = asyncio.Event()
+        
+        def handle_signal(signum):
+            logger.info(f"Received signal {signum}, initiating shutdown...")
+            shutdown_event.set()
+        
+        for sig in (signal_module.SIGTERM, signal_module.SIGINT):
+            loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
+        
+        # Run the agent until shutdown is requested
+        agent_task = asyncio.create_task(agent.run())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        
+        # Wait for either agent to finish or shutdown signal
+        done, pending = await asyncio.wait(
+            [agent_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # Cancel pending tasks
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        
+        # Stop agent and close resources
+        agent.stop()
+        await agent.close()
+        
     finally:
         if telegram_channel is not None:
             try:

@@ -319,6 +319,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     logger.debug(f"Telegram config: enabled={telegram_enabled}")
     
     # Initialize and start Telegram channel if enabled
+    telegram_channel = None
     if telegram_enabled and telegram_token:
         from clawlet.channels.telegram import TelegramChannel
         logger.info("Initializing Telegram channel...")
@@ -343,15 +344,25 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     # Set up signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_agent(agent, s)))
+        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_agent(agent, telegram_channel, s)))
     
     # Run the agent
     await agent.run()
 
 
-async def shutdown_agent(agent: AgentLoop, signum):
+async def shutdown_agent(agent: AgentLoop, telegram_channel, signum):
     """Shutdown agent gracefully on signal."""
     logger.info(f"Received signal {signum}, shutting down...")
+    
+    # Stop Telegram channel first to prevent background tasks from hanging
+    if telegram_channel is not None:
+        try:
+            logger.info("Stopping Telegram channel...")
+            await telegram_channel.stop()
+            logger.info("Telegram channel stopped")
+        except Exception as e:
+            logger.error(f"Error stopping Telegram channel: {e}")
+    
     agent.stop()
     await agent.close()
     logger.info("Agent shutdown complete")
