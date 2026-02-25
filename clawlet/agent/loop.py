@@ -676,8 +676,10 @@ class AgentLoop:
         
         logger.info(f"Executing tool: {tool_name} with args: {tool_call.arguments}")
 
+        # DEBUG: Log available tools when tool is not found
         if self.tools.get(tool_name) is None:
             logger.warning(f"Rejected unknown tool call: {tool_name}")
+            logger.warning(f"DEBUG: Available tools: {list(self.tools._tools.keys()) if hasattr(self.tools, '_tools') else 'N/A'}")
             self._tool_stats["calls_rejected"] += 1
             return ToolResult(success=False, output="", error=f"Unknown tool: {tool_name}")
 
