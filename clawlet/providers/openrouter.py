@@ -99,8 +99,11 @@ class OpenRouterProvider(BaseProvider):
         for i, msg in enumerate(messages):
             if msg.get("tool_calls"):
                 logger.debug(f"Message {i} ({msg.get('role')}) has tool_calls: {msg['tool_calls']}")
-            if msg.get("role") == "tool" and msg.get("tool_call_id"):
-                logger.debug(f"Message {i} (tool) has tool_call_id: {msg['tool_call_id']}")
+            if msg.get("role") == "tool":
+                if msg.get("tool_call_id"):
+                    logger.debug(f"Message {i} (tool) has tool_call_id: {msg['tool_call_id']}")
+                else:
+                    logger.warning(f"Message {i} (tool) is MISSING tool_call_id!")
         
         try:
             # Log headers with secrets masked

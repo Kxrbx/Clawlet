@@ -743,8 +743,17 @@ class AgentLoop:
             if content_size <= self.CONTEXT_CHAR_BUDGET:
                 break
             recent = recent[1:]
+        
         for msg in recent:
-            messages.append(msg.to_dict())
+            msg_dict = msg.to_dict()
+            # Skip tool messages without tool_call_id (they cause API errors)
+            # This can happen when messages are loaded from storage without metadata
+            if msg.role == "tool" and not msg_dict.get("tool_call_id"):
+                logger.warning(
+                    f"Skipping tool message without tool_call_id: {msg.content[:50]}..."
+                )
+                continue
+            messages.append(msg_dict)
         
         return messages
     
