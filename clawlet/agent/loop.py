@@ -419,6 +419,23 @@ class AgentLoop:
         """Extract tool calls from LLM response content."""
         tool_calls = []
         
+        logger.debug(f"[DEBUG] _extract_tool_calls called with content length: {len(content)}")
+        logger.debug(f"[DEBUG] Content preview: {content[:500]}...")
+        
+        # Check for MCP-like format first
+        if "<function=" in content:
+            logger.info("[DEBUG] Found MCP-like format in content, using ToolCallParser")
+            from clawlet.agent.tool_parser import ToolCallParser
+            parser = ToolCallParser()
+            parsed = parser.parse(content)
+            logger.info(f"[DEBUG] ToolCallParser found {len(parsed)} tool calls")
+            for p in parsed:
+                tool_calls.append(ToolCall(
+                    id=p.id,
+                    name=p.name,
+                    arguments=p.arguments,
+                ))
+        
         # Pattern for tool calls in various formats
         # Format 1: <tool_call name="..." arguments="..."/>
         pattern1 = r'<tool_call\s+name="([^"]+)"\s+arguments=\'([^\']+)\'\s*/?>'

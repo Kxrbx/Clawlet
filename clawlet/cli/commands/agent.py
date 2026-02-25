@@ -211,7 +211,11 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         # Create tool registry with all tools (including web search)
         from clawlet.tools import create_default_tool_registry
         allowed_dir = str(workspace)
+        logger.info(f"[DEBUG] About to create tool registry with allowed_dir={allowed_dir}")
         tools = create_default_tool_registry(allowed_dir=allowed_dir, config=config)
+        logger.info(f"[DEBUG] Tool registry created with {len(tools.all_tools())} tools")
+        for t in tools.all_tools():
+            logger.info(f"[DEBUG] Registered tool: {t.name}")
         
         agent = AgentLoop(
             bus=bus,

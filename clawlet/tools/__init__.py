@@ -62,11 +62,16 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
     import logging
     logger = logging.getLogger("clawlet")
     
+    logger.info(f"[DEBUG] create_default_tool_registry called with allowed_dir={allowed_dir}")
+    
     registry = ToolRegistry()
     
     # Add file tools
+    logger.info("[DEBUG] Creating FileTool...")
     file_tool = FileTool(allowed_dir=allowed_dir)
+    logger.info(f"[DEBUG] FileTool created with {len(file_tool.tools)} tools")
     for tool in file_tool.tools:
+        logger.info(f"[DEBUG] Registering tool: {tool.name}")
         registry.register(tool)
     
     # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
