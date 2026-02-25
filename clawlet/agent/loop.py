@@ -48,6 +48,9 @@ class Message:
             tool_call_id = self.metadata.get("tool_call_id")
             if tool_call_id:
                 d["tool_call_id"] = tool_call_id
+            tool_name = self.metadata.get("tool_name")
+            if tool_name:
+                d["name"] = tool_name
         return d
 
 
@@ -85,6 +88,9 @@ class AgentLoop:
     CONTEXT_CHAR_BUDGET = 12000  # Approximate character budget for prompt context
     MAX_TOOL_OUTPUT_CHARS = 4000
     NO_PROGRESS_LIMIT = 3
+    TOOL_ALIASES = {
+        "list_files": "list_dir",
+    }
     
     def __init__(
         self,
@@ -108,6 +114,13 @@ class AgentLoop:
             raise ValueError("Model must be a non-empty string")
         self.model = self.model.strip()
         self.max_iterations = max_iterations
+        
+        # Load tool aliases from registry, fall back to class constant for backward compatibility
+        self._tool_aliases = self.tools.get_aliases() if self.tools else {}
+        if not self._tool_aliases:
+            # Use class-level aliases as fallback
+            self._tool_aliases = self.TOOL_ALIASES.copy()
+        logger.info(f"Loaded tool aliases: {self._tool_aliases}")
         
         # Initialize memory manager (long-term persistence to MEMORY.md)
         self.memory = MemoryManager(workspace)
@@ -438,20 +451,38 @@ class AgentLoop:
                     convo.history.append(Message(
                         role="assistant",
                         content=response_content,
-                        tool_calls=[{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls]
+                        tool_calls=[
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": json.dumps(tc.arguments),
+                                },
+                            }
+                            for tc in tool_calls
+                        ]
                     ))
                     self._queue_persist(convo.session_id, "assistant", response_content)
                     
                     # Execute each tool call
                     for tc in tool_calls:
+                        # Map tool name early for use in both execution and metadata
+                        requested_tool_name = tc.name
+                        mapped_tool_name = self._tool_aliases.get(requested_tool_name, requested_tool_name)
+                        if mapped_tool_name != requested_tool_name:
+                            logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{mapped_tool_name}'")
+                        
+                        # Execute with mapped name
+                        tc.name = mapped_tool_name
                         result = await self._execute_tool(tc)
                         rendered_tool_output = self._render_tool_result(result)
                         
-                        # Add tool result to history
+                        # Add tool result to history - use mapped name in metadata
                         convo.history.append(Message(
                             role="tool",
                             content=rendered_tool_output,
-                            metadata={"tool_call_id": tc.id, "tool_name": tc.name}
+                            metadata={"tool_call_id": tc.id, "tool_name": mapped_tool_name}
                         ))
                         self._queue_persist(convo.session_id, "tool", rendered_tool_output)
                     
@@ -618,7 +649,13 @@ class AgentLoop:
     
     async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call with circuit breaker protection."""
-        tool_name = tool_call.name
+        # Use the already-mapped name from the tool call (set in the loop)
+        # But also check for aliases in case this method is called directly
+        requested_tool_name = tool_call.name
+        tool_name = self._tool_aliases.get(requested_tool_name, requested_tool_name)
+        if tool_name != requested_tool_name:
+            logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{tool_name}'")
+            tool_call.name = tool_name  # Update the tool call name
         now = datetime.now(UTC_TZ)
         
         # Check if circuit is open for this tool

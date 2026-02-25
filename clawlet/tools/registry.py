@@ -95,6 +95,7 @@ class ToolRegistry:
     
     def __init__(self):
         self._tools: dict[str, BaseTool] = {}
+        self._aliases: dict[str, str] = {}  # alias -> canonical tool name
         self._rate_limiter = RateLimiter(max_calls=10, window_seconds=60.0)
         logger.info("ToolRegistry initialized")
     
@@ -102,6 +103,23 @@ class ToolRegistry:
         """Register a tool."""
         self._tools[tool.name] = tool
         logger.info(f"Registered tool: {tool.name}")
+    
+    def register_alias(self, alias: str, canonical_name: str) -> None:
+        """Register an alias for a tool."""
+        self._aliases[alias] = canonical_name
+        logger.info(f"Registered alias: '{alias}' -> '{canonical_name}'")
+    
+    def get_canonical_name(self, name: str) -> str:
+        """Get the canonical tool name, following aliases if needed."""
+        return self._aliases.get(name, name)
+    
+    def is_alias(self, name: str) -> bool:
+        """Check if a name is an alias."""
+        return name in self._aliases
+    
+    def get_aliases(self) -> dict[str, str]:
+        """Get all registered aliases."""
+        return self._aliases.copy()
     
     def unregister(self, name: str) -> None:
         """Unregister a tool."""
