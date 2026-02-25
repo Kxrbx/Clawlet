@@ -331,6 +331,11 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     else:
         logger.warning("Telegram channel not enabled in config - messages will not be received!")
     
+    # Create tool registry with all tools
+    from clawlet.tools import create_default_tool_registry
+    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config)
+    logger.info(f"Created tool registry with {len(tools.all_tools())} tools")
+    
     # Create agent loop with the configured model
     agent = AgentLoop(
         bus=bus,
@@ -338,6 +343,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         identity=identity,
         provider=provider,
         model=effective_model,
+        tools=tools,
         storage_config=config.storage,
     )
     
