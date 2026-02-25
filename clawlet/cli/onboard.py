@@ -973,7 +973,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
 
     mode_choice = Prompt.ask("\n  Select", choices=["s", "f"], default="s")
     agent_mode = "full_exec" if mode_choice == "f" else "safe"
-    shell_allow_dangerous = False
+    shell_allow_dangerous = True if mode_choice == "f" else False
 
     if agent_mode == "full_exec":
         console.print("\n  [yellow]! full_exec grants broad machine capabilities[/yellow]")
