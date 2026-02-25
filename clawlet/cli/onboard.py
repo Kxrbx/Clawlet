@@ -20,7 +20,7 @@ from questionary import Style
 
 from loguru import logger
 
-from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig, OpenAIConfig, AnthropicConfig, MiniMaxConfig, MoonshotConfig, GoogleConfig, QwenConfig, ZAIConfig, CopilotConfig, VercelConfig, OpenCodeZenConfig, XiaomiConfig, SyntheticConfig, VeniceAIConfig, BraveSearchConfig
+from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig, OpenAIConfig, AnthropicConfig, MiniMaxConfig, MoonshotConfig, GoogleConfig, QwenConfig, ZAIConfig, CopilotConfig, VercelConfig, OpenCodeZenConfig, XiaomiConfig, SyntheticConfig, VeniceAIConfig, BraveSearchConfig, AgentSettings
 
 
 # Sakura pink color scheme
@@ -390,6 +390,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         "Web Search",
         "Channel",
         "Identity",
+        "Execution Mode",
         "Create",
     ]
     
@@ -418,7 +419,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 1: Choose Provider
     # ============================================
-    print_step_indicator(1, 5, steps)
+    print_step_indicator(1, 7, steps)
     print_section("Choose Your AI Provider", "Where should your agent get its intelligence?")
     
     print_option("1", "OpenRouter", "Cloud API - Best models")
@@ -470,7 +471,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 2: Configure Provider
     # ============================================
-    print_step_indicator(2, 5, steps)
+    print_step_indicator(2, 7, steps)
     
     if provider_choice == "openrouter":
         print_section("OpenRouter API Key", "Get your key at openrouter.ai/keys")
@@ -961,9 +962,35 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     print_footer()
     
     # ============================================
-    # Step 5: Create Workspace
+    # Step 6: Execution Mode
     # ============================================
-    print_step_indicator(6, 6, steps)
+    print_step_indicator(6, 7, steps)
+    print_section("Execution Mode", "Choose capability level for your agent")
+    console.print("│")
+    print_option("s", "safe", "Workspace-restricted tools (recommended)")
+    print_option("f", "full_exec", "Machine-wide tool access (advanced)")
+    print_footer()
+
+    mode_choice = Prompt.ask("\n  Select", choices=["s", "f"], default="s")
+    agent_mode = "full_exec" if mode_choice == "f" else "safe"
+    shell_allow_dangerous = False
+
+    if agent_mode == "full_exec":
+        console.print("\n  [yellow]! full_exec grants broad machine capabilities[/yellow]")
+        shell_allow_dangerous = await questionary.confirm(
+            "  Also allow dangerous shell patterns?",
+            default=False,
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        console.print(
+            f"  [green]✓[/green] Mode: [bold]{agent_mode}[/bold], "
+            f"dangerous shell patterns: {'enabled' if shell_allow_dangerous else 'disabled'}"
+        )
+
+    # ============================================
+    # Step 7: Create Workspace
+    # ============================================
+    print_step_indicator(7, 7, steps)
     print_section("Creating Workspace", "Setting up your files...")
     console.print()
     
@@ -981,6 +1008,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         config = Config(
             provider=provider_config,
+            agent=AgentSettings(mode=agent_mode, shell_allow_dangerous=shell_allow_dangerous),
             web_search=BraveSearchConfig(
                 api_key=brave_api_key if brave_api_key else "",
                 enabled=bool(brave_api_key),

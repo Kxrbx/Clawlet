@@ -96,12 +96,14 @@ pip install -e ".[dashboard]"
 clawlet onboard
 ```
 
-This 5-step wizard guides you through:
+This 7-step wizard guides you through:
 1. **Choose Provider** - 18+ providers available
 2. **Configure** - API keys or local settings
-3. **Channels** - Telegram/Discord setup
-4. **Identity** - Name and personality
-5. **Create Workspace** - All files generated
+3. **Model Selection** - Choose your default model
+4. **Execution Mode** - Pick `safe` or `full_exec`
+5. **Channels** - Telegram/Discord setup
+6. **Identity** - Name and personality
+7. **Create Workspace** - All files generated
 
 ### Or Quick Init
 
@@ -371,7 +373,7 @@ clawlet/
 | Storage | SQLite + PostgreSQL |
 | Web Search | Brave Search API |
 | Models Cache | Daily auto-updating with disk persistence |
-| Interactive Onboarding | 5-step guided setup |
+| Interactive Onboarding | 7-step guided setup |
 | Skills System | Modular capabilities with SKILL.md |
 | Webhooks | GitHub, Stripe, custom integrations |
 | Scheduling | Cron-based task automation |

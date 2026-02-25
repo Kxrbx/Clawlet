@@ -307,6 +307,14 @@ class AgentSettings(BaseModel):
     context_window: int = Field(default=20, ge=5, le=100)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_history: int = Field(default=100, ge=10, le=1000)
+    mode: Literal["safe", "full_exec"] = Field(
+        default="safe",
+        description="Execution mode: safe (workspace-restricted) or full_exec (machine-wide)"
+    )
+    shell_allow_dangerous: bool = Field(
+        default=False,
+        description="Allow dangerous shell patterns (only meaningful in full_exec mode)"
+    )
 
 
 class HeartbeatSettings(BaseModel):
@@ -326,6 +334,7 @@ class Config(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
+    web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
     
     # Track the source file path for reload
     config_path: Optional[Path] = None
@@ -398,6 +407,10 @@ class Config(BaseModel):
             yaml.dump(self.model_dump(mode='python'), f, default_flow_style=False)
         
         logger.info(f"Saved config to {path}")
+
+    def save(self, path: Path) -> None:
+        """Backward-compatible alias for writing config to disk."""
+        self.to_yaml(path)
 
     def reload(self) -> None:
         """Reload configuration from the original YAML file."""

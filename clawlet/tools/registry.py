@@ -214,7 +214,11 @@ def validate_tool_params(
         
         # Validate parameter types
         properties = schema.get("properties", {})
+        additional_properties = schema.get("additionalProperties", True)
         for param_name, param_value in params.items():
+            if not additional_properties and param_name not in properties:
+                errors.append(f"Unknown parameter '{param_name}'")
+                continue
             if param_name in properties:
                 expected_type = properties[param_name].get("type")
                 if expected_type:
