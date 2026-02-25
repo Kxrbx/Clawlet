@@ -4,11 +4,16 @@ File system tools.
 
 from pathlib import Path
 from typing import Optional
+from loguru import logger
 
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
-def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path, Optional[str]]:
+def _secure_resolve(
+    file_path: Path,
+    allowed_dir: Optional[Path],
+    must_exist: bool = True,
+) -> tuple[Path, Optional[str]]:
     """
     Securely resolve a path, following symlinks and verifying it's within allowed_dir.
     
@@ -21,7 +26,9 @@ def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path,
     """
     
     if allowed_dir is None:
-        return file_path, None
+        if must_exist and not file_path.exists():
+            return file_path, f"Path not found: {file_path}"
+        return file_path.resolve(strict=must_exist), None
     
     # Ensure allowed_dir is a Path object
     if not isinstance(allowed_dir, Path):
@@ -29,25 +36,32 @@ def _secure_resolve(file_path: Path, allowed_dir: Optional[Path]) -> tuple[Path,
         logger.debug(f"[_secure_resolve] converted allowed_dir to Path: {allowed_dir}")
     
     try:
-        # Resolve with strict=True to follow all symlinks and ensure path exists
-        # This will raise FileNotFoundError if the path doesn't exist (including broken symlinks)
-        resolved_path = file_path.resolve(strict=True)
-        
-        # Get the allowed_dir resolved path
-        allowed_resolved = allowed_dir.resolve()
-        
-        # Check if resolved path is within allowed_dir
-        resolved_str = str(resolved_path)
-        allowed_str = str(allowed_resolved)
-        
-        # Ensure the resolved path starts with allowed_dir
-        if not resolved_str.startswith(allowed_str):
-            return resolved_path, f"Access denied: symlink points outside allowed directory"
-        
+        allowed_resolved = allowed_dir.resolve(strict=True)
+
+        # Resolve relative paths from the allowed directory root.
+        candidate = file_path if file_path.is_absolute() else (allowed_resolved / file_path)
+
+        if must_exist:
+            resolved_path = candidate.resolve(strict=True)
+        else:
+            if candidate.exists():
+                resolved_path = candidate.resolve(strict=True)
+            else:
+                probe = candidate.parent
+                while not probe.exists() and probe != probe.parent:
+                    probe = probe.parent
+                resolved_parent = probe.resolve(strict=True)
+                relative_tail = candidate.parent.relative_to(probe)
+                resolved_path = resolved_parent / relative_tail / candidate.name
+
+        try:
+            resolved_path.relative_to(allowed_resolved)
+        except ValueError:
+            return resolved_path, "Access denied: path points outside allowed directory"
+
         return resolved_path, None
-        
+
     except FileNotFoundError:
-        # This handles broken symlinks or non-existent paths
         return file_path, f"Path not found or is a broken symlink: {file_path}"
     except OSError as e:
         # Handle other OS errors (permission issues, circular symlinks, etc.)
@@ -144,7 +158,7 @@ class WriteFileTool(BaseTool):
             file_path = Path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
-            resolved_path, error = _secure_resolve(file_path, self.allowed_dir)
+            resolved_path, error = _secure_resolve(file_path, self.allowed_dir, must_exist=False)
             if error:
                 return ToolResult(
                     success=False,
@@ -263,13 +277,13 @@ class ListDirTool(BaseTool):
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the directory to list"
+                    "description": "Path to the directory to list (defaults to current workspace directory)"
                 }
             },
-            "required": ["path"]
+            "required": []
         }
     
-    async def execute(self, path: str, **kwargs) -> ToolResult:
+    async def execute(self, path: str = ".", **kwargs) -> ToolResult:
         """List directory contents."""
         try:
             dir_path = Path(path)

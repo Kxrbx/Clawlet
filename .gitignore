@@ -56,3 +56,6 @@ plans/first-contact-profile-collection.md
 plans/
 reviews/
 tests/
+# Development-only memory/audit artifacts
+memory/*.md
+

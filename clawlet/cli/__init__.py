@@ -1164,6 +1164,8 @@ agent:
   max_iterations: 20
   context_window: 20
   temperature: 0.7
+  mode: safe
+  shell_allow_dangerous: false
 
 # Heartbeat Settings
 heartbeat:

@@ -29,6 +29,13 @@ from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
 from clawlet.skills.registry import SkillRegistry
 
+
+FULL_EXEC_COMMANDS = [
+    "mkdir", "cp", "mv", "rm", "touch", "chmod", "chown",
+    "curl", "wget", "ssh", "scp", "rsync",
+    "make", "docker", "kubectl", "terraform",
+]
+
 # Convenience alias for all file operations
 class FileTool:
     """Composite tool providing all file operations."""
@@ -66,23 +73,33 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
     
     registry = ToolRegistry()
     
+    agent_mode = getattr(getattr(config, "agent", None), "mode", "safe") if config is not None else "safe"
+    allow_dangerous = bool(getattr(getattr(config, "agent", None), "shell_allow_dangerous", False)) if config is not None else False
+    effective_allowed_dir = None if agent_mode == "full_exec" else allowed_dir
+
     # Add file tools
     logger.info("[DEBUG] Creating FileTool...")
-    file_tool = FileTool(allowed_dir=allowed_dir)
+    file_tool = FileTool(allowed_dir=effective_allowed_dir)
     logger.info(f"[DEBUG] FileTool created with {len(file_tool.tools)} tools")
     for tool in file_tool.tools:
         logger.info(f"[DEBUG] Registering tool: {tool.name}")
         registry.register(tool)
     
     # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
-    registry.register(ShellTool(workspace=allowed_dir))
+    shell_workspace = effective_allowed_dir
+    shell_tool = ShellTool(workspace=shell_workspace, allow_dangerous=allow_dangerous)
+    if agent_mode == "full_exec":
+        shell_tool.add_allowed(*FULL_EXEC_COMMANDS)
+        logger.warning("Agent mode is full_exec: expanded shell command capabilities enabled")
+    registry.register(shell_tool)
     
     # Add web search tool (uses Brave Search API)
     # Get API key from config, or check both WEB_SEARCH_API_KEY and BRAVE_SEARCH_API_KEY env vars
     import os
     api_key = None
-    if config and config.web_search:
-        api_key = config.web_search.api_key or os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
+    web_search_cfg = getattr(config, "web_search", None) if config is not None else None
+    if web_search_cfg:
+        api_key = web_search_cfg.api_key or os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
     else:
         api_key = os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
     

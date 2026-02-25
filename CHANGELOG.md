@@ -2,6 +2,27 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.2.8] - 2026-02-25
+
+### Fixes
+
+- **Conversation Isolation in Agent Loop**: Reworked runtime state to isolate history/session state per `channel/chat_id`, preventing cross-chat context bleed and ensuring persistence uses conversation-specific session IDs.
+- **Persistence Session Routing**: Fixed queued persistence writes to use the explicit target session identifier instead of mutable loop-global state.
+- **Tool Parser Debug Logging Cleanup**: Removed noisy `[DEBUG]`-prefixed log message strings in tool extraction fallback path while preserving debug-level diagnostics.
+
+### Refactoring
+
+- **Context Budget Pruning**: Added a character-budget pass (`CONTEXT_CHAR_BUDGET`) in message construction so oversized conversation windows drop oldest turns before provider calls.
+
+### Tests
+
+- Added coverage for per-chat history/session isolation in `AgentLoop`.
+- Added coverage for context character-budget pruning behavior in `_build_messages`.
+
+### Documentation
+
+- Updated README onboarding flow from 5 to 7 steps and documented execution mode selection in the guided setup.
+
 ## [0.2.7] - 2026-02-22
 
 ### Features
@@ -235,5 +256,4 @@ All notable changes to Clawlet will be documented in this file.
 - API documentation
 - Security notes
 - Comparison with OpenClaw/nanobot
-
 

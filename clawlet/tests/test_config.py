@@ -86,3 +86,73 @@ agent:
     
     assert config.provider.openrouter.api_key == "key-v2"
     assert config.agent.max_iterations == 20
+
+
+def test_agent_mode_defaults_and_override(temp_workspace):
+    from clawlet.config import Config
+
+    # Build a minimal valid config file for explicit mode assertion
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text(
+        """
+provider:
+  primary: openrouter
+  openrouter:
+    api_key: test-key-123
+agent:
+  mode: full_exec
+  shell_allow_dangerous: true
+"""
+    )
+
+    cfg = Config.from_yaml(config_path)
+    assert cfg.agent.mode == "full_exec"
+    assert cfg.agent.shell_allow_dangerous is True
+
+
+def test_full_exec_mode_expands_tool_scope(temp_workspace):
+    from clawlet.config import Config
+    from clawlet.tools import create_default_tool_registry
+
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text(
+        """
+provider:
+  primary: openrouter
+  openrouter:
+    api_key: test-key-123
+agent:
+  mode: full_exec
+  shell_allow_dangerous: false
+"""
+    )
+
+    cfg = Config.from_yaml(config_path)
+    registry = create_default_tool_registry(allowed_dir=str(temp_workspace), config=cfg)
+
+    read_tool = registry.get("read_file")
+    shell_tool = registry.get("shell")
+
+    assert read_tool is not None
+    assert shell_tool is not None
+    assert getattr(read_tool, "allowed_dir", "sentinel") is None
+    assert "mkdir" in shell_tool.get_allowed()
+
+
+def test_init_config_template_is_valid_yaml_and_includes_agent_mode():
+    import yaml
+    from clawlet.cli.commands.init import get_config_template
+
+    data = yaml.safe_load(get_config_template())
+
+    assert data["agent"]["mode"] == "safe"
+    assert data["agent"]["shell_allow_dangerous"] is False
+    assert "telegram" in data
+    assert "discord" in data
+
+
+def test_agent_loop_module_imports_on_python_310_compat_path():
+    """Guard against reintroducing datetime.UTC import incompatibility."""
+    import importlib
+    module = importlib.import_module("clawlet.agent.loop")
+    assert hasattr(module, "UTC_TZ")

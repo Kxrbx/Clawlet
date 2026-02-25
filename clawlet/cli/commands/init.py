@@ -205,19 +205,19 @@ provider:
     model: "local-model"
 
 # Channel Settings (individual fields - not 'channels:' key)
- telegram:
-   enabled: false
-   token: "YOUR_TELEGRAM_BOT_TOKEN"
- 
- discord:
-   enabled: false
-   token: "YOUR_DISCORD_BOT_TOKEN"
- 
- whatsapp:
-   enabled: false
- 
- slack:
-   enabled: false
+telegram:
+  enabled: false
+  token: "YOUR_TELEGRAM_BOT_TOKEN"
+
+discord:
+  enabled: false
+  token: "YOUR_DISCORD_BOT_TOKEN"
+
+whatsapp:
+  enabled: false
+
+slack:
+  enabled: false
 
 # Storage Settings
 storage:
@@ -241,6 +241,8 @@ agent:
   max_iterations: 20
   context_window: 20
   temperature: 0.7
+  mode: safe
+  shell_allow_dangerous: false
 
 # Heartbeat Settings
 heartbeat:
