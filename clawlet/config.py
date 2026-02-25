@@ -5,7 +5,7 @@ Configuration management with validation.
 import os
 from pathlib import Path
 from typing import Optional, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
 from loguru import logger
@@ -315,6 +315,27 @@ class AgentSettings(BaseModel):
         default=False,
         description="Allow dangerous shell patterns (only meaningful in full_exec mode)"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, data):
+        """Support legacy agent config keys for backward compatibility."""
+        if not isinstance(data, dict):
+            return data
+
+        # Legacy schema: agent.full_exec: true|false
+        if "mode" not in data and "full_exec" in data:
+            full_exec = bool(data.get("full_exec"))
+            data["mode"] = "full_exec" if full_exec else "safe"
+            # Legacy full_exec implied broad shell flexibility.
+            if full_exec and "shell_allow_dangerous" not in data:
+                data["shell_allow_dangerous"] = True
+
+        # Legacy alias used by some configs/tools.
+        if "mode" not in data and "execution_mode" in data:
+            data["mode"] = data.get("execution_mode")
+
+        return data
 
 
 class HeartbeatSettings(BaseModel):

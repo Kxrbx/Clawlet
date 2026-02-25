@@ -224,6 +224,8 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             provider=provider,
             model=effective_model,
             tools=tools,
+            max_iterations=config.agent.max_iterations,
+            storage_config=config.storage,
         )
         
         # Set up signal handlers for graceful shutdown

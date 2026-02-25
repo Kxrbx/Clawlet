@@ -34,6 +34,7 @@ FULL_EXEC_COMMANDS = [
     "mkdir", "cp", "mv", "rm", "touch", "chmod", "chown",
     "curl", "wget", "ssh", "scp", "rsync",
     "make", "docker", "kubectl", "terraform",
+    "rg",
 ]
 
 # Convenience alias for all file operations
@@ -75,6 +76,7 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
     
     agent_mode = getattr(getattr(config, "agent", None), "mode", "safe") if config is not None else "safe"
     allow_dangerous = bool(getattr(getattr(config, "agent", None), "shell_allow_dangerous", False)) if config is not None else False
+    logger.info(f"[DEBUG] agent_mode={agent_mode}, allow_dangerous={allow_dangerous}")
     effective_allowed_dir = None if agent_mode == "full_exec" else allowed_dir
 
     # Add file tools
