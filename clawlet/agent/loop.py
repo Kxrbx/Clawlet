@@ -122,6 +122,10 @@ class AgentLoop:
             self._tool_aliases = self.TOOL_ALIASES.copy()
         logger.info(f"Loaded tool aliases: {self._tool_aliases}")
         
+        # DEBUG: Log available tools at initialization
+        if hasattr(self.tools, '_tools'):
+            logger.info(f"DEBUG: Registered tools at init: {list(self.tools._tools.keys())}")
+        
         # Initialize memory manager (long-term persistence to MEMORY.md)
         self.memory = MemoryManager(workspace)
         
