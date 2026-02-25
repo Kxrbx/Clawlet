@@ -508,7 +508,10 @@ class AgentLoop:
         
         # System prompt from identity (include tools)
         tools_list = self.tools.all_tools() if self.tools else None
-        system_prompt = self.identity.build_system_prompt(tools=tools_list)
+        system_prompt = self.identity.build_system_prompt(
+            tools=tools_list,
+            workspace_path=str(self.workspace)
+        )
         messages.append({"role": "system", "content": system_prompt})
         
         # Add recent history (limited by CONTEXT_WINDOW)

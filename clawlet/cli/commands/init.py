@@ -37,6 +37,7 @@ def init(
     # Create workspace directory
     workspace_path.mkdir(parents=True, exist_ok=True)
     (workspace_path / "memory").mkdir(exist_ok=True)
+    (workspace_path / "workspace").mkdir(exist_ok=True)
     
     # Create identity files
     identity_files = {

@@ -44,14 +44,27 @@ class Identity:
             return f"## Periodic Tasks\n\n{self.heartbeat}"
         return ""
     
-    def build_system_prompt(self, tools: list = None) -> str:
+    def build_system_prompt(self, tools: list = None, workspace_path: str = None) -> str:
         """Build full system prompt from identity data."""
         prompt = f"""# Identity
 
 You are {self.agent_name}, an AI assistant.
 
 {self.build_context()}
+"""
+        
+        # Add workspace information if provided
+        if workspace_path:
+            prompt += f"""
+# Workspace
 
+Your workspace is located at: {workspace_path}
+- You can read, write, and list files within this directory using the available tools
+- Use the `workspace/` subdirectory for building and creating things
+- The `memory/` subdirectory stores your long-term memories
+"""
+        
+        prompt += f"""
 # Instructions
 
 - Be helpful, honest, and harmless
