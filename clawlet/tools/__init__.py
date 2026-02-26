@@ -24,6 +24,7 @@ from clawlet.tools.files import (
     ListDirTool,
 )
 from clawlet.tools.shell import ShellTool
+from clawlet.tools.patch import ApplyPatchTool
 from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
@@ -51,12 +52,13 @@ class FileTool:
         self.read = ReadFileTool(allowed_dir)
         self.write = WriteFileTool(allowed_dir)
         self.edit = EditFileTool(allowed_dir)
+        self.patch = ApplyPatchTool(allowed_dir)
         self.list = ListDirTool(allowed_dir)
     
     @property
     def tools(self) -> list:
         """Get all file tools."""
-        return [self.read, self.write, self.edit, self.list]
+        return [self.read, self.write, self.edit, self.patch, self.list]
 
 def create_default_tool_registry(allowed_dir: str = None, config=None, memory_manager=None, skill_registry: SkillRegistry = None) -> ToolRegistry:
     """Create a default tool registry with all standard tools.
@@ -141,6 +143,7 @@ __all__ = [
     "ListDirTool",
     "FileTool",
     "ShellTool",
+    "ApplyPatchTool",
     "WebSearchTool",
     "InstallSkillTool",
     "ListSkillsTool",

@@ -242,6 +242,25 @@ def agent(
 
 
 @app.command()
+def chat(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
+):
+    """🌸 Start a local interactive chat session in the terminal."""
+    workspace_path = workspace or get_workspace_path()
+    if not workspace_path.exists():
+        console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
+        raise typer.Exit(1)
+    try:
+        asyncio.run(run_chat(workspace_path, model))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Chat stopped.[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def logs(
     log_file: Path = typer.Option(Path.home() / ".clawlet" / "clawlet.log", "--log-file", "-f", help="Log file to read"),
     lines: int = typer.Option(100, "--lines", "-n", help="Number of lines to display"),
@@ -271,14 +290,55 @@ def logs(
         raise typer.Exit(1)
 
 
+def _create_provider(config, model: Optional[str]):
+    """Create provider from config primary setting."""
+    import os
+    primary = config.provider.primary
+    effective_model = model
+    api_key = ""
+
+    if primary == "openrouter":
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            api_key = config.provider.openrouter.api_key if config.provider.openrouter else ""
+        effective_model = model or (config.provider.openrouter.model if config.provider.openrouter else None)
+        from clawlet.providers.openrouter import OpenRouterProvider
+        return OpenRouterProvider(api_key=api_key, default_model=effective_model), effective_model
+    if primary == "ollama":
+        effective_model = model or (config.provider.ollama.model if config.provider.ollama else None)
+        from clawlet.providers.ollama import OllamaProvider
+        return OllamaProvider(base_url=config.provider.ollama.base_url, default_model=effective_model), effective_model
+    if primary == "lmstudio":
+        effective_model = model or (config.provider.lmstudio.model if config.provider.lmstudio else None)
+        from clawlet.providers.lmstudio import LMStudioProvider
+        return LMStudioProvider(base_url=config.provider.lmstudio.base_url, default_model=effective_model), effective_model
+    if primary == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY", "") or (config.provider.openai.api_key if config.provider.openai else "")
+        effective_model = model or (config.provider.openai.model if config.provider.openai else None)
+        from clawlet.providers.openai import OpenAIProvider
+        return OpenAIProvider(api_key=api_key, default_model=effective_model), effective_model
+    if primary == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "") or (config.provider.anthropic.api_key if config.provider.anthropic else "")
+        effective_model = model or (config.provider.anthropic.model if config.provider.anthropic else None)
+        from clawlet.providers.anthropic import AnthropicProvider
+        return AnthropicProvider(api_key=api_key, default_model=effective_model), effective_model
+
+    # Fallback provider
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key and config.provider.openrouter:
+        api_key = config.provider.openrouter.api_key
+    effective_model = model or (config.provider.openrouter.model if config.provider.openrouter else None)
+    from clawlet.providers.openrouter import OpenRouterProvider
+    return OpenRouterProvider(api_key=api_key, default_model=effective_model), effective_model
+
+
 async def run_agent(workspace: Path, model: Optional[str], channel: str):
-    """Run the agent loop."""
+    """Run the agent loop with explicit channel routing."""
     from clawlet.agent.loop import AgentLoop
     from clawlet.agent.identity import IdentityLoader
     from clawlet.bus.queue import MessageBus
-    from clawlet.providers.openrouter import OpenRouterProvider
     from clawlet.config import load_config
-    import os
+    from loguru import logger
     
     # Load identity
     identity_loader = IdentityLoader(workspace)
@@ -290,33 +350,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     # Load configuration first (needed for both provider and channels)
     config = load_config(workspace)
     
-    # Get API key from config or environment variable
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    config_model = None
-    if config.provider.openrouter:
-        if not api_key:
-            api_key = config.provider.openrouter.api_key
-        config_model = config.provider.openrouter.model
-    
-    # Use model from CLI arg, then config, then provider default
-    effective_model = model or config_model
-    
-    # Create provider with the configured model
-    provider = OpenRouterProvider(api_key=api_key, default_model=effective_model)
-    
-    # DEBUG: Check Telegram configuration
-    telegram_cfg = config.channels.get("telegram")
-    
-    # Handle both raw dict and Pydantic model formats
-    if isinstance(telegram_cfg, dict):
-        telegram_enabled = telegram_cfg.get("enabled", False)
-        telegram_token = telegram_cfg.get("token", "")
-    else:
-        # Pydantic model
-        telegram_enabled = getattr(telegram_cfg, 'enabled', False)
-        telegram_token = getattr(telegram_cfg, 'token', '')
-    
-    logger.debug(f"Telegram config: enabled={telegram_enabled}")
+    provider, effective_model = _create_provider(config, model)
     
     # Create tool registry first (needed for agent)
     from clawlet.tools import create_default_tool_registry
@@ -335,23 +369,36 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         storage_config=config.storage,
     )
     
-    # Initialize and start Telegram channel if enabled (after agent is created)
-    telegram_channel = None
-    if telegram_enabled and telegram_token:
+    runtime_channel = None
+    if channel == "telegram":
+        telegram_cfg = config.channels.get("telegram")
+        token = telegram_cfg.get("token", "") if isinstance(telegram_cfg, dict) else getattr(telegram_cfg, "token", "")
+        enabled = telegram_cfg.get("enabled", False) if isinstance(telegram_cfg, dict) else getattr(telegram_cfg, "enabled", False)
+        if not enabled:
+            raise ValueError("Telegram channel is disabled in config")
+        if not token:
+            raise ValueError("Telegram token is missing in config")
         from clawlet.channels.telegram import TelegramChannel
-        logger.info("Initializing Telegram channel...")
-        telegram_channel = TelegramChannel(bus, {"token": telegram_token}, agent)
-        await telegram_channel.start()
-        logger.info("Telegram channel started")
-    elif telegram_enabled and not telegram_token:
-        logger.warning("Telegram enabled but token not configured")
+        runtime_channel = TelegramChannel(bus, {"token": token}, agent)
+        await runtime_channel.start()
+    elif channel == "discord":
+        discord_cfg = config.channels.get("discord")
+        token = discord_cfg.get("token", "") if isinstance(discord_cfg, dict) else getattr(discord_cfg, "token", "")
+        enabled = discord_cfg.get("enabled", False) if isinstance(discord_cfg, dict) else getattr(discord_cfg, "enabled", False)
+        if not enabled:
+            raise ValueError("Discord channel is disabled in config")
+        if not token:
+            raise ValueError("Discord token is missing in config")
+        from clawlet.channels.discord import DiscordChannel
+        runtime_channel = DiscordChannel(bus, {"token": token}, agent)
+        await runtime_channel.start()
     else:
-        logger.warning("Telegram channel not enabled in config - messages will not be received!")
+        raise ValueError(f"Unsupported channel '{channel}'. Supported: telegram, discord")
     
     # Set up signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_agent(agent, telegram_channel, s)))
+        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_agent(agent, runtime_channel, s)))
     
     # Run the agent
     await agent.run()
@@ -373,6 +420,54 @@ async def shutdown_agent(agent: AgentLoop, telegram_channel, signum):
     agent.stop()
     await agent.close()
     logger.info("Agent shutdown complete")
+
+
+async def run_chat(workspace: Path, model: Optional[str]) -> None:
+    """Run a local terminal chat loop using the same agent core."""
+    from clawlet.agent.loop import AgentLoop
+    from clawlet.agent.identity import IdentityLoader
+    from clawlet.bus.queue import MessageBus, InboundMessage
+    from clawlet.config import load_config
+    from clawlet.tools import create_default_tool_registry
+
+    identity = IdentityLoader(workspace).load_all()
+    bus = MessageBus()
+    config = load_config(workspace)
+    provider, effective_model = _create_provider(config, model)
+    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config)
+
+    agent = AgentLoop(
+        bus=bus,
+        workspace=workspace,
+        identity=identity,
+        provider=provider,
+        model=effective_model,
+        tools=tools,
+        max_iterations=config.agent.max_iterations,
+        storage_config=config.storage,
+    )
+
+    agent_task = asyncio.create_task(agent.run())
+    console.print("[dim]Local chat mode. Type 'exit' to quit.[/dim]")
+    try:
+        while True:
+            user_text = await asyncio.to_thread(input, "\nYou> ")
+            if user_text.strip().lower() in {"exit", "quit"}:
+                break
+            await bus.publish_inbound(InboundMessage(channel="cli", chat_id="local", content=user_text))
+            while True:
+                out = await bus.consume_outbound()
+                if out.channel == "cli" and out.chat_id == "local":
+                    console.print(f"Clawlet> {out.content}")
+                    break
+    finally:
+        agent.stop()
+        await agent.close()
+        agent_task.cancel()
+        try:
+            await agent_task
+        except asyncio.CancelledError:
+            pass
 
 
 @app.command()

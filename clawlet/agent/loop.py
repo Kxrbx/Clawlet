@@ -68,6 +68,7 @@ class ConversationState:
 
     session_id: str
     history: list[Message] = field(default_factory=list)
+    summary: str = ""
 
 
 class AgentLoop:
@@ -198,6 +199,7 @@ class AgentLoop:
         self._history: list[Message] = []
         self._session_id = ""
         self._conversations: dict[str, ConversationState] = {}
+        self._pending_confirmations: dict[str, dict] = {}
         
         # Circuit breaker for provider failures
         self._consecutive_errors = 0
@@ -466,6 +468,7 @@ class AgentLoop:
         is_internal_autonomous = bool(metadata.get("internal_autonomous_followup"))
         autonomous_depth = int(metadata.get("autonomous_followup_depth", 0))
         convo = await self._get_conversation_state(channel, chat_id)
+        convo_key = f"{channel}:{chat_id}"
         self._session_id = convo.session_id
         self._history = convo.history
         
@@ -478,6 +481,16 @@ class AgentLoop:
             user_message = user_message[:10000]
         
         logger.info(f"Processing message from {channel}/{chat_id}: {user_message[:50]}...")
+
+        approval_response = await self._maybe_handle_confirmation_reply(
+            convo_key=convo_key,
+            session_id=convo.session_id,
+            user_message=user_message,
+            history=convo.history,
+        )
+        if approval_response is not None:
+            from clawlet.bus.queue import OutboundMessage
+            return OutboundMessage(channel=channel, chat_id=chat_id, content=approval_response)
         
         # Add to history. Internal autonomous prompts are system context, not user content.
         if is_internal_autonomous:
@@ -594,6 +607,18 @@ class AgentLoop:
                         
                         # Execute with mapped name
                         tc.name = mapped_tool_name
+                        if self._is_destructive_tool_call(tc):
+                            token = str(int(time.time()))[-6:]
+                            self._pending_confirmations[convo_key] = {
+                                "token": token,
+                                "tool_call": tc,
+                            }
+                            final_response = (
+                                f"Destructive action blocked by default: `{tc.name}`.\n"
+                                f"Reply with `confirm {token}` to continue or `cancel`."
+                            )
+                            is_error = False
+                            break
                         result = await self._execute_tool(tc)
                         rendered_tool_output = self._render_tool_result(result)
                         
@@ -605,6 +630,9 @@ class AgentLoop:
                         ))
                         self._queue_persist(convo.session_id, "tool", rendered_tool_output)
                     
+                    if final_response is not None:
+                        break
+
                     # Continue loop to get next response
                     continue
                 
@@ -1041,6 +1069,9 @@ class AgentLoop:
         )
         messages.append({"role": "system", "content": system_prompt})
         
+        if history and history[0].role == "system" and history[0].metadata.get("summary") is True:
+            messages.append(history[0].to_dict())
+
         # Add recent history (limited by CONTEXT_WINDOW)
         recent = history[-self.CONTEXT_WINDOW:]
         while recent:
@@ -1065,9 +1096,87 @@ class AgentLoop:
     def _trim_history(self, history: list[Message]) -> None:
         """Trim history to prevent unbounded growth."""
         if len(history) > self.MAX_HISTORY:
-            # Keep the most recent messages
-            del history[:-self.MAX_HISTORY]
+            overflow = len(history) - self.MAX_HISTORY + 1
+            dropped = history[:overflow]
+            summary_lines = []
+            for msg in dropped:
+                if msg.role in {"user", "assistant"}:
+                    excerpt = (msg.content or "").strip().replace("\n", " ")
+                    if excerpt:
+                        summary_lines.append(f"{msg.role}: {excerpt[:180]}")
+            if summary_lines:
+                summary_text = "Conversation summary (compressed):\n" + "\n".join(summary_lines[-20:])
+                summary_msg = Message(role="system", content=summary_text, metadata={"summary": True})
+                history[:] = [summary_msg] + history[overflow:]
+            else:
+                del history[:-self.MAX_HISTORY]
             logger.debug(f"Trimmed history to {len(history)} messages")
+
+    async def _maybe_handle_confirmation_reply(
+        self,
+        convo_key: str,
+        session_id: str,
+        user_message: str,
+        history: list[Message],
+    ) -> Optional[str]:
+        pending = self._pending_confirmations.get(convo_key)
+        if not pending:
+            return None
+
+        text = user_message.strip().lower()
+        if text in {"cancel", "cancel it", "abort"}:
+            self._pending_confirmations.pop(convo_key, None)
+            return "Cancelled the pending action."
+
+        m = re.match(r"confirm\s+(\d{4,8})$", text)
+        if not m:
+            return None
+
+        token = m.group(1)
+        if token != pending.get("token"):
+            return "Confirmation token does not match the pending action."
+
+        tc: ToolCall = pending["tool_call"]
+        result = await self._execute_tool(tc)
+        rendered = self._render_tool_result(result)
+        history.append(Message(role="tool", content=rendered, metadata={"tool_name": tc.name, "tool_call_id": tc.id}))
+        self._queue_persist(session_id, "tool", rendered)
+        self._pending_confirmations.pop(convo_key, None)
+
+        if result.success:
+            return f"Confirmed and executed `{tc.name}`.\n\n{result.output}"
+        return f"Confirmed but `{tc.name}` failed: {result.error or result.output}"
+
+    def _is_destructive_tool_call(self, tool_call: ToolCall) -> bool:
+        """Heuristic risk gate for destructive tool actions."""
+        name = (tool_call.name or "").lower()
+        args = tool_call.arguments or {}
+        if name in {"write_file", "edit_file", "apply_patch"}:
+            path = str(args.get("path", "")).lower()
+            if any(path.endswith(x) for x in (".env", "config.yaml", "config.yml", "pyproject.toml")):
+                return True
+            return False
+
+        if name != "shell":
+            return False
+
+        cmd = str(args.get("command", "")).strip().lower()
+        if not cmd:
+            return False
+        destructive_patterns = (
+            " rm ",
+            " rm-",
+            " rm\t",
+            "rm -",
+            "mv ",
+            "chmod ",
+            "chown ",
+            "git reset",
+            "git clean",
+            "dd ",
+            "mkfs",
+        )
+        return any(pat in f" {cmd}" for pat in destructive_patterns)
     
     def clear_history(self) -> None:
         """Clear all history."""

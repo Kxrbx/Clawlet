@@ -2,7 +2,7 @@
 Skill management tools.
 """
 
-import subprocess
+import asyncio
 import re
 from pathlib import Path
 from typing import Optional
@@ -83,19 +83,32 @@ class InstallSkillTool(BaseTool):
             # Clone the repository
             logger.info(f"Cloning {github_url} to {target_dir}")
             
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", github_url, str(target_dir)],
-                capture_output=True,
-                text=True,
-                timeout=120
+            proc = await asyncio.create_subprocess_exec(
+                "git", "clone", "--depth", "1", github_url, str(target_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            
-            if result.returncode != 0:
-                logger.error(f"Git clone failed: {result.stderr}")
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Failed to clone repository: {result.stderr}"
+                    error="Git clone timed out (120s limit)"
+                )
+            
+            if proc.returncode != 0:
+                stderr_text = stderr.decode("utf-8", errors="replace")
+                logger.error(f"Git clone failed: {stderr_text}")
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=f"Failed to clone repository: {stderr_text}"
                 )
             
             # Check if SKILL.md exists
@@ -134,12 +147,6 @@ class InstallSkillTool(BaseTool):
                 }
             )
             
-        except subprocess.TimeoutExpired:
-            return ToolResult(
-                success=False,
-                output="",
-                error="Git clone timed out (120s limit)"
-            )
         except Exception as e:
             logger.error(f"Failed to install skill: {e}")
             return ToolResult(
