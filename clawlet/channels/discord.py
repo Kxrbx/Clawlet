@@ -32,18 +32,19 @@ class DiscordChannel(BaseChannel):
     - Slash commands (optional)
     """
     
-    def __init__(self, bus: MessageBus, config: dict):
+    def __init__(self, bus: MessageBus, config: dict, agent=None):
         """
         Initialize Discord channel.
         
         Args:
             bus: Message bus for publishing/consuming
             config: Configuration dict with 'token' and optional 'command_prefix'
+            agent: Optional agent loop for command handling
         """
         if not DISCORD_AVAILABLE:
             raise RuntimeError("discord.py not installed. Run: pip install discord.py")
         
-        super().__init__(bus, config)
+        super().__init__(bus, config, agent)
         
         self.token = config.get("token", "")
         self.command_prefix = config.get("command_prefix", "!")
@@ -75,6 +76,31 @@ class DiscordChannel(BaseChannel):
     
     def _setup_handlers(self):
         """Set up Discord event handlers."""
+        
+        @self.bot.command(name="new", help="Start a new conversation and clear history")
+        async def new_command(ctx):
+            """Handle !new command - start a new conversation and clear history."""
+            chat_id = str(ctx.channel.id)
+            user_name = ctx.author.name or "there"
+            
+            # Clear conversation history if agent is available
+            if self.agent:
+                success = await self.agent.clear_conversation(self.name, chat_id)
+                if success:
+                    await ctx.send(
+                        f"✨ {user_name}, I've started a new conversation! "
+                        f"Previous chat history has been cleared."
+                    )
+                else:
+                    await ctx.send(
+                        f"✨ {user_name}, I've started a new conversation! "
+                        f"(Note: Could not clear stored history)"
+                    )
+            else:
+                # Agent not available, just respond
+                await ctx.send(
+                    f"✨ {user_name}, I've started a new conversation!"
+                )
         
         @self.bot.event
         async def on_ready():

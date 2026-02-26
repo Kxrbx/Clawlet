@@ -235,6 +235,41 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    async def clear_conversation(self, channel: str, chat_id: str) -> bool:
+        """
+        Clear conversation history for a specific channel/chat.
+        
+        This clears both in-memory history and persisted messages in storage.
+        
+        Args:
+            channel: The channel name (e.g., 'telegram', 'discord')
+            chat_id: The chat/conversation ID
+            
+        Returns:
+            True if history was cleared successfully
+        """
+        key = f"{channel}:{chat_id}"
+        
+        # Clear in-memory conversation state
+        if key in self._conversations:
+            self._conversations[key].history.clear()
+            logger.info(f"Cleared in-memory history for {key}")
+        
+        # Generate session ID and clear stored messages
+        session_id = self._generate_session_id(channel, chat_id)
+        
+        try:
+            if self.storage.is_initialized():
+                # Try clear_messages first (SQLite), fallback to clear_history (PostgreSQL)
+                if hasattr(self.storage, 'clear_messages'):
+                    await self.storage.clear_messages(session_id)
+                elif hasattr(self.storage, 'clear_history'):
+                    await self.storage.clear_history(session_id)
+                logger.info(f"Cleared stored messages for session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear conversation history: {e}")
+            return False
 
     def _generate_session_id(self, channel: str, chat_id: str) -> str:
         """Generate a stable session ID per workspace/channel/chat combination."""

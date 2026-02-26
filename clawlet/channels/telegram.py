@@ -83,8 +83,8 @@ def convert_markdown_to_html(text: str) -> str:
 class TelegramChannel(BaseChannel):
     """Telegram channel using python-telegram-bot."""
     
-    def __init__(self, bus: MessageBus, config: dict):
-        super().__init__(bus, config)
+    def __init__(self, bus: MessageBus, config: dict, agent=None):
+        super().__init__(bus, config, agent)
         
         # Strip whitespace from token to avoid URL errors
         self.token = (config.get("token") or "").strip()
@@ -116,6 +116,7 @@ class TelegramChannel(BaseChannel):
             
             # Add handlers
             self.app.add_handler(CommandHandler("start", self._handle_start))
+            self.app.add_handler(CommandHandler("new", self._handle_new))
             self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
             
             # Initialize and start
@@ -236,6 +237,30 @@ class TelegramChannel(BaseChannel):
             f"👋 Hello {user_name}! I'm Clawlet, your AI assistant.\n\n"
             f"Just send me a message and I'll help you out!"
         )
+    
+    async def _handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /new command - start a new conversation and clear history."""
+        chat_id = str(update.effective_chat.id)
+        user_name = update.effective_user.first_name or "there"
+        
+        # Clear conversation history if agent is available
+        if self.agent:
+            success = await self.agent.clear_conversation(self.name, chat_id)
+            if success:
+                await update.message.reply_text(
+                    f"✨ {user_name}, I've started a new conversation! "
+                    f"Previous chat history has been cleared."
+                )
+            else:
+                await update.message.reply_text(
+                    f"✨ {user_name}, I've started a new conversation! "
+                    f"(Note: Could not clear stored history)"
+                )
+        else:
+            # Agent not available, just respond
+            await update.message.reply_text(
+                f"✨ {user_name}, I've started a new conversation!"
+            )
     
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming text message."""

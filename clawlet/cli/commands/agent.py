@@ -195,38 +195,40 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     logger.debug(f"Telegram config: enabled={telegram_enabled}")
     
     telegram_channel = None
+    
+    # Create tool registry first (needed for agent)
+    from clawlet.tools import create_default_tool_registry
+    allowed_dir = str(workspace)
+    logger.info(f"[DEBUG] About to create tool registry with allowed_dir={allowed_dir}")
+    tools = create_default_tool_registry(allowed_dir=allowed_dir, config=config)
+    logger.info(f"[DEBUG] Tool registry created with {len(tools.all_tools())} tools")
+    for t in tools.all_tools():
+        logger.info(f"[DEBUG] Registered tool: {t.name}")
+    
+    # Create agent loop first (needed for channel initialization)
+    agent = AgentLoop(
+        bus=bus,
+        workspace=workspace,
+        identity=identity,
+        provider=provider,
+        model=effective_model,
+        tools=tools,
+        max_iterations=config.agent.max_iterations,
+        storage_config=config.storage,
+    )
+    
     try:
-        # Initialize and start Telegram channel if enabled
+        # Initialize and start Telegram channel if enabled (after agent is created)
         if telegram_enabled and telegram_token:
             from clawlet.channels.telegram import TelegramChannel
             logger.info("Initializing Telegram channel...")
-            telegram_channel = TelegramChannel(bus, {"token": telegram_token})
+            telegram_channel = TelegramChannel(bus, {"token": telegram_token}, agent)
             await telegram_channel.start()
             logger.info("Telegram channel started")
         elif telegram_enabled and not telegram_token:
             logger.warning("Telegram enabled but token not configured")
         else:
             logger.warning("Telegram channel not enabled in config - messages will not be received!")
-        
-        # Create tool registry with all tools (including web search)
-        from clawlet.tools import create_default_tool_registry
-        allowed_dir = str(workspace)
-        logger.info(f"[DEBUG] About to create tool registry with allowed_dir={allowed_dir}")
-        tools = create_default_tool_registry(allowed_dir=allowed_dir, config=config)
-        logger.info(f"[DEBUG] Tool registry created with {len(tools.all_tools())} tools")
-        for t in tools.all_tools():
-            logger.info(f"[DEBUG] Registered tool: {t.name}")
-        
-        agent = AgentLoop(
-            bus=bus,
-            workspace=workspace,
-            identity=identity,
-            provider=provider,
-            model=effective_model,
-            tools=tools,
-            max_iterations=config.agent.max_iterations,
-            storage_config=config.storage,
-        )
         
         # Set up signal handlers for graceful shutdown
         import signal as signal_module

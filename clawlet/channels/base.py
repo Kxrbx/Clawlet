@@ -4,11 +4,14 @@ Base channel interface.
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from loguru import logger
 
 from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
+
+if TYPE_CHECKING:
+    from clawlet.agent.loop import AgentLoop
 
 
 class BaseChannel(ABC):
@@ -22,9 +25,10 @@ class BaseChannel(ABC):
     4. Consuming outbound messages and sending to platform
     """
     
-    def __init__(self, bus: MessageBus, config: dict):
+    def __init__(self, bus: MessageBus, config: dict, agent: Optional["AgentLoop"] = None):
         self.bus = bus
         self.config = config
+        self.agent = agent
         self._running = False
     
     @property

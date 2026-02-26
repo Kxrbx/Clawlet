@@ -323,7 +323,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     if telegram_enabled and telegram_token:
         from clawlet.channels.telegram import TelegramChannel
         logger.info("Initializing Telegram channel...")
-        telegram_channel = TelegramChannel(bus, {"token": telegram_token})
+        telegram_channel = TelegramChannel(bus, {"token": telegram_token}, agent)
         await telegram_channel.start()
         logger.info("Telegram channel started")
     elif telegram_enabled and not telegram_token:

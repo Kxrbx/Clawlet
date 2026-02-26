@@ -41,6 +41,11 @@ class StorageBackend(ABC):
         pass
     
     @abstractmethod
+    async def clear_messages(self, session_id: str) -> int:
+        """Clear all messages for a session."""
+        pass
+    
+    @abstractmethod
     async def close(self) -> None:
         """Close the storage connection."""
         pass
@@ -119,6 +124,15 @@ class SQLiteStorage(StorageBackend):
             ))
         
         return messages
+    
+    async def clear_messages(self, session_id: str) -> int:
+        """Clear all messages for a session."""
+        cursor = await self._db.execute(
+            "DELETE FROM messages WHERE session_id = ?",
+            (session_id,)
+        )
+        await self._db.commit()
+        return cursor.rowcount
     
     async def close(self) -> None:
         """Close the database connection."""
