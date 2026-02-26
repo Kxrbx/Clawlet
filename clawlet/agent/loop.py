@@ -88,9 +88,53 @@ class AgentLoop:
     CONTEXT_CHAR_BUDGET = 12000  # Approximate character budget for prompt context
     MAX_TOOL_OUTPUT_CHARS = 4000
     NO_PROGRESS_LIMIT = 3
+    MAX_TOOL_CALLS_PER_MESSAGE = 4
+    MAX_AUTONOMOUS_FOLLOWUP_DEPTH = 1
     TOOL_ALIASES = {
         "list_files": "list_dir",
     }
+    INSTALL_KEYWORDS = ("install", "add", "setup", "set up")
+    TOOL_INTENT_PATTERNS = [
+        r"\binstall\b",
+        r"\bsearch\b",
+        r"\bfind\b",
+        r"\blook up\b",
+        r"\blatest\b",
+        r"\bcurrent\b",
+        r"\bnews\b",
+        r"\bprice\b",
+        r"\bweather\b",
+        r"\bstock\b",
+        r"\bfile\b",
+        r"\bfolder\b",
+        r"\bdirectory\b",
+        r"\bread\b",
+        r"\bwrite\b",
+        r"\bedit\b",
+        r"\bcreate\b",
+        r"\bdelete\b",
+        r"\brun\b",
+        r"\bexecute\b",
+        r"\bcommand\b",
+        r"\bshell\b",
+        r"\bgit\b",
+        r"\bclawhub\b",
+        r"\bskill\b",
+        r"\bapi\b",
+        r"\burl\b",
+        r"https?://",
+        r"`[^`]+`",
+    ]
+    AUTONOMOUS_COMMITMENT_PATTERN = re.compile(
+        r"\b(i will|i'll|i am going to|i'm going to|let me)\b.*\b"
+        r"(install|search|check|look|find|run|execute|create|update|send|handle|do)\b",
+        re.IGNORECASE,
+    )
+    AUTONOMOUS_BLOCKING_PATTERN = re.compile(
+        r"\b(would you like|do you want|can you confirm|please confirm|which one|"
+        r"i need|i can't|cannot|unable|if you want)\b",
+        re.IGNORECASE,
+    )
     
     def __init__(
         self,
@@ -358,7 +402,7 @@ class AgentLoop:
             except Exception as e:
                 logger.warning(f"Failed to save to memory: {e}")
     
-    async def _call_provider_with_retry(self, messages: list[dict]) -> LLMResponse:
+    async def _call_provider_with_retry(self, messages: list[dict], enable_tools: bool = True) -> LLMResponse:
         """Call LLM provider with retry, exponential backoff, and circuit breaker."""
         # Check circuit breaker first
         now = datetime.now(UTC_TZ)
@@ -379,8 +423,8 @@ class AgentLoop:
                     messages=messages,
                     model=self.model,
                     temperature=0.7,
-                    tools=self.tools.to_openai_tools(),
-                    tool_choice="auto",
+                    tools=self.tools.to_openai_tools() if enable_tools else None,
+                    tool_choice="auto" if enable_tools else None,
                 )
                 # Success: reset error counter
                 self._consecutive_errors = 0
@@ -418,6 +462,9 @@ class AgentLoop:
         user_message = msg.content
         channel = msg.channel
         chat_id = msg.chat_id
+        metadata = msg.metadata or {}
+        is_internal_autonomous = bool(metadata.get("internal_autonomous_followup"))
+        autonomous_depth = int(metadata.get("autonomous_followup_depth", 0))
         convo = await self._get_conversation_state(channel, chat_id)
         self._session_id = convo.session_id
         self._history = convo.history
@@ -432,10 +479,23 @@ class AgentLoop:
         
         logger.info(f"Processing message from {channel}/{chat_id}: {user_message[:50]}...")
         
-        # Add to history
-        convo.history.append(Message(role="user", content=user_message))
-        # Persist message
-        self._queue_persist(convo.session_id, "user", user_message)
+        # Add to history. Internal autonomous prompts are system context, not user content.
+        if is_internal_autonomous:
+            convo.history.append(Message(role="system", content=user_message))
+        else:
+            convo.history.append(Message(role="user", content=user_message))
+            self._queue_persist(convo.session_id, "user", user_message)
+
+        direct_install_response = await self._maybe_handle_direct_skill_install(user_message, convo.history)
+        if direct_install_response is not None:
+            convo.history.append(Message(role="assistant", content=direct_install_response))
+            self._queue_persist(convo.session_id, "assistant", direct_install_response)
+            from clawlet.bus.queue import OutboundMessage
+            return OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=direct_install_response,
+            )
         
         # Trim history periodically
         self._trim_history(convo.history)
@@ -446,6 +506,8 @@ class AgentLoop:
         is_error = False
         no_progress_count = 0
         last_signature: Optional[str] = None
+        enable_tools = self._should_enable_tools(user_message)
+        tool_calls_used = 0
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -455,7 +517,7 @@ class AgentLoop:
             
             try:
                 # Call LLM provider with retry and circuit breaker
-                response: LLMResponse = await self._call_provider_with_retry(messages)
+                response: LLMResponse = await self._call_provider_with_retry(messages, enable_tools=enable_tools)
                 
                 response_content = response.content
                 
@@ -485,6 +547,24 @@ class AgentLoop:
                     break
                 
                 if tool_calls:
+                    if not enable_tools:
+                        logger.warning("Ignoring tool calls because tools are disabled for this request")
+                        tool_calls = []
+
+                if tool_calls:
+                    if tool_calls_used + len(tool_calls) > self.MAX_TOOL_CALLS_PER_MESSAGE:
+                        logger.warning(
+                            "Stopping loop due to tool-call budget exceeded: "
+                            f"{tool_calls_used + len(tool_calls)} > {self.MAX_TOOL_CALLS_PER_MESSAGE}"
+                        )
+                        final_response = (
+                            "I stopped to avoid excessive tool calls. "
+                            "Please narrow the request and I will run only the minimum needed actions."
+                        )
+                        is_error = True
+                        break
+
+                    tool_calls_used += len(tool_calls)
                     self._tool_stats["calls_requested"] += len(tool_calls)
                     # Add assistant message with tool calls
                     convo.history.append(Message(
@@ -543,7 +623,38 @@ class AgentLoop:
         if final_response is None:
             final_response = "I reached my maximum number of iterations. Please try again."
             is_error = True
-        
+
+        if self._should_schedule_autonomous_followup(
+            assistant_response=final_response,
+            tool_calls_used=tool_calls_used,
+            is_error=is_error,
+            is_internal_autonomous=is_internal_autonomous,
+            autonomous_depth=autonomous_depth,
+        ):
+            followup_prompt = (
+                "Autonomous follow-up: execute the action you already committed to in the last reply. "
+                "Use tools immediately when needed. Do not re-list options. "
+                f"Original user request: {user_message}\n"
+                f"Your previous reply: {final_response}"
+            )
+            await self.bus.publish_inbound(
+                type(msg)(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=followup_prompt,
+                    user_id=msg.user_id,
+                    user_name=msg.user_name,
+                    metadata={
+                        "internal_autonomous_followup": True,
+                        "autonomous_followup_depth": autonomous_depth + 1,
+                    },
+                )
+            )
+            logger.info(
+                f"Queued autonomous follow-up for {channel}/{chat_id} "
+                f"(depth={autonomous_depth + 1})"
+            )
+
         logger.info(f"Final response: {len(final_response)} chars (iterations: {iteration})")
         
         # Update metrics
@@ -558,6 +669,159 @@ class AgentLoop:
             chat_id=chat_id,
             content=final_response,
         )
+
+    async def _maybe_handle_direct_skill_install(
+        self,
+        user_message: str,
+        history: list[Message],
+    ) -> Optional[str]:
+        """Handle explicit skill-install requests without re-entering discovery loops."""
+        lowered = user_message.strip().lower()
+        if not lowered:
+            return None
+
+        if not any(keyword in lowered for keyword in self.INSTALL_KEYWORDS):
+            return None
+        if "skill" not in lowered and "clawhub" not in lowered:
+            return None
+
+        target = self._extract_skill_target(user_message)
+        if not target:
+            return "I can install it, but I need the skill name or slug (for example: `install skilltree`)."
+
+        github_url = self._find_github_url_for_target(target, history)
+        if github_url and self.tools.get("install_skill"):
+            tc = ToolCall(
+                id="direct_install_skill",
+                name="install_skill",
+                arguments={"github_url": github_url},
+            )
+            result = await self._execute_tool(tc)
+            if result.success:
+                return result.output
+            return f"Install failed: {result.error or result.output}"
+
+        slug = self._find_clawhub_slug_for_target(target, history) or self._slugify(target)
+        if not slug:
+            return f"I couldn't resolve a valid slug for '{target}'. Please send the exact slug from Clawhub."
+
+        if self.tools.get("shell"):
+            tc = ToolCall(
+                id="direct_clawhub_install",
+                name="shell",
+                arguments={"command": f"clawhub install {slug}"},
+            )
+            result = await self._execute_tool(tc)
+            if result.success:
+                return f"Installed `{slug}`.\n\n{result.output}"
+            return (
+                f"I couldn't install `{slug}` automatically.\n"
+                f"Error: {result.error or result.output}\n"
+                "If this is a GitHub-based skill, send the repository URL."
+            )
+
+        return (
+            f"I can install `{slug}`, but the shell tool is unavailable in this runtime. "
+            f"Please run `clawhub install {slug}` manually or send a GitHub URL."
+        )
+
+    def _extract_skill_target(self, user_message: str) -> Optional[str]:
+        """Extract a likely skill target from natural language install requests."""
+        text = user_message.strip()
+        if not text:
+            return None
+
+        # Example: "install skilltree", "ok install SkillTree", "please add clawai-town skill"
+        m = re.search(r"(?:install|add|setup|set up)\s+(.+)", text, re.IGNORECASE)
+        if not m:
+            return None
+
+        candidate = m.group(1).strip().strip("`'\".,!?")
+        candidate = re.sub(r"\b(skill|please|now|for me)\b", "", candidate, flags=re.IGNORECASE).strip()
+        candidate = re.sub(r"\s+", " ", candidate).strip(" -")
+        return candidate or None
+
+    def _find_github_url_for_target(self, target: str, history: list[Message]) -> Optional[str]:
+        """Find a GitHub URL in recent conversation matching the requested target."""
+        target_tokens = set(self._slugify(target).split("-"))
+        for msg in reversed(history[-30:]):
+            urls = re.findall(r"https://github\.com/[^\s)]+", msg.content or "")
+            for url in urls:
+                cleaned = url.rstrip(".,)")
+                slug = cleaned.rstrip("/").split("/")[-1].replace(".git", "")
+                slug_tokens = set(self._slugify(slug).split("-"))
+                if target_tokens and (target_tokens <= slug_tokens or slug_tokens <= target_tokens):
+                    return cleaned
+        return None
+
+    def _find_clawhub_slug_for_target(self, target: str, history: list[Message]) -> Optional[str]:
+        """Find a previously suggested `clawhub install <slug>` command for the target."""
+        target_slug = self._slugify(target)
+        target_tokens = set(target_slug.split("-"))
+        for msg in reversed(history[-30:]):
+            installs = re.findall(r"clawhub\s+install\s+([a-zA-Z0-9._-]+)", msg.content or "", re.IGNORECASE)
+            for candidate in installs:
+                slug = self._slugify(candidate)
+                slug_tokens = set(slug.split("-"))
+                if target_tokens and (target_tokens <= slug_tokens or slug_tokens <= target_tokens):
+                    return slug
+        return None
+
+    def _slugify(self, value: str) -> str:
+        """Normalize potential skill names into a safe slug."""
+        slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip().lower())
+        slug = re.sub(r"-{2,}", "-", slug).strip("-")
+        return slug
+
+    def _should_enable_tools(self, user_message: str) -> bool:
+        """Heuristic gate: disable tools for simple conversational requests."""
+        text = user_message.strip()
+        if not text:
+            return False
+
+        lowered = text.lower()
+        if lowered in {"hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no"}:
+            return False
+
+        for pattern in self.TOOL_INTENT_PATTERNS:
+            if re.search(pattern, lowered, re.IGNORECASE):
+                return True
+
+        # Keep short plain-language prompts tool-free by default.
+        if len(text) <= 120 and "?" in text:
+            return False
+        if len(text) <= 80 and not any(ch.isdigit() for ch in text):
+            return False
+
+        return True
+
+    def _should_schedule_autonomous_followup(
+        self,
+        assistant_response: str,
+        tool_calls_used: int,
+        is_error: bool,
+        is_internal_autonomous: bool,
+        autonomous_depth: int,
+    ) -> bool:
+        """Schedule a self-follow-up turn if the model promised action but did none."""
+        if is_error:
+            return False
+        if is_internal_autonomous:
+            return False
+        if autonomous_depth >= self.MAX_AUTONOMOUS_FOLLOWUP_DEPTH:
+            return False
+        if tool_calls_used > 0:
+            return False
+
+        text = (assistant_response or "").strip()
+        if not text:
+            return False
+
+        # If model is asking for input/confirmation, do not force autonomous continuation.
+        if "?" in text or self.AUTONOMOUS_BLOCKING_PATTERN.search(text):
+            return False
+
+        return bool(self.AUTONOMOUS_COMMITMENT_PATTERN.search(text))
 
     def _extract_provider_tool_calls(self, response: LLMResponse) -> list[ToolCall]:
         """Normalize provider-native tool calls into internal ToolCall objects."""

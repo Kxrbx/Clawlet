@@ -3,6 +3,7 @@ Tests for AgentLoop integration.
 """
 
 import asyncio
+from pathlib import Path
 
 from clawlet.agent.loop import Message
 
@@ -126,3 +127,187 @@ def test_build_messages_applies_context_character_budget(agent_loop):
     assert len(non_system) == 2
     assert non_system[0]["content"] == "y" * 25
     assert non_system[1]["content"] == "z" * 25
+
+
+def test_should_enable_tools_is_false_for_simple_chat(agent_loop):
+    assert agent_loop._should_enable_tools("Hello") is False
+    assert agent_loop._should_enable_tools("Thanks!") is False
+    assert agent_loop._should_enable_tools("How are you?") is False
+
+
+def test_should_enable_tools_is_true_for_actionable_requests(agent_loop):
+    assert agent_loop._should_enable_tools("Install skilltree skill") is True
+    assert agent_loop._should_enable_tools("Search latest Python release notes") is True
+    assert agent_loop._should_enable_tools("Run `git status`") is True
+
+
+def test_call_provider_without_tools_omits_tool_payload(event_loop):
+    from clawlet.agent.loop import AgentLoop
+    from clawlet.agent.identity import IdentityLoader
+    from clawlet.bus.queue import MessageBus
+    from clawlet.providers.base import BaseProvider, LLMResponse
+    from clawlet.tools.registry import ToolRegistry
+    from clawlet.config import StorageConfig, SQLiteConfig
+    import tempfile
+
+    class CapturingProvider(BaseProvider):
+        def __init__(self):
+            self.last_kwargs = {}
+
+        @property
+        def name(self) -> str:
+            return "capturing"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, messages, model=None, temperature=0.7, max_tokens=4096, **kwargs):
+            self.last_kwargs = kwargs
+            return LLMResponse(content="ok", model=model or "dummy-model", usage={}, finish_reason="stop")
+
+        async def stream(self, messages, model=None, temperature=0.7, max_tokens=4096, **kwargs):
+            yield "ok"
+
+        async def close(self):
+            pass
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        (workspace / "SOUL.md").write_text("# SOUL\n## Name\nTestAgent", encoding="utf-8")
+        (workspace / "USER.md").write_text("# USER\n## Name\nHuman", encoding="utf-8")
+        (workspace / "MEMORY.md").write_text("# MEMORY\nInitial", encoding="utf-8")
+        (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT\n- noop", encoding="utf-8")
+
+        identity = IdentityLoader(workspace).load_all()
+        provider = CapturingProvider()
+        agent = AgentLoop(
+            bus=MessageBus(),
+            workspace=workspace,
+            identity=identity,
+            provider=provider,
+            tools=ToolRegistry(),
+            model="dummy-model",
+            storage_config=StorageConfig(backend="sqlite", sqlite=SQLiteConfig(path=str(workspace / "clawlet.db"))),
+        )
+        event_loop.run_until_complete(agent._initialize_storage())
+
+        messages = [{"role": "system", "content": "test"}, {"role": "user", "content": "hello"}]
+        event_loop.run_until_complete(agent._call_provider_with_retry(messages, enable_tools=False))
+
+        assert provider.last_kwargs.get("tools") is None
+        assert provider.last_kwargs.get("tool_choice") is None
+        event_loop.run_until_complete(agent.close())
+
+
+def test_process_message_stops_on_tool_call_budget(event_loop):
+    from clawlet.agent.loop import AgentLoop
+    from clawlet.agent.identity import IdentityLoader
+    from clawlet.bus.queue import InboundMessage, MessageBus
+    from clawlet.providers.base import BaseProvider, LLMResponse
+    from clawlet.tools.registry import ToolRegistry, BaseTool, ToolResult
+    from clawlet.config import StorageConfig, SQLiteConfig
+    import tempfile
+
+    class LoopingToolProvider(BaseProvider):
+        @property
+        def name(self) -> str:
+            return "looping"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, messages, model=None, temperature=0.7, max_tokens=4096, **kwargs):
+            return LLMResponse(
+                content="Working...",
+                model=model or "dummy-model",
+                usage={},
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "dummy_tool", "arguments": "{}"},
+                    }
+                ],
+            )
+
+        async def stream(self, messages, model=None, temperature=0.7, max_tokens=4096, **kwargs):
+            yield "ok"
+
+        async def close(self):
+            pass
+
+    class DummyTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "dummy_tool"
+
+        @property
+        def description(self) -> str:
+            return "A test tool."
+
+        async def execute(self, **kwargs) -> ToolResult:
+            return ToolResult(success=True, output="done")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        (workspace / "SOUL.md").write_text("# SOUL\n## Name\nTestAgent", encoding="utf-8")
+        (workspace / "USER.md").write_text("# USER\n## Name\nHuman", encoding="utf-8")
+        (workspace / "MEMORY.md").write_text("# MEMORY\nInitial", encoding="utf-8")
+        (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT\n- noop", encoding="utf-8")
+
+        identity = IdentityLoader(workspace).load_all()
+        tools = ToolRegistry()
+        tools.register(DummyTool())
+
+        agent = AgentLoop(
+            bus=MessageBus(),
+            workspace=workspace,
+            identity=identity,
+            provider=LoopingToolProvider(),
+            tools=tools,
+            model="dummy-model",
+            storage_config=StorageConfig(backend="sqlite", sqlite=SQLiteConfig(path=str(workspace / "clawlet.db"))),
+        )
+        event_loop.run_until_complete(agent._initialize_storage())
+
+        msg = InboundMessage(channel="test", chat_id="123", content="search recent updates")
+        response = event_loop.run_until_complete(agent._process_message(msg))
+
+        assert response is not None
+        assert "avoid excessive tool calls" in response.content.lower()
+        event_loop.run_until_complete(agent.close())
+
+
+def test_schedules_autonomous_followup_on_commitment(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+
+    # Force provider to return a commitment with no tool calls.
+    agent_loop.provider.responses = ["I will install that now and report back."]
+    agent_loop.provider.index = 0
+
+    msg = InboundMessage(channel="test", chat_id="auto-1", content="Install skilltree")
+    response = event_loop.run_until_complete(agent_loop._process_message(msg))
+
+    assert response is not None
+    assert "I will install that now" in response.content
+    assert agent_loop.bus.inbound_size >= 1
+
+    queued = event_loop.run_until_complete(agent_loop.bus.consume_inbound())
+    assert queued.metadata.get("internal_autonomous_followup") is True
+    assert queued.metadata.get("autonomous_followup_depth") == 1
+    assert "Autonomous follow-up" in queued.content
+
+
+def test_does_not_schedule_autonomous_followup_when_response_is_question(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+
+    agent_loop.provider.responses = ["I can do that. Would you like me to proceed?"]
+    agent_loop.provider.index = 0
+
+    msg = InboundMessage(channel="test", chat_id="auto-2", content="Install skilltree")
+    response = event_loop.run_until_complete(agent_loop._process_message(msg))
+
+    assert response is not None
+    assert "Would you like me to proceed?" in response.content
+    assert agent_loop.bus.inbound_size == 0

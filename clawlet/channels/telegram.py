@@ -5,6 +5,7 @@ Telegram channel implementation.
 import asyncio
 import re
 from typing import Optional
+from collections import defaultdict
 
 from loguru import logger
 from telegram import Update
@@ -93,6 +94,8 @@ class TelegramChannel(BaseChannel):
         
         self.app: Optional[Application] = None
         self._outbound_task: Optional[asyncio.Task] = None
+        self._typing_tasks: dict[str, asyncio.Task] = {}
+        self._typing_refcounts: defaultdict[str, int] = defaultdict(int)
     
     @property
     def name(self) -> str:
@@ -155,6 +158,10 @@ class TelegramChannel(BaseChannel):
             except asyncio.CancelledError:
                 pass
         
+        # Stop active typing loops
+        for chat_id in list(self._typing_tasks.keys()):
+            await self._stop_typing(chat_id)
+        
         if self.app:
             try:
                 # Check if updater exists and is running before stopping
@@ -198,12 +205,6 @@ class TelegramChannel(BaseChannel):
                 logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
                 return
             
-            # Stop typing indicator before sending message
-            try:
-                await self.app.bot.send_chat_action(chat_id=chat_id, action="cancel")
-            except Exception as e:
-                logger.debug(f"Could not cancel typing action: {e}")
-            
             # Try HTML parse_mode with converted Markdown
             parse_mode = "HTML"
             html_content = convert_markdown_to_html(msg.content)
@@ -227,6 +228,8 @@ class TelegramChannel(BaseChannel):
                 logger.info(f"Sent Telegram message to {chat_id} (plain text)")
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
+        finally:
+            await self._stop_typing(msg.chat_id)
     
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
@@ -270,12 +273,6 @@ class TelegramChannel(BaseChannel):
         
         logger.info(f"Received Telegram message from {chat_id}: {content[:50]}...")
         
-        # Send typing indicator to show bot is processing
-        try:
-            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-        except Exception as e:
-            logger.debug(f"Could not send typing action: {e}")
-        
         # Create inbound message
         msg = InboundMessage(
             channel=self.name,
@@ -289,4 +286,46 @@ class TelegramChannel(BaseChannel):
         )
         
         # Publish to bus
-        await self.bus.publish_inbound(msg)
+        await self._start_typing(chat_id)
+        try:
+            await self.bus.publish_inbound(msg)
+        except Exception:
+            await self._stop_typing(chat_id)
+            raise
+
+    async def _start_typing(self, chat_id: str) -> None:
+        """Start keepalive typing indicator for a chat."""
+        self._typing_refcounts[chat_id] += 1
+        if chat_id in self._typing_tasks:
+            return
+        self._typing_tasks[chat_id] = asyncio.create_task(self._typing_keepalive_loop(chat_id))
+
+    async def _stop_typing(self, chat_id: str) -> None:
+        """Decrease typing reference count and stop indicator when no work remains."""
+        count = self._typing_refcounts.get(chat_id, 0)
+        if count <= 0:
+            return
+        count -= 1
+        if count > 0:
+            self._typing_refcounts[chat_id] = count
+            return
+        self._typing_refcounts.pop(chat_id, None)
+        task = self._typing_tasks.pop(chat_id, None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _typing_keepalive_loop(self, chat_id: str) -> None:
+        """Send typing action periodically until stopped."""
+        try:
+            while self._running and self._typing_refcounts.get(chat_id, 0) > 0:
+                try:
+                    await self.app.bot.send_chat_action(chat_id=int(chat_id), action="typing")
+                except Exception as e:
+                    logger.debug(f"Could not send typing action for {chat_id}: {e}")
+                await asyncio.sleep(4.0)
+        except asyncio.CancelledError:
+            raise

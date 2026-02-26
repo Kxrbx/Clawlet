@@ -72,6 +72,8 @@ class ShellTool(BaseTool):
         "git", "python", "python3", "pip", "pip3",
         "npm", "node", "yarn", "pnpm",
         "cargo", "rustc", "go",
+        # Skill/package CLIs
+        "clawhub",
         # Text processing (safe)
         "echo", "printf", "grep", "sed", "awk", "cut",
         "sort", "uniq", "diff", "patch",

@@ -4,6 +4,7 @@ Discord channel integration.
 
 import asyncio
 from typing import Optional
+from collections import defaultdict
 
 from loguru import logger
 
@@ -67,6 +68,8 @@ class DiscordChannel(BaseChannel):
         
         # Set up event handlers
         self._setup_handlers()
+        self._typing_tasks: dict[str, asyncio.Task] = {}
+        self._typing_refcounts: defaultdict[str, int] = defaultdict(int)
         
         logger.info(f"DiscordChannel initialized with prefix '{self.command_prefix}'")
     
@@ -112,6 +115,15 @@ class DiscordChannel(BaseChannel):
             if message.author == self.bot.user:
                 return
             
+            # Let discord.py handle registered commands like !new.
+            ctx = await self.bot.get_context(message)
+            if ctx.valid:
+                await self.bot.process_commands(message)
+                return
+            
+            if not message.content or not message.content.strip():
+                return
+            
             try:
                 # Create inbound message
                 guild_id = str(message.guild.id) if message.guild else None
@@ -132,7 +144,12 @@ class DiscordChannel(BaseChannel):
                 logger.info(f"Discord message from {message.author}: {message.content[:50]}...")
                 
                 # Publish to message bus
-                await self._publish_inbound(inbound)
+                await self._start_typing(str(message.channel.id))
+                try:
+                    await self._publish_inbound(inbound)
+                except Exception:
+                    await self._stop_typing(str(message.channel.id))
+                    raise
                 
             except Exception as e:
                 logger.error(f"Error processing Discord message: {e}", exc_info=True)
@@ -155,6 +172,7 @@ class DiscordChannel(BaseChannel):
                 await outbound_task
             except asyncio.CancelledError:
                 pass
+            await self._stop_all_typing()
     
     async def stop(self) -> None:
         """Stop the Discord bot."""
@@ -187,6 +205,8 @@ class DiscordChannel(BaseChannel):
         except Exception as e:
             logger.error(f"Error sending Discord message: {e}")
             return False
+        finally:
+            await self._stop_typing(msg.chat_id)
     
     async def react(self, chat_id: str, message_id: str, emoji: str) -> bool:
         """Add reaction to a message."""
@@ -255,3 +275,53 @@ class DiscordChannel(BaseChannel):
             for channel in guild.channels
             if isinstance(channel, discord.TextChannel)
         ]
+
+    async def _stop_all_typing(self) -> None:
+        """Cancel all active typing keepalive tasks."""
+        for chat_id in list(self._typing_tasks.keys()):
+            await self._stop_typing(chat_id)
+
+    async def _start_typing(self, chat_id: str) -> None:
+        """Start keepalive typing indicator for a chat."""
+        self._typing_refcounts[chat_id] += 1
+        if chat_id in self._typing_tasks:
+            return
+        self._typing_tasks[chat_id] = asyncio.create_task(self._typing_keepalive_loop(chat_id))
+
+    async def _stop_typing(self, chat_id: str) -> None:
+        """Decrease typing reference count and stop indicator when no work remains."""
+        count = self._typing_refcounts.get(chat_id, 0)
+        if count <= 0:
+            return
+        count -= 1
+        if count > 0:
+            self._typing_refcounts[chat_id] = count
+            return
+        self._typing_refcounts.pop(chat_id, None)
+        task = self._typing_tasks.pop(chat_id, None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _typing_keepalive_loop(self, chat_id: str) -> None:
+        """Send typing indicator periodically until stopped."""
+        try:
+            while self._running and self._typing_refcounts.get(chat_id, 0) > 0:
+                channel = self.bot.get_channel(int(chat_id))
+                if channel is None:
+                    try:
+                        channel = await self.bot.fetch_channel(int(chat_id))
+                    except Exception as e:
+                        logger.debug(f"Could not fetch Discord channel {chat_id} for typing: {e}")
+                        await asyncio.sleep(4.0)
+                        continue
+                try:
+                    await channel.trigger_typing()
+                except Exception as e:
+                    logger.debug(f"Could not send Discord typing action for {chat_id}: {e}")
+                await asyncio.sleep(4.0)
+        except asyncio.CancelledError:
+            raise
