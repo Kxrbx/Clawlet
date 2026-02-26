@@ -318,7 +318,24 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     
     logger.debug(f"Telegram config: enabled={telegram_enabled}")
     
-    # Initialize and start Telegram channel if enabled
+    # Create tool registry first (needed for agent)
+    from clawlet.tools import create_default_tool_registry
+    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config)
+    logger.info(f"Created tool registry with {len(tools.all_tools())} tools")
+    
+    # Create agent loop first (needed for channel initialization)
+    agent = AgentLoop(
+        bus=bus,
+        workspace=workspace,
+        identity=identity,
+        provider=provider,
+        model=effective_model,
+        tools=tools,
+        max_iterations=config.agent.max_iterations,
+        storage_config=config.storage,
+    )
+    
+    # Initialize and start Telegram channel if enabled (after agent is created)
     telegram_channel = None
     if telegram_enabled and telegram_token:
         from clawlet.channels.telegram import TelegramChannel
@@ -330,23 +347,6 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         logger.warning("Telegram enabled but token not configured")
     else:
         logger.warning("Telegram channel not enabled in config - messages will not be received!")
-    
-    # Create tool registry with all tools
-    from clawlet.tools import create_default_tool_registry
-    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config)
-    logger.info(f"Created tool registry with {len(tools.all_tools())} tools")
-    
-    # Create agent loop with the configured model
-    agent = AgentLoop(
-        bus=bus,
-        workspace=workspace,
-        identity=identity,
-        provider=provider,
-        model=effective_model,
-        tools=tools,
-        max_iterations=config.agent.max_iterations,
-        storage_config=config.storage,
-    )
     
     # Set up signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
