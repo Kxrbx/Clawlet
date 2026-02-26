@@ -239,6 +239,7 @@ storage:
 # Agent Settings
 agent:
   max_iterations: 20
+  max_tool_calls_per_message: 6
   context_window: 20
   temperature: 0.7
   mode: safe

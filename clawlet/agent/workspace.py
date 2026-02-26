@@ -402,6 +402,9 @@ class Workspace:
             tools=tools,
             model=model,
             max_iterations=self.config.agent.max_iterations if self.config else 10,
+            max_tool_calls_per_message=(
+                self.config.agent.max_tool_calls_per_message if self.config else 6
+            ),
         )
         
         self._running = True

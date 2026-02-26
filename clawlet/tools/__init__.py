@@ -7,6 +7,7 @@ Available tools:
 - EditFileTool: Edit files with search/replace
 - ListDirTool: List directory contents
 - ShellTool: Execute shell commands (safe)
+- FetchUrlTool: Fetch and extract content from direct URLs
 - WebSearchTool: Search the web via Brave API
 - InstallSkillTool: Install skills from GitHub URLs
 - ListSkillsTool: List installed skills
@@ -25,6 +26,7 @@ from clawlet.tools.files import (
 )
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.patch import ApplyPatchTool
+from clawlet.tools.fetch_url import FetchUrlTool
 from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
@@ -96,7 +98,10 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
         shell_tool.add_allowed(*FULL_EXEC_COMMANDS)
         logger.warning("Agent mode is full_exec: expanded shell command capabilities enabled")
     registry.register(shell_tool)
-    
+
+    # Add direct URL fetch tool
+    registry.register(FetchUrlTool())
+
     # Add web search tool (uses Brave Search API)
     # Get API key from config, or check both WEB_SEARCH_API_KEY and BRAVE_SEARCH_API_KEY env vars
     import os
@@ -144,6 +149,7 @@ __all__ = [
     "FileTool",
     "ShellTool",
     "ApplyPatchTool",
+    "FetchUrlTool",
     "WebSearchTool",
     "InstallSkillTool",
     "ListSkillsTool",

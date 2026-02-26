@@ -50,6 +50,7 @@ class SettingsResponse(BaseModel):
     model: str
     storage: str
     max_iterations: int
+    max_tool_calls_per_message: int
     temperature: float
 
 
@@ -58,6 +59,7 @@ class SettingsUpdate(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     max_iterations: Optional[int] = None
+    max_tool_calls_per_message: Optional[int] = None
     temperature: Optional[float] = None
 
 
@@ -327,6 +329,7 @@ async def get_settings(token: str = Depends(verify_api_token)):
         model=config.provider.openrouter.model if config.provider.openrouter else "default",
         storage=config.storage.backend,
         max_iterations=config.agent.max_iterations,
+        max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
         temperature=config.agent.temperature,
     )
 
@@ -343,9 +346,11 @@ async def update_settings(
     # Update config (in-memory only)
     if settings.provider:
         config.provider.primary = settings.provider
-    if settings.max_iterations:
+    if settings.max_iterations is not None:
         config.agent.max_iterations = settings.max_iterations
-    if settings.temperature:
+    if settings.max_tool_calls_per_message is not None:
+        config.agent.max_tool_calls_per_message = settings.max_tool_calls_per_message
+    if settings.temperature is not None:
         config.agent.temperature = settings.temperature
     
     config.to_yaml(config.config_path)

@@ -74,6 +74,7 @@ Your workspace is located at: {workspace_path}
 - If the user gives an explicit action command (example: "install X"), execute that action directly instead of re-listing options
 - Ask at most one short clarification question only when required information is missing
 - Prefer the minimum number of tool calls needed to complete the current user request
+- If the user gives explicit URL(s), fetch those URL(s) first before exploring unrelated local files or paths
 
 Current timezone: {self.timezone}
 """
@@ -226,6 +227,7 @@ You are {identity.agent_name}, an AI assistant.
 - If the user gives an explicit action command (example: "install X"), execute that action directly instead of re-listing options
 - Ask at most one short clarification question only when required information is missing
 - Prefer the minimum number of tool calls needed to complete the current user request
+- If the user gives explicit URL(s), fetch those URL(s) first before exploring unrelated local files or paths
 
 Current timezone: {identity.timezone}
 """

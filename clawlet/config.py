@@ -304,6 +304,7 @@ class StorageConfig(BaseModel):
 class AgentSettings(BaseModel):
     """Agent settings."""
     max_iterations: int = Field(default=10, ge=1, le=50)
+    max_tool_calls_per_message: int = Field(default=6, ge=1, le=50)
     context_window: int = Field(default=20, ge=5, le=100)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_history: int = Field(default=100, ge=10, le=1000)

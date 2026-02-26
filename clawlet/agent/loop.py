@@ -89,7 +89,7 @@ class AgentLoop:
     CONTEXT_CHAR_BUDGET = 12000  # Approximate character budget for prompt context
     MAX_TOOL_OUTPUT_CHARS = 4000
     NO_PROGRESS_LIMIT = 3
-    MAX_TOOL_CALLS_PER_MESSAGE = 4
+    MAX_TOOL_CALLS_PER_MESSAGE = 6
     MAX_AUTONOMOUS_FOLLOWUP_DEPTH = 1
     TOOL_ALIASES = {
         "list_files": "list_dir",
@@ -136,6 +136,7 @@ class AgentLoop:
         r"i need|i can't|cannot|unable|if you want)\b",
         re.IGNORECASE,
     )
+    URL_PATTERN = re.compile(r"https?://[^\s)>\]\"']+", re.IGNORECASE)
     
     def __init__(
         self,
@@ -146,6 +147,7 @@ class AgentLoop:
         tools: Optional[ToolRegistry] = None,
         model: Optional[str] = None,
         max_iterations: int = 10,
+        max_tool_calls_per_message: Optional[int] = None,
         storage_config: Optional[StorageConfig] = None,
     ):
         self.bus = bus
@@ -159,6 +161,10 @@ class AgentLoop:
             raise ValueError("Model must be a non-empty string")
         self.model = self.model.strip()
         self.max_iterations = max_iterations
+        self.max_tool_calls_per_message = max(
+            1,
+            int(max_tool_calls_per_message or self.MAX_TOOL_CALLS_PER_MESSAGE),
+        )
         
         # Load tool aliases from registry, fall back to class constant for backward compatibility
         self._tool_aliases = self.tools.get_aliases() if self.tools else {}
@@ -226,7 +232,15 @@ class AgentLoop:
         self._storage_ready = asyncio.Event()
         self._persist_tasks: set[asyncio.Task] = set()
         
-        logger.info(f"AgentLoop initialized with provider={provider.name}, model={self.model}, tools={len(self.tools.all_tools())}")
+        logger.info(
+            "AgentLoop initialized with provider=%s, model=%s, tools=%s, max_tool_calls_per_message=%s"
+            % (
+                provider.name,
+                self.model,
+                len(self.tools.all_tools()),
+                self.max_tool_calls_per_message,
+            )
+        )
 
     def _queue_persist(self, session_id: str, role: str, content: str, metadata: Optional[dict] = None) -> None:
         """Queue persistence task with lifecycle tracking."""
@@ -521,6 +535,7 @@ class AgentLoop:
         last_signature: Optional[str] = None
         enable_tools = self._should_enable_tools(user_message)
         tool_calls_used = 0
+        explicit_urls = self._extract_explicit_urls(user_message)
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -538,6 +553,26 @@ class AgentLoop:
                 tool_calls = self._extract_provider_tool_calls(response)
                 if not tool_calls:
                     tool_calls = self._extract_tool_calls(response_content)
+                if (
+                    not tool_calls
+                    and explicit_urls
+                    and tool_calls_used == 0
+                    and self.tools.get("fetch_url") is not None
+                ):
+                    forced = ToolCall(
+                        id="forced_fetch_url_missing_tool_call",
+                        name="fetch_url",
+                        arguments={"url": explicit_urls[0]},
+                    )
+                    logger.info(
+                        f"Applying URL-first policy: model returned no tool call, forcing fetch_url for {explicit_urls[0]}"
+                    )
+                    tool_calls = [forced]
+                tool_calls = self._prioritize_explicit_url_fetch(
+                    tool_calls=tool_calls,
+                    explicit_urls=explicit_urls,
+                    tool_calls_used=tool_calls_used,
+                )
 
                 # Detect repeated no-progress loop signatures.
                 signature = json.dumps(
@@ -565,10 +600,10 @@ class AgentLoop:
                         tool_calls = []
 
                 if tool_calls:
-                    if tool_calls_used + len(tool_calls) > self.MAX_TOOL_CALLS_PER_MESSAGE:
+                    if tool_calls_used + len(tool_calls) > self.max_tool_calls_per_message:
                         logger.warning(
                             "Stopping loop due to tool-call budget exceeded: "
-                            f"{tool_calls_used + len(tool_calls)} > {self.MAX_TOOL_CALLS_PER_MESSAGE}"
+                            f"{tool_calls_used + len(tool_calls)} > {self.max_tool_calls_per_message}"
                         )
                         final_response = (
                             "I stopped to avoid excessive tool calls. "
@@ -822,6 +857,52 @@ class AgentLoop:
             return False
 
         return True
+
+    def _extract_explicit_urls(self, user_message: str) -> list[str]:
+        """Extract normalized explicit URLs from user message."""
+        urls: list[str] = []
+        seen: set[str] = set()
+        for raw in self.URL_PATTERN.findall(user_message or ""):
+            candidate = raw.rstrip(".,);!?'\"")
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            urls.append(candidate)
+        return urls
+
+    def _prioritize_explicit_url_fetch(
+        self,
+        tool_calls: list[ToolCall],
+        explicit_urls: list[str],
+        tool_calls_used: int,
+    ) -> list[ToolCall]:
+        """Force URL fetch first for explicit-link requests on the first tool step."""
+        if not tool_calls or not explicit_urls or tool_calls_used > 0:
+            return tool_calls
+        if self.tools.get("fetch_url") is None:
+            return tool_calls
+
+        wanted = {u.lower() for u in explicit_urls}
+        for tc in tool_calls:
+            mapped_name = self._tool_aliases.get(tc.name, tc.name)
+            if mapped_name != "fetch_url":
+                continue
+            arg_url = str((tc.arguments or {}).get("url", "")).strip().lower()
+            if arg_url and arg_url in wanted:
+                return tool_calls
+
+        forced = ToolCall(
+            id="forced_fetch_url_first",
+            name="fetch_url",
+            arguments={"url": explicit_urls[0]},
+        )
+        logger.info(
+            f"Applying URL-first policy: forcing fetch_url for explicit URL {explicit_urls[0]}"
+        )
+        return [forced]
 
     def _should_schedule_autonomous_followup(
         self,
