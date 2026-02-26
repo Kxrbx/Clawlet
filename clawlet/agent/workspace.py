@@ -405,6 +405,7 @@ class Workspace:
             max_tool_calls_per_message=(
                 self.config.agent.max_tool_calls_per_message if self.config else 6
             ),
+            runtime_config=self.config.runtime if self.config else None,
         )
         
         self._running = True

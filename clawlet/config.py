@@ -346,6 +346,60 @@ class HeartbeatSettings(BaseModel):
     quiet_hours_end: int = Field(default=9, ge=0, le=23)
 
 
+class RuntimePolicySettings(BaseModel):
+    """Runtime execution policy settings."""
+
+    allowed_modes: list[Literal["read_only", "workspace_write", "elevated"]] = Field(
+        default_factory=lambda: ["read_only", "workspace_write"]
+    )
+    require_approval_for: list[Literal["read_only", "workspace_write", "elevated"]] = Field(
+        default_factory=lambda: ["elevated"]
+    )
+
+
+class RuntimeReplaySettings(BaseModel):
+    """Replay/event-log settings."""
+
+    enabled: bool = True
+    directory: str = ".runtime"
+    retention_days: int = Field(default=30, ge=1, le=3650)
+    redact_tool_outputs: bool = False
+
+
+class RuntimeSettings(BaseModel):
+    """Runtime engine settings."""
+
+    engine: Literal["python", "hybrid_rust"] = "hybrid_rust"
+    policy: RuntimePolicySettings = Field(default_factory=RuntimePolicySettings)
+    replay: RuntimeReplaySettings = Field(default_factory=RuntimeReplaySettings)
+    enable_idempotency_cache: bool = True
+    default_tool_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+    default_tool_retries: int = Field(default=1, ge=0, le=5)
+
+
+class BenchmarkGatesSettings(BaseModel):
+    """Benchmark quality gate thresholds."""
+
+    max_p95_latency_ms: float = Field(default=3000.0, ge=1.0)
+    min_tool_success_rate_pct: float = Field(default=99.0, ge=0.0, le=100.0)
+    min_deterministic_replay_pass_rate_pct: float = Field(default=98.0, ge=0.0, le=100.0)
+
+
+class BenchmarksSettings(BaseModel):
+    """Benchmarking config."""
+
+    enabled: bool = True
+    gates: BenchmarkGatesSettings = Field(default_factory=BenchmarkGatesSettings)
+
+
+class PluginSettings(BaseModel):
+    """Plugin SDK settings."""
+
+    auto_load: bool = True
+    directories: list[str] = Field(default_factory=lambda: ["~/.clawlet/plugins"])
+    sdk_version: str = "2.0.0"
+
+
 class Config(BaseModel):
     """Main configuration."""
     provider: ProviderConfig
@@ -357,6 +411,9 @@ class Config(BaseModel):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
     web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
+    runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
+    benchmarks: BenchmarksSettings = Field(default_factory=BenchmarksSettings)
+    plugins: PluginSettings = Field(default_factory=PluginSettings)
     
     # Track the source file path for reload
     config_path: Optional[Path] = None

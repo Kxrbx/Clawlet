@@ -13,6 +13,8 @@ Available tools:
 - ListSkillsTool: List installed skills
 """
 
+from pathlib import Path
+
 from clawlet.tools.registry import (
     BaseTool,
     ToolRegistry,
@@ -31,6 +33,7 @@ from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
 from clawlet.skills.registry import SkillRegistry
+from clawlet.plugins.loader import PluginLoader
 
 
 FULL_EXEC_COMMANDS = [
@@ -135,6 +138,23 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
         # Register all skill tools
         registered_count = skill_registry.register_tools_with_registry()
         logger.info(f"Registered {registered_count} skill tools from SkillRegistry")
+
+    # Load plugin tools (stable SDK v2)
+    plugin_cfg = getattr(config, "plugins", None) if config is not None else None
+    if plugin_cfg and plugin_cfg.auto_load:
+        base_dir = Path(allowed_dir).expanduser() if allowed_dir else Path.cwd()
+        plugin_dirs = []
+        for raw_dir in plugin_cfg.directories:
+            candidate = Path(raw_dir).expanduser()
+            if not candidate.is_absolute():
+                candidate = base_dir / candidate
+            plugin_dirs.append(candidate)
+        loader = PluginLoader(plugin_dirs)
+        plugin_tools = loader.load_tools()
+        for tool in plugin_tools:
+            registry.register(tool)
+        if plugin_tools:
+            logger.info(f"Registered {len(plugin_tools)} plugin tool(s)")
     
     return registry
 

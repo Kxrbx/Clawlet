@@ -8,10 +8,12 @@ import asyncio
 import json
 import re
 import time
+from dataclasses import asdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
+from uuid import uuid4
 import httpx
 
 from loguru import logger
@@ -24,8 +26,17 @@ from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult, validate_tool_params
 from clawlet.agent.memory import MemoryManager
 from clawlet.storage.sqlite import SQLiteStorage
-from clawlet.config import StorageConfig
+from clawlet.config import RuntimeSettings, StorageConfig
 from clawlet.metrics import get_metrics
+from clawlet.runtime import (
+    EVENT_RUN_COMPLETED,
+    EVENT_RUN_STARTED,
+    DeterministicToolRuntime,
+    RuntimeEvent,
+    RuntimeEventStore,
+    RuntimePolicyEngine,
+    ToolCallEnvelope,
+)
 
 
 UTC_TZ = timezone.utc
@@ -149,6 +160,7 @@ class AgentLoop:
         max_iterations: int = 10,
         max_tool_calls_per_message: Optional[int] = None,
         storage_config: Optional[StorageConfig] = None,
+        runtime_config: Optional[RuntimeSettings] = None,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -204,6 +216,7 @@ class AgentLoop:
         self._running = False
         self._history: list[Message] = []
         self._session_id = ""
+        self._current_run_id = ""
         self._conversations: dict[str, ConversationState] = {}
         self._pending_confirmations: dict[str, dict] = {}
         
@@ -231,6 +244,29 @@ class AgentLoop:
         # Event to signal that storage initialization is complete
         self._storage_ready = asyncio.Event()
         self._persist_tasks: set[asyncio.Task] = set()
+
+        # Deterministic runtime + replay infrastructure
+        self.runtime_config = runtime_config or RuntimeSettings()
+        replay_dir = Path(self.runtime_config.replay.directory).expanduser()
+        if not replay_dir.is_absolute():
+            replay_dir = self.workspace / replay_dir
+        event_path = replay_dir / "events.jsonl"
+        self._event_store = RuntimeEventStore(
+            event_path,
+            redact_tool_output=self.runtime_config.replay.redact_tool_outputs,
+        )
+        allowed_modes = tuple(self.runtime_config.policy.allowed_modes)  # type: ignore[arg-type]
+        require_approval_for = tuple(self.runtime_config.policy.require_approval_for)  # type: ignore[arg-type]
+        self._runtime_policy = RuntimePolicyEngine(
+            allowed_modes=allowed_modes or ("read_only", "workspace_write"),
+            require_approval_for=require_approval_for or ("elevated",),
+        )
+        self._tool_runtime = DeterministicToolRuntime(
+            registry=self.tools,
+            event_store=self._event_store,
+            policy=self._runtime_policy,
+            enable_idempotency=self.runtime_config.enable_idempotency_cache,
+        )
         
         logger.info(
             "AgentLoop initialized with provider=%s, model=%s, tools=%s, max_tool_calls_per_message=%s"
@@ -247,6 +283,25 @@ class AgentLoop:
         task = asyncio.create_task(self._persist_message(session_id, role, content, metadata))
         self._persist_tasks.add(task)
         task.add_done_callback(self._persist_tasks.discard)
+
+    def _next_run_id(self, session_id: str) -> str:
+        """Generate a deterministic-looking unique run identifier."""
+        return f"{session_id}-{uuid4().hex[:12]}"
+
+    def _emit_runtime_event(self, event_type: str, session_id: str, payload: Optional[dict] = None) -> None:
+        """Persist structured runtime event for replay/diagnostics."""
+        if not self.runtime_config.replay.enabled:
+            return
+        if not self._current_run_id:
+            return
+        self._event_store.append(
+            RuntimeEvent(
+                event_type=event_type,
+                run_id=self._current_run_id,
+                session_id=session_id,
+                payload=payload or {},
+            )
+        )
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -485,6 +540,17 @@ class AgentLoop:
         convo_key = f"{channel}:{chat_id}"
         self._session_id = convo.session_id
         self._history = convo.history
+        self._current_run_id = self._next_run_id(convo.session_id)
+        self._emit_runtime_event(
+            EVENT_RUN_STARTED,
+            session_id=convo.session_id,
+            payload={
+                "channel": channel,
+                "chat_id": chat_id,
+                "engine": self.runtime_config.engine,
+                "message_preview": user_message[:200],
+            },
+        )
         
         # Get metrics instance
         metrics = get_metrics()
@@ -504,6 +570,11 @@ class AgentLoop:
         )
         if approval_response is not None:
             from clawlet.bus.queue import OutboundMessage
+            self._emit_runtime_event(
+                EVENT_RUN_COMPLETED,
+                session_id=convo.session_id,
+                payload={"iterations": 0, "is_error": False, "response_preview": approval_response[:200]},
+            )
             return OutboundMessage(channel=channel, chat_id=chat_id, content=approval_response)
         
         # Add to history. Internal autonomous prompts are system context, not user content.
@@ -518,6 +589,11 @@ class AgentLoop:
             convo.history.append(Message(role="assistant", content=direct_install_response))
             self._queue_persist(convo.session_id, "assistant", direct_install_response)
             from clawlet.bus.queue import OutboundMessage
+            self._emit_runtime_event(
+                EVENT_RUN_COMPLETED,
+                session_id=convo.session_id,
+                payload={"iterations": 0, "is_error": False, "response_preview": direct_install_response[:200]},
+            )
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -727,6 +803,16 @@ class AgentLoop:
             metrics.inc_messages()
         
         from clawlet.bus.queue import OutboundMessage
+        self._emit_runtime_event(
+            EVENT_RUN_COMPLETED,
+            session_id=convo.session_id,
+            payload={
+                "iterations": iteration,
+                "is_error": is_error,
+                "tool_stats": dict(self._tool_stats),
+                "response_preview": final_response[:200],
+            },
+        )
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -1059,7 +1145,7 @@ class AgentLoop:
         
         return tool_calls
     
-    async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
+    async def _execute_tool(self, tool_call: ToolCall, approved: bool = False) -> ToolResult:
         """Execute a tool call with circuit breaker protection."""
         # Use the already-mapped name from the tool call (set in the loop)
         # But also check for aliases in case this method is called directly
@@ -1108,10 +1194,24 @@ class AgentLoop:
             self._tool_stats["calls_rejected"] += 1
             return ToolResult(success=False, output="", error=f"Invalid tool call: {error_msg}")
         args = sanitized.get("params", tool_call.arguments)
-        
+
+        envelope = ToolCallEnvelope(
+            run_id=self._current_run_id or self._next_run_id(self._session_id or "session"),
+            session_id=self._session_id or "session",
+            tool_call_id=tool_call.id,
+            tool_name=tool_name,
+            arguments=args,
+            execution_mode=self._runtime_policy.infer_mode(tool_name, args),
+            timeout_seconds=self.runtime_config.default_tool_timeout_seconds,
+            max_retries=self.runtime_config.default_tool_retries,
+        )
+
         try:
-            result = await self.tools.execute(tool_name, **args)
+            result, meta = await self._tool_runtime.execute(envelope, approved=approved)
             self._tool_stats["calls_executed"] += 1
+            logger.debug(
+                f"Tool runtime metadata: {tool_name} -> {asdict(meta)}"
+            )
         except Exception as e:
             # Unexpected exception, wrap in ToolResult
             result = ToolResult(success=False, output="", error=str(e))
@@ -1218,7 +1318,7 @@ class AgentLoop:
             return "Confirmation token does not match the pending action."
 
         tc: ToolCall = pending["tool_call"]
-        result = await self._execute_tool(tc)
+        result = await self._execute_tool(tc, approved=True)
         rendered = self._render_tool_result(result)
         history.append(Message(role="tool", content=rendered, metadata={"tool_name": tc.name, "tool_call_id": tc.id}))
         self._queue_persist(session_id, "tool", rendered)

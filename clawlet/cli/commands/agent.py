@@ -216,6 +216,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         max_iterations=config.agent.max_iterations,
         max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
         storage_config=config.storage,
+        runtime_config=config.runtime,
     )
     
     try:

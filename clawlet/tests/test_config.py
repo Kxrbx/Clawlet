@@ -149,6 +149,9 @@ def test_init_config_template_is_valid_yaml_and_includes_agent_mode():
     assert data["agent"]["shell_allow_dangerous"] is False
     assert "telegram" in data
     assert "discord" in data
+    assert data["runtime"]["engine"] == "hybrid_rust"
+    assert data["benchmarks"]["gates"]["min_deterministic_replay_pass_rate_pct"] == 98.0
+    assert data["plugins"]["sdk_version"] == "2.0.0"
 
 
 def test_agent_loop_module_imports_on_python_310_compat_path():

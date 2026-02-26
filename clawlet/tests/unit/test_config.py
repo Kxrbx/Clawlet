@@ -103,6 +103,10 @@ def test_config_default_values():
     assert cfg.storage.backend == "sqlite"
     assert cfg.agent.max_iterations == 10
     assert cfg.heartbeat.interval_minutes == 120
+    assert cfg.runtime.engine == "hybrid_rust"
+    assert cfg.runtime.replay.directory == ".runtime"
+    assert cfg.benchmarks.gates.min_deterministic_replay_pass_rate_pct == 98.0
+    assert cfg.plugins.sdk_version == "2.0.0"
 
 
 if __name__ == "__main__":

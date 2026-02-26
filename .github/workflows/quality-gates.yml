@@ -1,0 +1,53 @@
+name: Quality Gates
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+          python -m pip install mypy
+
+      - name: Lint runtime/plugin/benchmark modules
+        run: |
+          ruff check clawlet/runtime clawlet/plugins clawlet/benchmarks
+
+      - name: Type-check runtime/plugin/benchmark modules
+        run: |
+          mypy --ignore-missing-imports clawlet/runtime clawlet/plugins clawlet/benchmarks
+
+      - name: Run tests
+        run: |
+          pytest clawlet/tests -q
+
+      - name: Determinism smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_determinism_smokecheck
+
+          ok = run_determinism_smokecheck(Path('.'))
+          if not ok:
+              raise SystemExit(2)
+          print('determinism smoke check passed')
+          PY
+
+      - name: Benchmark gate check
+        run: |
+          python -m clawlet benchmark run --workspace . --iterations 10 --fail-on-gate

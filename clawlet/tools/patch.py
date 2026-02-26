@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from clawlet.runtime.rust_bridge import validate_patch
 from clawlet.tools.files import _secure_resolve
 from clawlet.tools.registry import BaseTool, ToolResult
 
@@ -39,6 +40,10 @@ class ApplyPatchTool(BaseTool):
 
     async def execute(self, path: str, patch: str, **kwargs) -> ToolResult:
         try:
+            ok, reason = validate_patch(patch)
+            if not ok:
+                return ToolResult(success=False, output="", error=reason)
+
             target = Path(path)
             resolved_path, error = _secure_resolve(target, self.allowed_dir, must_exist=True)
             if error:

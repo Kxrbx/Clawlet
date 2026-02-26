@@ -16,7 +16,15 @@ from clawlet.agent.identity import IdentityLoader
 from clawlet.bus.queue import MessageBus
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry
-from clawlet.config import Config, StorageConfig, SQLiteConfig, ProviderConfig, OpenRouterConfig
+from clawlet.config import (
+    Config,
+    ProviderConfig,
+    OpenRouterConfig,
+    RuntimeReplaySettings,
+    RuntimeSettings,
+    SQLiteConfig,
+    StorageConfig,
+)
 
 
 class DummyProvider(BaseProvider):
@@ -60,12 +68,20 @@ def temp_workspace():
 def dummy_config(temp_workspace):
     """Create a Config object with SQLite storage."""
     sqlite_cfg = SQLiteConfig(path=str(temp_workspace / "clawlet.db"))
+    runtime_cfg = RuntimeSettings(
+        replay=RuntimeReplaySettings(
+            enabled=True,
+            directory=str(temp_workspace / ".runtime"),
+            retention_days=7,
+            redact_tool_outputs=False,
+        )
+    )
     provider_cfg = ProviderConfig(
         primary="openrouter",
         openrouter=OpenRouterConfig(api_key="dummy-key-for-tests", model="dummy-model")
     )
     storage_cfg = StorageConfig(backend="sqlite", sqlite=sqlite_cfg)
-    config = Config(provider=provider_cfg, storage=storage_cfg)
+    config = Config(provider=provider_cfg, storage=storage_cfg, runtime=runtime_cfg)
     config.config_path = temp_workspace / "config.yaml"
     return config
 

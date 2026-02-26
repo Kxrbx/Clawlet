@@ -1,0 +1,16 @@
+[package]
+name = "clawlet-rust-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "clawlet_rust_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+sha2 = "0.10"
+
+[profile.release]
+lto = true
+codegen-units = 1

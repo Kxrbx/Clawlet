@@ -251,6 +251,36 @@ heartbeat:
   quiet_hours_start: 2  # 2am UTC
   quiet_hours_end: 9    # 9am UTC
 
+# Runtime v2 Settings
+runtime:
+  engine: hybrid_rust
+  enable_idempotency_cache: true
+  default_tool_timeout_seconds: 30
+  default_tool_retries: 1
+  policy:
+    allowed_modes: [read_only, workspace_write]
+    require_approval_for: [elevated]
+  replay:
+    enabled: true
+    directory: ".runtime"
+    retention_days: 30
+    redact_tool_outputs: false
+
+# Benchmarks + hard quality gates
+benchmarks:
+  enabled: true
+  gates:
+    max_p95_latency_ms: 3000
+    min_tool_success_rate_pct: 99.0
+    min_deterministic_replay_pass_rate_pct: 98.0
+
+# Plugin SDK v2
+plugins:
+  auto_load: true
+  directories:
+    - "~/.clawlet/plugins"
+  sdk_version: "2.0.0"
+
 # Multi-Agent Routing (optional)
 routing:
   enabled: false

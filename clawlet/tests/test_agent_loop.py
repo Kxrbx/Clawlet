@@ -311,3 +311,23 @@ def test_does_not_schedule_autonomous_followup_when_response_is_question(agent_l
     assert response is not None
     assert "Would you like me to proceed?" in response.content
     assert agent_loop.bus.inbound_size == 0
+
+
+def test_process_message_writes_runtime_events(agent_loop, temp_workspace, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    import json
+
+    msg = InboundMessage(channel="test", chat_id="events-1", content="List files in this folder")
+    response = event_loop.run_until_complete(agent_loop._process_message(msg))
+
+    assert response is not None
+
+    event_log = temp_workspace / ".runtime" / "events.jsonl"
+    assert event_log.exists()
+
+    lines = [line for line in event_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert lines
+    events = [json.loads(line) for line in lines]
+    event_types = [ev.get("event_type") for ev in events]
+    assert "RunStarted" in event_types
+    assert "RunCompleted" in event_types

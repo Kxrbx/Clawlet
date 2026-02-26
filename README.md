@@ -136,6 +136,9 @@ clawlet dashboard
 | `clawlet health` | Run health checks |
 | `clawlet validate` | Validate configuration |
 | `clawlet config [key]` | View configuration |
+| `clawlet benchmark run` | Run latency/reliability benchmark gates |
+| `clawlet replay <run_id>` | Inspect deterministic runtime replay events |
+| `clawlet plugin init/test/publish` | Manage Plugin SDK v2 extensions |
 | `clawlet --version` | Show version |
 
 ---

@@ -33,6 +33,10 @@ app = typer.Typer(
     help="🌸 Clawlet - A lightweight AI agent framework",
     no_args_is_help=False,
 )
+benchmark_app = typer.Typer(help="Performance and regression benchmark commands")
+plugin_app = typer.Typer(help="Plugin SDK v2 commands")
+app.add_typer(benchmark_app, name="benchmark")
+app.add_typer(plugin_app, name="plugin")
 
 console = Console()
 
@@ -98,6 +102,9 @@ def print_main_menu():
     print_command("agent", "Start your AI agent", "clawlet agent")
     print_command("models", "Manage AI models", "clawlet models")
     print_command("dashboard", "Launch web dashboard", "clawlet dashboard")
+    print_command("benchmark", "Run performance regression suite", "clawlet benchmark run")
+    print_command("replay", "Inspect deterministic run events", "clawlet replay <run_id>")
+    print_command("plugin", "Manage plugin SDK extensions", "clawlet plugin init")
     print_command("status", "Check workspace status", "clawlet status")
     print_command("health", "Run health checks", "clawlet health")
     print_command("validate", "Validate configuration", "clawlet validate")
@@ -368,6 +375,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         max_iterations=config.agent.max_iterations,
         max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
         storage_config=config.storage,
+        runtime_config=config.runtime,
     )
     
     runtime_channel = None
@@ -447,6 +455,7 @@ async def run_chat(workspace: Path, model: Optional[str]) -> None:
         max_iterations=config.agent.max_iterations,
         max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
         storage_config=config.storage,
+        runtime_config=config.runtime,
     )
 
     agent_task = asyncio.create_task(agent.run())
@@ -1277,7 +1286,209 @@ heartbeat:
   interval_minutes: 120
   quiet_hours_start: 2  # 2am UTC
   quiet_hours_end: 9    # 9am UTC
+
+# Runtime v2 Settings
+runtime:
+  engine: hybrid_rust
+  enable_idempotency_cache: true
+  default_tool_timeout_seconds: 30
+  default_tool_retries: 1
+  policy:
+    allowed_modes: [read_only, workspace_write]
+    require_approval_for: [elevated]
+  replay:
+    enabled: true
+    directory: ".runtime"
+    retention_days: 30
+    redact_tool_outputs: false
+
+# Benchmarks + hard quality gates
+benchmarks:
+  enabled: true
+  gates:
+    max_p95_latency_ms: 3000
+    min_tool_success_rate_pct: 99.0
+    min_deterministic_replay_pass_rate_pct: 98.0
+
+# Plugin SDK v2
+plugins:
+  auto_load: true
+  directories:
+    - "~/.clawlet/plugins"
+  sdk_version: "2.0.0"
 """
+
+
+# ── Benchmark and replay commands ─────────────────────────────────────────────
+
+@benchmark_app.command("run")
+def benchmark_run(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    iterations: int = typer.Option(25, "--iterations", min=5, max=500, help="Benchmark iterations"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+    fail_on_gate: bool = typer.Option(False, "--fail-on-gate", help="Exit non-zero when quality gates fail"),
+):
+    """Run local performance benchmark and evaluate quality gates."""
+    from clawlet.benchmarks import check_gates, run_local_runtime_benchmark, write_report
+    from clawlet.config import BenchmarksSettings
+
+    workspace_path = workspace or get_workspace_path()
+    gates_cfg = BenchmarksSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            gates_cfg = BenchmarksSettings(**(raw.get("benchmarks") or {}))
+        except Exception:
+            pass
+
+    print_section("Benchmark", f"Running {iterations} iterations")
+    summary = run_local_runtime_benchmark(workspace=workspace_path, iterations=iterations)
+    failures = check_gates(summary, gates_cfg.gates)
+
+    console.print(f"│  Samples: {summary.samples}")
+    console.print(f"│  p50: {summary.p50_ms:.2f} ms")
+    console.print(f"│  p95: {summary.p95_ms:.2f} ms")
+    console.print(f"│  p99: {summary.p99_ms:.2f} ms")
+    console.print(f"│  Success: {summary.success_rate:.2f}%")
+
+    if failures:
+        console.print("│")
+        console.print("│  [red]Gate failures:[/red]")
+        for failure in failures:
+            console.print(f"│    - {failure}")
+    else:
+        console.print("│  [green]All quality gates passed[/green]")
+
+    output = report_path or (workspace_path / "benchmark-report.json")
+    write_report(output, summary, failures)
+    console.print(f"│  Report: {output}")
+    print_footer()
+
+    if fail_on_gate and failures:
+        raise typer.Exit(2)
+
+
+@app.command("replay")
+def replay(
+    run_id: str = typer.Argument(..., help="Run ID to inspect"),
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    limit: int = typer.Option(500, "--limit", min=1, max=5000, help="Max events to display"),
+    show_signature: bool = typer.Option(False, "--signature", help="Show deterministic replay signature"),
+):
+    """Inspect structured runtime events for a run."""
+    from clawlet.config import RuntimeSettings
+    from clawlet.runtime import RuntimeEventStore
+
+    workspace_path = workspace or get_workspace_path()
+    runtime_cfg = RuntimeSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            runtime_cfg = RuntimeSettings(**(raw.get("runtime") or {}))
+        except Exception:
+            pass
+    replay_dir = Path(runtime_cfg.replay.directory).expanduser()
+    if not replay_dir.is_absolute():
+        replay_dir = workspace_path / replay_dir
+    store = RuntimeEventStore(replay_dir / "events.jsonl")
+
+    events = store.iter_events(run_id=run_id, limit=limit)
+    print_section("Replay", f"Run {run_id}")
+    if not events:
+        console.print("│  [yellow]No events found for this run id[/yellow]")
+        print_footer()
+        raise typer.Exit(1)
+
+    for ev in events:
+        payload = ev.payload or {}
+        preview = str(payload)[:120].replace("\\n", " ")
+        console.print(f"│  {ev.timestamp}  [{ev.event_type}] {preview}")
+
+    if show_signature:
+        signature = store.get_run_signature(run_id)
+        console.print("│")
+        console.print(f"│  Signature: [bold]{signature}[/bold]")
+
+    print_footer()
+
+
+# ── Plugin SDK commands ───────────────────────────────────────────────────────
+
+@plugin_app.command("init")
+def plugin_init(
+    name: str = typer.Argument(..., help="Plugin name"),
+    directory: Path = typer.Option(Path("."), "--dir", help="Base directory for plugin"),
+):
+    """Initialize a plugin SDK v2 skeleton."""
+    class_name = name.title().replace("-", "").replace("_", "") + "Tool"
+    plugin_dir = (directory / name).resolve()
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+
+    plugin_file = plugin_dir / "plugin.py"
+    readme_file = plugin_dir / "README.md"
+
+    if not plugin_file.exists():
+        plugin_template = f"""\"\"\"Example Clawlet plugin: {name}.\"\"\"\n\nfrom clawlet.plugins import PluginTool, ToolInput, ToolOutput, ToolSpec\n\n\nclass {class_name}(PluginTool):\n    def __init__(self):\n        super().__init__(ToolSpec(name=\"{name}\", description=\"Example plugin tool\"))\n\n    async def execute_with_context(self, tool_input: ToolInput, context) -> ToolOutput:\n        return ToolOutput(output=\"Plugin executed\", data={{\"arguments\": tool_input.arguments}})\n\n\nTOOLS = [{class_name}()]\n"""
+        plugin_file.write_text(plugin_template, encoding="utf-8")
+
+    if not readme_file.exists():
+        readme_file.write_text(
+            f"# {name}\\n\\n"
+            "This plugin follows Clawlet Plugin SDK v2.\\n\\n"
+            "Commands:\\n"
+            f"- `clawlet plugin test --path {plugin_dir}`\\n"
+            f"- `clawlet plugin publish --path {plugin_dir}`\\n",
+            encoding="utf-8",
+        )
+
+    console.print(f"[green]✓ Plugin initialized at {plugin_dir}[/green]")
+
+
+@plugin_app.command("test")
+def plugin_test(
+    path: Path = typer.Option(..., "--path", help="Plugin directory containing plugin.py"),
+):
+    """Load and validate a plugin package."""
+    from clawlet.plugins.loader import PluginLoader
+
+    loader = PluginLoader([path])
+    tools = loader.load_tools()
+
+    if not tools:
+        console.print("[red]No valid plugin tools discovered[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓ Loaded {len(tools)} plugin tool(s)[/green]")
+    for tool in tools:
+        console.print(f"  - {tool.name}: {tool.description}")
+
+
+@plugin_app.command("publish")
+def plugin_publish(
+    path: Path = typer.Option(..., "--path", help="Plugin directory to package"),
+    out_dir: Path = typer.Option(Path("dist"), "--out-dir", help="Output directory"),
+):
+    """Package a plugin directory as a distributable tarball."""
+    import tarfile
+    import time as _time
+
+    if not path.exists() or not path.is_dir():
+        console.print("[red]Invalid plugin path[/red]")
+        raise typer.Exit(1)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    archive = out_dir / f"{path.name}-{int(_time.time())}.tar.gz"
+
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(path, arcname=path.name)
+
+    console.print(f"[green]✓ Packaged plugin archive: {archive}[/green]")
 
 
 # ── Sessions management ───────────────────────────────────────────────────────
