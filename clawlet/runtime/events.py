@@ -15,6 +15,9 @@ EVENT_TOOL_REQUESTED = "ToolRequested"
 EVENT_TOOL_STARTED = "ToolStarted"
 EVENT_TOOL_COMPLETED = "ToolCompleted"
 EVENT_TOOL_FAILED = "ToolFailed"
+EVENT_PROVIDER_FAILED = "ProviderFailed"
+EVENT_STORAGE_FAILED = "StorageFailed"
+EVENT_CHANNEL_FAILED = "ChannelFailed"
 EVENT_RUN_COMPLETED = "RunCompleted"
 
 

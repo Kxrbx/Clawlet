@@ -141,7 +141,7 @@ agent:
 
 def test_init_config_template_is_valid_yaml_and_includes_agent_mode():
     import yaml
-    from clawlet.cli.commands.init import get_config_template
+    from clawlet.cli import get_config_template
 
     data = yaml.safe_load(get_config_template())
 
@@ -159,3 +159,30 @@ def test_agent_loop_module_imports_on_python_310_compat_path():
     import importlib
     module = importlib.import_module("clawlet.agent.loop")
     assert hasattr(module, "UTC_TZ")
+
+
+def test_runtime_engine_controls_tool_rust_paths(temp_workspace, monkeypatch):
+    from clawlet.config import Config
+    from clawlet.tools import create_default_tool_registry
+
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text(
+        """
+provider:
+  primary: openrouter
+  openrouter:
+    api_key: test-key-123
+runtime:
+  engine: python
+"""
+    )
+    cfg = Config.from_yaml(config_path)
+    registry = create_default_tool_registry(allowed_dir=str(temp_workspace), config=cfg)
+    assert registry.get("shell").use_rust_core is False
+    assert registry.get("read_file").use_rust_core is False
+
+    cfg.runtime.engine = "hybrid_rust"
+    monkeypatch.setattr("clawlet.tools.rust_core_available", lambda: True)
+    registry2 = create_default_tool_registry(allowed_dir=str(temp_workspace), config=cfg)
+    assert registry2.get("shell").use_rust_core is True
+    assert registry2.get("read_file").use_rust_core is True

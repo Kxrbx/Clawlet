@@ -19,6 +19,7 @@ class ToolCallEnvelope:
     tool_name: str
     arguments: dict[str, Any]
     execution_mode: ToolExecutionMode
+    workspace_path: str = ""
     timeout_seconds: float = 30.0
     max_retries: int = 0
     idempotency_key: str = ""

@@ -7,7 +7,7 @@ on:
     branches: ["**"]
 
 jobs:
-  quality-gates:
+  quality-fast:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,6 +47,90 @@ jobs:
               raise SystemExit(2)
           print('determinism smoke check passed')
           PY
+
+      - name: Runtime event schema smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_event_schema_smokecheck
+
+          ok, errors = run_event_schema_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('runtime event schema smoke check passed')
+          PY
+
+      - name: Failure taxonomy smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_failure_taxonomy_smokecheck
+
+          ok, errors = run_failure_taxonomy_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('failure taxonomy smoke check passed')
+          PY
+
+      - name: Replay reexecution smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_replay_reexecution_smokecheck
+
+          ok, errors = run_replay_reexecution_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('replay reexecution smoke check passed')
+          PY
+
+  quality-strict-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+          python -m pip install maturin
+
+      - name: Build Rust extension
+        run: |
+          maturin develop --manifest-path rust-core/Cargo.toml
+
+      - name: Engine equivalence smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_engine_equivalence_smokecheck
+
+          result = run_engine_equivalence_smokecheck(Path('.'))
+          if not result.passed:
+              for line in result.details:
+                  print(line)
+              raise SystemExit(2)
+          print('engine equivalence smoke check passed')
+          PY
+
+      - name: Engine equivalence strict-rust gate
+        run: |
+          python -m clawlet benchmark equivalence --workspace . --strict-rust
 
       - name: Benchmark gate check
         run: |

@@ -27,16 +27,24 @@ from clawlet.tools.registry import ToolRegistry, ToolResult, validate_tool_param
 from clawlet.agent.memory import MemoryManager
 from clawlet.storage.sqlite import SQLiteStorage
 from clawlet.config import RuntimeSettings, StorageConfig
+from clawlet.context import ContextEngine
 from clawlet.metrics import get_metrics
 from clawlet.runtime import (
+    EVENT_CHANNEL_FAILED,
+    EVENT_PROVIDER_FAILED,
     EVENT_RUN_COMPLETED,
     EVENT_RUN_STARTED,
+    EVENT_STORAGE_FAILED,
     DeterministicToolRuntime,
+    RecoveryManager,
     RuntimeEvent,
     RuntimeEventStore,
     RuntimePolicyEngine,
+    RunCheckpoint,
     ToolCallEnvelope,
 )
+from clawlet.runtime.failures import classify_exception, to_payload as failure_payload
+from clawlet.runtime.rust_bridge import is_available as rust_core_available
 
 
 UTC_TZ = timezone.utc
@@ -217,6 +225,10 @@ class AgentLoop:
         self._history: list[Message] = []
         self._session_id = ""
         self._current_run_id = ""
+        self._current_channel = ""
+        self._current_chat_id = ""
+        self._current_user_id = ""
+        self._current_user_name = ""
         self._conversations: dict[str, ConversationState] = {}
         self._pending_confirmations: dict[str, dict] = {}
         
@@ -247,6 +259,10 @@ class AgentLoop:
 
         # Deterministic runtime + replay infrastructure
         self.runtime_config = runtime_config or RuntimeSettings()
+        self._runtime_engine = self.runtime_config.engine
+        if self._runtime_engine == "hybrid_rust" and not rust_core_available():
+            logger.warning("runtime.engine=hybrid_rust requested but Rust core is unavailable; falling back to python")
+            self._runtime_engine = "python"
         replay_dir = Path(self.runtime_config.replay.directory).expanduser()
         if not replay_dir.is_absolute():
             replay_dir = self.workspace / replay_dir
@@ -266,7 +282,10 @@ class AgentLoop:
             event_store=self._event_store,
             policy=self._runtime_policy,
             enable_idempotency=self.runtime_config.enable_idempotency_cache,
+            engine=self._runtime_engine,
         )
+        self._context_engine = ContextEngine(workspace=self.workspace, cache_dir=replay_dir / "context")
+        self._recovery_manager = RecoveryManager(replay_dir / "checkpoints")
         
         logger.info(
             "AgentLoop initialized with provider=%s, model=%s, tools=%s, max_tool_calls_per_message=%s"
@@ -302,6 +321,43 @@ class AgentLoop:
                 payload=payload or {},
             )
         )
+
+    def _save_checkpoint(self, stage: str, iteration: int = 0, notes: str = "") -> None:
+        """Persist checkpoint for interrupted-run recovery."""
+        if not self._current_run_id or not self._session_id:
+            return
+        pending = self._pending_confirmations.get(f"{self._current_channel}:{self._current_chat_id}") or {}
+        checkpoint = RunCheckpoint(
+            run_id=self._current_run_id,
+            session_id=self._session_id,
+            channel=self._current_channel,
+            chat_id=self._current_chat_id,
+            stage=stage,
+            iteration=iteration,
+            user_message=self._history[-1].content if self._history and self._history[-1].role == "user" else "",
+            user_id=self._current_user_id,
+            user_name=self._current_user_name,
+            tool_stats=dict(self._tool_stats),
+            pending_confirmation=pending,
+            notes=notes,
+        )
+        self._recovery_manager.save(checkpoint)
+
+    def _complete_checkpoint(self) -> None:
+        """Mark current run as completed."""
+        if not self._current_run_id:
+            return
+        self._recovery_manager.mark_completed(self._current_run_id)
+
+    async def resume_checkpoint(self, run_id: str) -> bool:
+        """Resume an interrupted run by queueing a recovery inbound message."""
+        payload = self._recovery_manager.build_resume_message(run_id)
+        if not payload:
+            return False
+        from clawlet.bus.queue import InboundMessage
+
+        await self.bus.publish_inbound(InboundMessage(**payload))
+        return True
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -329,7 +385,19 @@ class AgentLoop:
                     response = await self._process_message(msg)
                     if response:
                         logger.info(f"Sending response: {response.content[:50]}...")
-                        await self.bus.publish_outbound(response)
+                        try:
+                            await self.bus.publish_outbound(response)
+                        except Exception as e:
+                            logger.error(f"Failed to publish outbound response: {e}")
+                            self._emit_runtime_event(
+                                EVENT_CHANNEL_FAILED,
+                                session_id=self._session_id or "session",
+                                payload={
+                                    "channel": getattr(response, "channel", ""),
+                                    "chat_id": getattr(response, "chat_id", ""),
+                                    "error": str(e),
+                                },
+                            )
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
                     # Send error response
@@ -446,6 +514,15 @@ class AgentLoop:
             logger.warning(f"Failed to store message in DB: {e}")
             # Increment storage error metric
             get_metrics().inc_storage_errors()
+            self._emit_runtime_event(
+                EVENT_STORAGE_FAILED,
+                session_id=session_id,
+                payload={
+                    "role": role,
+                    "backend": type(self.storage).__name__,
+                    "error": str(e),
+                },
+            )
             self._persist_failures += 1
             if self._persist_failures >= 5:
                 logger.error("Too many storage failures, aborting persistence.")
@@ -506,8 +583,25 @@ class AgentLoop:
                     logger.debug(f"LLM call completed in {elapsed:.2f}s")
                 return response
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                failure = classify_exception(e)
                 self._consecutive_errors += 1
-                logger.warning(f"Provider call failed (attempt {attempt}/{max_retries}): {e}")
+                logger.warning(
+                    f"Provider call failed (attempt {attempt}/{max_retries}, code={failure.code}): {e}"
+                )
+                self._emit_runtime_event(
+                    EVENT_PROVIDER_FAILED,
+                    session_id=self._session_id or "session",
+                    payload={
+                        "provider": self.provider.name,
+                        "attempt": attempt,
+                        "error": str(e),
+                        **failure_payload(failure),
+                    },
+                )
+                self._save_checkpoint(
+                    stage="provider_retry",
+                    notes=f"attempt={attempt} code={failure.code} retryable={failure.retryable}",
+                )
                 if attempt >= max_retries:
                     # Check if we need to trip circuit breaker
                     if self._consecutive_errors >= self._max_consecutive_errors:
@@ -540,7 +634,12 @@ class AgentLoop:
         convo_key = f"{channel}:{chat_id}"
         self._session_id = convo.session_id
         self._history = convo.history
+        self._current_channel = channel
+        self._current_chat_id = chat_id
+        self._current_user_id = str(msg.user_id or "")
+        self._current_user_name = str(msg.user_name or "")
         self._current_run_id = self._next_run_id(convo.session_id)
+        self._save_checkpoint(stage="run_started", iteration=0, notes="Inbound message accepted")
         self._emit_runtime_event(
             EVENT_RUN_STARTED,
             session_id=convo.session_id,
@@ -548,6 +647,9 @@ class AgentLoop:
                 "channel": channel,
                 "chat_id": chat_id,
                 "engine": self.runtime_config.engine,
+                "engine_resolved": self._runtime_engine,
+                "recovery_resume_from": metadata.get("recovery_run_id", ""),
+                "recovery_resume": bool(metadata.get("recovery_resume")),
                 "message_preview": user_message[:200],
             },
         )
@@ -575,6 +677,7 @@ class AgentLoop:
                 session_id=convo.session_id,
                 payload={"iterations": 0, "is_error": False, "response_preview": approval_response[:200]},
             )
+            self._complete_checkpoint()
             return OutboundMessage(channel=channel, chat_id=chat_id, content=approval_response)
         
         # Add to history. Internal autonomous prompts are system context, not user content.
@@ -594,6 +697,7 @@ class AgentLoop:
                 session_id=convo.session_id,
                 payload={"iterations": 0, "is_error": False, "response_preview": direct_install_response[:200]},
             )
+            self._complete_checkpoint()
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -615,13 +719,15 @@ class AgentLoop:
         
         while iteration < self.max_iterations:
             iteration += 1
+            self._save_checkpoint(stage="iteration", iteration=iteration, notes="Starting model iteration")
             
             # Build messages for LLM
-            messages = self._build_messages(convo.history)
+            messages = self._build_messages(convo.history, query_hint=user_message)
             
             try:
                 # Call LLM provider with retry and circuit breaker
                 response: LLMResponse = await self._call_provider_with_retry(messages, enable_tools=enable_tools)
+                self._save_checkpoint(stage="provider_response", iteration=iteration, notes="Model response received")
                 
                 response_content = response.content
                 
@@ -732,6 +838,11 @@ class AgentLoop:
                             break
                         result = await self._execute_tool(tc)
                         rendered_tool_output = self._render_tool_result(result)
+                        self._save_checkpoint(
+                            stage="tool_executed",
+                            iteration=iteration,
+                            notes=f"tool={tc.name} success={result.success}",
+                        )
                         
                         # Add tool result to history - use mapped name in metadata
                         convo.history.append(Message(
@@ -755,6 +866,7 @@ class AgentLoop:
                 
             except Exception as e:
                 logger.error(f"Error in agent loop iteration {iteration}: {e}")
+                self._save_checkpoint(stage="error", iteration=iteration, notes=str(e))
                 final_response = f"Sorry, I encountered an error: {str(e)}"
                 is_error = True
                 break
@@ -813,6 +925,10 @@ class AgentLoop:
                 "response_preview": final_response[:200],
             },
         )
+        if is_error:
+            self._save_checkpoint(stage="interrupted", iteration=iteration, notes=final_response[:400])
+        else:
+            self._complete_checkpoint()
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -1067,10 +1183,8 @@ class AgentLoop:
     
     def _extract_tool_calls(self, content: str) -> list[ToolCall]:
         """Extract tool calls from LLM response content."""
-        tool_calls = []
-
-        # Handle raw JSON tool call payloads (common provider behavior)
-        stripped = content.strip()
+        # Fast path: raw JSON tool payloads.
+        stripped = (content or "").strip()
         if stripped and (stripped.startswith("{") or stripped.startswith("[")):
             try:
                 raw = json.loads(stripped)
@@ -1078,72 +1192,27 @@ class AgentLoop:
                     args = raw.get("arguments", raw.get("parameters", {}))
                     if not isinstance(args, dict):
                         args = {"value": args}
-                    tool_calls.append(ToolCall(id="call_raw_json_0", name=raw["name"], arguments=args))
-                elif isinstance(raw, list):
+                    return [ToolCall(id="call_raw_json_0", name=raw["name"], arguments=args)]
+                if isinstance(raw, list):
+                    out: list[ToolCall] = []
                     for i, item in enumerate(raw):
-                        if isinstance(item, dict) and "name" in item:
-                            args = item.get("arguments", item.get("parameters", {}))
-                            if not isinstance(args, dict):
-                                args = {"value": args}
-                            tool_calls.append(ToolCall(id=f"call_raw_json_{i}", name=item["name"], arguments=args))
+                        if not isinstance(item, dict) or "name" not in item:
+                            continue
+                        args = item.get("arguments", item.get("parameters", {}))
+                        if not isinstance(args, dict):
+                            args = {"value": args}
+                        out.append(ToolCall(id=f"call_raw_json_{i}", name=item["name"], arguments=args))
+                    if out:
+                        return out
             except json.JSONDecodeError:
                 pass
 
-        if tool_calls:
-            return tool_calls
-        
-        logger.debug(f"Tool-call parser fallback on content length={len(content)}")
-        
-        # Check for MCP-like format first
-        if "<function=" in content:
-            logger.info("Found MCP-like format in content, using ToolCallParser")
-            from clawlet.agent.tool_parser import ToolCallParser
-            parser = ToolCallParser()
-            parsed = parser.parse(content)
-            logger.info(f"ToolCallParser found {len(parsed)} tool calls")
-            for p in parsed:
-                tool_calls.append(ToolCall(
-                    id=p.id,
-                    name=p.name,
-                    arguments=p.arguments,
-                ))
-        
-        # Pattern for tool calls in various formats
-        # Format 1: <tool_call name="..." arguments="..."/>
-        pattern1 = r'<tool_call\s+name="([^"]+)"\s+arguments=\'([^\']+)\'\s*/?>'
-        matches1 = re.findall(pattern1, content)
-        
-        for i, (name, args_str) in enumerate(matches1):
-            try:
-                args = json.loads(args_str)
-                tool_calls.append(ToolCall(
-                    id=f"call_{i}",
-                    name=name,
-                    arguments=args,
-                ))
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse tool arguments: {args_str}")
-        
-        # Format 2: JSON block with tool_call
-        pattern2 = r'```json\s*\n(tool_call)?\s*\n?([\s\S]*?)\n```'
-        matches2 = re.findall(pattern2, content, re.IGNORECASE)
-        
-        for i, (_, json_str) in enumerate(matches2):
-            try:
-                data = json.loads(json_str)
-                if isinstance(data, dict) and "name" in data:
-                    tool_calls.append(ToolCall(
-                        id=f"call_json_{i}",
-                        name=data["name"],
-                        arguments=data.get("arguments", data.get("parameters", {})),
-                    ))
-            except json.JSONDecodeError:
-                pass
-        
-        if tool_calls:
-            logger.info(f"Extracted {len(tool_calls)} tool call(s)")
-        
-        return tool_calls
+        from clawlet.agent.tool_parser import ToolCallParser
+
+        parsed = ToolCallParser().parse(content or "")
+        if parsed:
+            return [ToolCall(id=p.id, name=p.name, arguments=p.arguments) for p in parsed]
+        return []
     
     async def _execute_tool(self, tool_call: ToolCall, approved: bool = False) -> ToolResult:
         """Execute a tool call with circuit breaker protection."""
@@ -1202,6 +1271,7 @@ class AgentLoop:
             tool_name=tool_name,
             arguments=args,
             execution_mode=self._runtime_policy.infer_mode(tool_name, args),
+            workspace_path=str(self.workspace),
             timeout_seconds=self.runtime_config.default_tool_timeout_seconds,
             max_retries=self.runtime_config.default_tool_retries,
         )
@@ -1238,7 +1308,7 @@ class AgentLoop:
         
         return result
     
-    def _build_messages(self, history: list[Message]) -> list[dict]:
+    def _build_messages(self, history: list[Message], query_hint: Optional[str] = None) -> list[dict]:
         """Build messages list for LLM."""
         messages = []
         
@@ -1249,6 +1319,24 @@ class AgentLoop:
             workspace_path=str(self.workspace)
         )
         messages.append({"role": "system", "content": system_prompt})
+
+        query_text = (query_hint or "").strip()
+        if not query_text:
+            for msg in reversed(history):
+                if msg.role == "user" and msg.content:
+                    query_text = msg.content
+                    break
+        if query_text:
+            try:
+                repo_context = self._context_engine.render_for_prompt(
+                    query=query_text,
+                    max_files=5,
+                    char_budget=3000,
+                )
+                if repo_context:
+                    messages.append({"role": "system", "content": repo_context})
+            except Exception as e:
+                logger.debug(f"Context engine unavailable for this turn: {e}")
         
         if history and history[0].role == "system" and history[0].metadata.get("summary") is True:
             messages.append(history[0].to_dict())

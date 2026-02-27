@@ -34,6 +34,7 @@ from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
 from clawlet.skills.registry import SkillRegistry
 from clawlet.plugins.loader import PluginLoader
+from clawlet.runtime.rust_bridge import is_available as rust_core_available
 
 
 FULL_EXEC_COMMANDS = [
@@ -47,18 +48,18 @@ FULL_EXEC_COMMANDS = [
 class FileTool:
     """Composite tool providing all file operations."""
     
-    def __init__(self, allowed_dir=None):
+    def __init__(self, allowed_dir=None, use_rust_core: bool = True):
         """Initialize all file tools."""
         # Convert string to Path if needed
         from pathlib import Path
         if allowed_dir is not None and not isinstance(allowed_dir, Path):
             allowed_dir = Path(allowed_dir)
         
-        self.read = ReadFileTool(allowed_dir)
-        self.write = WriteFileTool(allowed_dir)
-        self.edit = EditFileTool(allowed_dir)
+        self.read = ReadFileTool(allowed_dir, use_rust_core=use_rust_core)
+        self.write = WriteFileTool(allowed_dir, use_rust_core=use_rust_core)
+        self.edit = EditFileTool(allowed_dir, use_rust_core=use_rust_core)
         self.patch = ApplyPatchTool(allowed_dir)
-        self.list = ListDirTool(allowed_dir)
+        self.list = ListDirTool(allowed_dir, use_rust_core=use_rust_core)
     
     @property
     def tools(self) -> list:
@@ -88,7 +89,13 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
 
     # Add file tools
     logger.info("[DEBUG] Creating FileTool...")
-    file_tool = FileTool(allowed_dir=effective_allowed_dir)
+    runtime_engine = getattr(getattr(config, "runtime", None), "engine", "python") if config is not None else "python"
+    rust_available = rust_core_available()
+    use_rust_core = runtime_engine == "hybrid_rust" and rust_available
+    if runtime_engine == "hybrid_rust" and not rust_available:
+        logger.warning("runtime.engine=hybrid_rust but Rust core extension is unavailable; tools will use python path")
+
+    file_tool = FileTool(allowed_dir=effective_allowed_dir, use_rust_core=use_rust_core)
     logger.info(f"[DEBUG] FileTool created with {len(file_tool.tools)} tools")
     for tool in file_tool.tools:
         logger.info(f"[DEBUG] Registering tool: {tool.name}")
@@ -96,7 +103,11 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
     
     # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
     shell_workspace = effective_allowed_dir
-    shell_tool = ShellTool(workspace=shell_workspace, allow_dangerous=allow_dangerous)
+    shell_tool = ShellTool(
+        workspace=shell_workspace,
+        allow_dangerous=allow_dangerous,
+        use_rust_core=use_rust_core,
+    )
     if agent_mode == "full_exec":
         shell_tool.add_allowed(*FULL_EXEC_COMMANDS)
         logger.warning("Agent mode is full_exec: expanded shell command capabilities enabled")

@@ -30,22 +30,41 @@ class BenchmarkSummary:
 
 
 def run_local_runtime_benchmark(workspace: Path, iterations: int = 25) -> BenchmarkSummary:
-    """Run a deterministic local benchmark over core tools."""
+    """Run a deterministic local benchmark over a coding-task micro-suite."""
     registry = create_default_tool_registry(allowed_dir=str(workspace))
     list_tool = registry.get("list_dir")
-    if list_tool is None:
-        raise RuntimeError("list_dir tool is required for local benchmark")
+    read_tool = registry.get("read_file")
+    edit_tool = registry.get("edit_file")
+    if list_tool is None or read_tool is None or edit_tool is None:
+        raise RuntimeError("list_dir/read_file/edit_file tools are required for local benchmark")
 
     latencies = []
     successes = 0
+    target = workspace / ".runtime-benchmark-target.txt"
 
-    for _ in range(iterations):
+    for i in range(iterations):
+        target.write_text(f"benchmark iteration {i}\n", encoding="utf-8")
         started = time.perf_counter()
-        # list_dir is deterministic, local-only, and low risk.
-        result = _run_async(list_tool.execute(path="."))
+        # Minimal coding loop: inspect -> read -> patch/edit -> verify.
+        result_list = _run_async(list_tool.execute(path="."))
+        result_read_before = _run_async(read_tool.execute(path=target.name))
+        result_edit = _run_async(
+            edit_tool.execute(
+                path=target.name,
+                old_text=f"benchmark iteration {i}",
+                new_text=f"benchmark iteration {i} done",
+            )
+        )
+        result_read_after = _run_async(read_tool.execute(path=target.name))
         elapsed = (time.perf_counter() - started) * 1000.0
         latencies.append(elapsed)
-        if result.success:
+        if (
+            result_list.success
+            and result_read_before.success
+            and result_edit.success
+            and result_read_after.success
+            and "done" in result_read_after.output
+        ):
             successes += 1
 
     ordered = sorted(latencies)

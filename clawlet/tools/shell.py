@@ -16,6 +16,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from clawlet.runtime.rust_bridge import execute_command_argv as rust_execute_command_argv
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
@@ -87,6 +88,7 @@ class ShellTool(BaseTool):
         allowed_commands: Optional[list[str]] = None,
         timeout: float = 30.0,
         allow_dangerous: bool = False,
+        use_rust_core: bool = True,
     ):
         """
         Initialize shell tool.
@@ -96,11 +98,13 @@ class ShellTool(BaseTool):
             allowed_commands: List of allowed commands (None = use defaults)
             timeout: Command timeout in seconds
             allow_dangerous: If True, skip pattern checks (still needs whitelist)
+            use_rust_core: If True, use Rust bridge fast path when available
         """
         self.workspace = workspace or Path.cwd()
         self.allowed_commands = set(allowed_commands or self.DEFAULT_ALLOWED)
         self.timeout = timeout
         self.allow_dangerous = allow_dangerous
+        self.use_rust_core = use_rust_core
         
         logger.info(f"ShellTool initialized with {len(self.allowed_commands)} allowed commands")
     
@@ -171,6 +175,34 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                     output="",
                     error=f"Command not found: {base_cmd}"
                 )
+
+            # Hybrid fast-path: execute via Rust core when available.
+            if self.use_rust_core:
+                rust_result = rust_execute_command_argv(
+                    [cmd_path, *args[1:]],
+                    str(self.workspace),
+                    float(timeout),
+                )
+                if rust_result is not None:
+                    success, returncode, stdout_text, stderr_text, error = rust_result
+                    output_parts = []
+                    if stdout_text.strip():
+                        output_parts.append(stdout_text.strip())
+                    if stderr_text.strip():
+                        output_parts.append(f"[stderr]\n{stderr_text.strip()}")
+                    output = "\n".join(output_parts) if output_parts else "(no output)"
+                    return ToolResult(
+                        success=success,
+                        output=output,
+                        error=error or None,
+                        data={
+                            "returncode": returncode,
+                            "command": command,
+                            "stdout": stdout_text,
+                            "stderr": stderr_text,
+                            "engine": "rust",
+                        },
+                    )
             
             # Run command WITHOUT shell (safe execution)
             process = await asyncio.create_subprocess_exec(
@@ -230,6 +262,7 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                     "command": command,
                     "stdout": stdout_text,
                     "stderr": stderr_text,
+                    "engine": "python",
                 }
             )
             

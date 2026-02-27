@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -16,6 +17,7 @@ from clawlet.runtime.events import (
     RuntimeEvent,
     RuntimeEventStore,
 )
+from clawlet.runtime.failures import classify_error_text, to_payload
 from clawlet.runtime.policy import RuntimePolicyEngine
 from clawlet.runtime.rust_bridge import fast_hash
 from clawlet.runtime.types import ToolCallEnvelope, ToolExecutionMetadata
@@ -31,11 +33,13 @@ class DeterministicToolRuntime:
         event_store: RuntimeEventStore,
         policy: RuntimePolicyEngine,
         enable_idempotency: bool = True,
+        engine: str = "python",
     ):
         self.registry = registry
         self.event_store = event_store
         self.policy = policy
         self.enable_idempotency = enable_idempotency
+        self.engine = engine
         self._idempotency_cache: dict[str, ToolResult] = {}
 
     async def execute(self, envelope: ToolCallEnvelope, approved: bool = False) -> tuple[ToolResult, ToolExecutionMetadata]:
@@ -59,6 +63,7 @@ class DeterministicToolRuntime:
         policy_decision = self.policy.authorize(envelope.execution_mode, approved=approved)
         if not policy_decision.allowed:
             result = ToolResult(success=False, output="", error=policy_decision.reason)
+            failure = classify_error_text(result.error)
             self.event_store.append(
                 RuntimeEvent(
                     event_type=EVENT_TOOL_FAILED,
@@ -68,6 +73,7 @@ class DeterministicToolRuntime:
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
                         "error": result.error,
+                        **to_payload(failure),
                     },
                 )
             )
@@ -108,9 +114,33 @@ class DeterministicToolRuntime:
             )
         )
 
+        tool = self.registry.get(envelope.tool_name)
+        exec_args = dict(args)
+        # Inject runtime context only for Plugin SDK tools.
+        if tool is not None:
+            try:
+                from clawlet.plugins.sdk import PluginTool
+
+                if isinstance(tool, PluginTool):
+                    exec_args["_run_id"] = envelope.run_id
+                    exec_args["_session_id"] = envelope.session_id
+                    exec_args["_workspace_path"] = envelope.workspace_path
+            except Exception:
+                pass
+
         for attempt in range(max(1, envelope.max_retries + 1)):
             attempts += 1
-            result = await self.registry.execute(envelope.tool_name, **args)
+            try:
+                result = await asyncio.wait_for(
+                    self.registry.execute(envelope.tool_name, **exec_args),
+                    timeout=max(0.1, float(envelope.timeout_seconds)),
+                )
+            except asyncio.TimeoutError:
+                result = ToolResult(
+                    success=False,
+                    output="",
+                    error=f"Tool execution timed out after {envelope.timeout_seconds:.1f}s",
+                )
             last_result = result
             if result.success or not self._is_retryable_error(result.error):
                 break
@@ -129,6 +159,7 @@ class DeterministicToolRuntime:
                     payload={
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
+                        "engine": self.engine,
                         "metadata": asdict(metadata),
                         "success": True,
                         "output": last_result.output,
@@ -136,6 +167,7 @@ class DeterministicToolRuntime:
                 )
             )
         else:
+            failure = classify_error_text(last_result.error)
             self.event_store.append(
                 RuntimeEvent(
                     event_type=EVENT_TOOL_FAILED,
@@ -144,8 +176,10 @@ class DeterministicToolRuntime:
                     payload={
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
+                        "engine": self.engine,
                         "metadata": asdict(metadata),
                         "error": last_result.error,
+                        **to_payload(failure),
                     },
                 )
             )
@@ -158,7 +192,7 @@ class DeterministicToolRuntime:
                 "session_id": envelope.session_id,
                 "tool_name": envelope.tool_name,
                 "arguments": envelope.arguments,
-                "tool_call_id": envelope.tool_call_id,
+                "execution_mode": envelope.execution_mode,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -170,16 +204,4 @@ class DeterministicToolRuntime:
 
     @staticmethod
     def _is_retryable_error(error: Optional[str]) -> bool:
-        if not error:
-            return False
-        normalized = error.lower()
-        return any(
-            marker in normalized
-            for marker in (
-                "timeout",
-                "temporarily unavailable",
-                "rate limit",
-                "connection",
-                "network",
-            )
-        )
+        return classify_error_text(error).retryable

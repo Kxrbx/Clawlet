@@ -137,7 +137,9 @@ clawlet dashboard
 | `clawlet validate` | Validate configuration |
 | `clawlet config [key]` | View configuration |
 | `clawlet benchmark run` | Run latency/reliability benchmark gates |
+| `clawlet benchmark equivalence` | Verify Python vs Rust execution parity |
 | `clawlet replay <run_id>` | Inspect deterministic runtime replay events |
+| `clawlet recovery list` | List interrupted runs with recovery checkpoints |
 | `clawlet plugin init/test/publish` | Manage Plugin SDK v2 extensions |
 | `clawlet --version` | Show version |
 

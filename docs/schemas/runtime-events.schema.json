@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawlet.dev/schemas/runtime-events.schema.json",
+  "title": "Clawlet Runtime Event",
+  "description": "Structured replay/runtime event contract for deterministic execution and observability.",
+  "type": "object",
+  "required": ["event_type", "run_id", "session_id", "timestamp", "payload"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "RunStarted",
+        "ToolRequested",
+        "ToolStarted",
+        "ToolCompleted",
+        "ToolFailed",
+        "ProviderFailed",
+        "StorageFailed",
+        "ChannelFailed",
+        "RunCompleted"
+      ]
+    },
+    "run_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string"},
+    "payload": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event_type": {"const": "RunStarted"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["channel", "chat_id", "engine", "engine_resolved"],
+            "properties": {
+              "channel": {"type": "string"},
+              "chat_id": {"type": "string"},
+              "engine": {"type": "string"},
+              "engine_resolved": {"type": "string"},
+              "recovery_resume_from": {"type": "string"},
+              "recovery_resume": {"type": "boolean"},
+              "message_preview": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "ToolRequested"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["tool_call_id", "tool_name", "arguments", "execution_mode"],
+            "properties": {
+              "tool_call_id": {"type": "string"},
+              "tool_name": {"type": "string"},
+              "arguments": {"type": "object"},
+              "execution_mode": {"type": "string", "enum": ["read_only", "workspace_write", "elevated"]}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "ToolStarted"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["tool_call_id", "tool_name"],
+            "properties": {
+              "tool_call_id": {"type": "string"},
+              "tool_name": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "ToolCompleted"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["tool_call_id", "tool_name", "success"],
+            "properties": {
+              "tool_call_id": {"type": "string"},
+              "tool_name": {"type": "string"},
+              "success": {"type": "boolean"},
+              "output": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "ToolFailed"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["tool_call_id", "tool_name", "error", "failure_code", "retryable", "failure_category"],
+            "properties": {
+              "tool_call_id": {"type": "string"},
+              "tool_name": {"type": "string"},
+              "error": {"type": "string"},
+              "failure_code": {"type": "string"},
+              "retryable": {"type": "boolean"},
+              "failure_category": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "ProviderFailed"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["provider", "attempt", "error", "failure_code", "retryable", "failure_category"],
+            "properties": {
+              "provider": {"type": "string"},
+              "attempt": {"type": "integer", "minimum": 1},
+              "error": {"type": "string"},
+              "failure_code": {"type": "string"},
+              "retryable": {"type": "boolean"},
+              "failure_category": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "StorageFailed"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["role", "backend", "error"],
+            "properties": {
+              "role": {"type": "string"},
+              "backend": {"type": "string"},
+              "error": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "ChannelFailed"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["channel", "chat_id", "error"],
+            "properties": {
+              "channel": {"type": "string"},
+              "chat_id": {"type": "string"},
+              "error": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_type": {"const": "RunCompleted"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["iterations", "is_error"],
+            "properties": {
+              "iterations": {"type": "integer", "minimum": 0},
+              "is_error": {"type": "boolean"},
+              "response_preview": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  ]
+}

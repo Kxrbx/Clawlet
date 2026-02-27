@@ -35,8 +35,10 @@ app = typer.Typer(
 )
 benchmark_app = typer.Typer(help="Performance and regression benchmark commands")
 plugin_app = typer.Typer(help="Plugin SDK v2 commands")
+recovery_app = typer.Typer(help="Interrupted-run recovery commands")
 app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(plugin_app, name="plugin")
+app.add_typer(recovery_app, name="recovery")
 
 console = Console()
 
@@ -105,6 +107,7 @@ def print_main_menu():
     print_command("benchmark", "Run performance regression suite", "clawlet benchmark run")
     print_command("replay", "Inspect deterministic run events", "clawlet replay <run_id>")
     print_command("plugin", "Manage plugin SDK extensions", "clawlet plugin init")
+    print_command("recovery", "Inspect and recover interrupted runs", "clawlet recovery list")
     print_command("status", "Check workspace status", "clawlet status")
     print_command("health", "Run health checks", "clawlet health")
     print_command("validate", "Validate configuration", "clawlet validate")
@@ -1371,16 +1374,83 @@ def benchmark_run(
         raise typer.Exit(2)
 
 
+@benchmark_app.command("equivalence")
+def benchmark_equivalence(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    strict_rust: bool = typer.Option(
+        False,
+        "--strict-rust",
+        help="Fail if Rust extension is unavailable",
+    ),
+):
+    """Run Python vs Rust execution equivalence checks."""
+    from clawlet.benchmarks import run_engine_equivalence_smokecheck
+
+    workspace_path = workspace or get_workspace_path()
+    result = run_engine_equivalence_smokecheck(workspace_path)
+
+    print_section("Benchmark Equivalence", "Python vs Rust execution paths")
+    console.print(f"│  Rust available: {'yes' if result.rust_available else 'no'}")
+    console.print(f"│  Shell equivalent: {'yes' if result.shell_equivalent else 'no'}")
+    console.print(f"│  File equivalent: {'yes' if result.file_equivalent else 'no'}")
+    console.print(f"│  Patch equivalent: {'yes' if result.patch_equivalent else 'no'}")
+    if result.details:
+        console.print("│")
+        for detail in result.details:
+            console.print(f"│  - {detail}")
+    print_footer()
+
+    if strict_rust and not result.rust_available:
+        raise typer.Exit(2)
+    if not result.passed:
+        raise typer.Exit(2)
+
+
 @app.command("replay")
 def replay(
     run_id: str = typer.Argument(..., help="Run ID to inspect"),
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     limit: int = typer.Option(500, "--limit", min=1, max=5000, help="Max events to display"),
     show_signature: bool = typer.Option(False, "--signature", help="Show deterministic replay signature"),
+    verify: bool = typer.Option(False, "--verify", help="Verify deterministic signature stability and event flow"),
+    verify_resume: bool = typer.Option(
+        False,
+        "--verify-resume",
+        help="Verify recovery resume-chain equivalence assertions for this run",
+    ),
+    reliability: bool = typer.Option(
+        False,
+        "--reliability",
+        help="Print run-level reliability report from runtime events",
+    ),
+    reexecute: bool = typer.Option(
+        False,
+        "--reexecute",
+        help="Re-execute recorded tool requests and compare deterministic outcomes",
+    ),
+    allow_write_reexecute: bool = typer.Option(
+        False,
+        "--allow-write-reexecute",
+        help="Allow workspace-write tool reexecution (still blocks elevated actions)",
+    ),
+    fail_on_mismatch: bool = typer.Option(
+        True,
+        "--fail-on-mismatch/--no-fail-on-mismatch",
+        help="Exit non-zero when replay reexecution detects mismatches",
+    ),
 ):
     """Inspect structured runtime events for a run."""
     from clawlet.config import RuntimeSettings
-    from clawlet.runtime import RuntimeEventStore
+    from clawlet.config import load_config as load_runtime_config
+    from clawlet.tools import create_default_tool_registry
+    from clawlet.runtime import (
+        RecoveryManager,
+        RuntimeEventStore,
+        build_reliability_report,
+        reexecute_run,
+        replay_run,
+        verify_resume_equivalence,
+    )
 
     workspace_path = workspace or get_workspace_path()
     runtime_cfg = RuntimeSettings()
@@ -1415,7 +1485,202 @@ def replay(
         console.print("│")
         console.print(f"│  Signature: [bold]{signature}[/bold]")
 
+    if verify:
+        report = replay_run(store, run_id)
+        console.print("│")
+        console.print(f"│  Verify signature: {'yes' if bool(report.signature) else 'no'}")
+        console.print(f"│  Verify event-flow: {'yes' if report.has_start and report.has_end else 'no'}")
+        console.print(
+            "│  Verify tool-chain: "
+            f"requested={report.tool_requested} started={report.tool_started} finished={report.tool_finished}"
+        )
+        for warning in report.warnings:
+            console.print(f"│  warning: {warning}")
+        for error in report.errors:
+            console.print(f"│  error: {error}")
+        if not report.passed:
+            print_footer()
+            raise typer.Exit(2)
+
+    if verify_resume:
+        manager = RecoveryManager(replay_dir / "checkpoints")
+        resume_report = verify_resume_equivalence(store, manager, run_id)
+        console.print("│")
+        console.print(
+            f"│  Verify resume-equivalence: {'yes' if resume_report.equivalent else 'no'}"
+        )
+        console.print(
+            f"│  Resume successors: {len(resume_report.successors)} "
+            f"({', '.join(resume_report.successors) if resume_report.successors else 'none'})"
+        )
+        for detail in resume_report.details:
+            console.print(f"│  detail: {detail}")
+        if not resume_report.equivalent:
+            print_footer()
+            raise typer.Exit(2)
+
+    if reliability or verify:
+        rr = build_reliability_report(store, run_id)
+        console.print("│")
+        console.print(
+            "│  Reliability: "
+            f"tool_success_rate={rr.tool_success_rate * 100:.1f}% "
+            f"tool_failed={rr.tool_failed} provider_failed={rr.provider_failed} "
+            f"storage_failed={rr.storage_failed} channel_failed={rr.channel_failed}"
+        )
+        console.print(
+            f"│  Reliability crash-like: {'yes' if rr.crash_like else 'no'} "
+            f"(run_completed_error={'yes' if rr.run_completed_error else 'no'})"
+        )
+
+    if reexecute:
+        try:
+            cfg = load_runtime_config(workspace_path)
+        except Exception:
+            cfg = None
+        registry = create_default_tool_registry(allowed_dir=str(workspace_path), config=cfg)
+        rex = reexecute_run(
+            store=store,
+            run_id=run_id,
+            registry=registry,
+            allow_write=allow_write_reexecute,
+        )
+        console.print("│")
+        console.print(
+            "│  Reexecute: "
+            f"requested={rex.requested} executed={rex.executed} matched={rex.matched} "
+            f"mismatched={rex.mismatched} skipped={rex.skipped}"
+        )
+        for detail in rex.details:
+            if detail.status == "matched":
+                continue
+            console.print(
+                f"│  {detail.status}: tcid={detail.tool_call_id} tool={detail.tool_name} reason={detail.reason}"
+            )
+        if rex.mismatched > 0 and fail_on_mismatch:
+            print_footer()
+            raise typer.Exit(2)
+
     print_footer()
+
+
+# ── Recovery commands ─────────────────────────────────────────────────────────
+
+@recovery_app.command("list")
+def recovery_list(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    limit: int = typer.Option(20, "--limit", min=1, max=500, help="Maximum checkpoints"),
+):
+    """List interrupted runs with available checkpoints."""
+    from clawlet.config import RuntimeSettings
+    from clawlet.runtime import RecoveryManager
+
+    workspace_path = workspace or get_workspace_path()
+    runtime_cfg = RuntimeSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            runtime_cfg = RuntimeSettings(**(raw.get("runtime") or {}))
+        except Exception:
+            pass
+    replay_dir = Path(runtime_cfg.replay.directory).expanduser()
+    if not replay_dir.is_absolute():
+        replay_dir = workspace_path / replay_dir
+
+    manager = RecoveryManager(replay_dir / "checkpoints")
+    checkpoints = manager.list_active(limit=limit)
+
+    print_section("Recovery", f"{len(checkpoints)} checkpoint(s)")
+    if not checkpoints:
+        console.print("│  [dim]No interrupted runs found[/dim]")
+        print_footer()
+        return
+
+    for cp in checkpoints:
+        console.print(
+            f"│  run={cp.run_id} stage={cp.stage} iter={cp.iteration} "
+            f"chat={cp.channel}/{cp.chat_id}"
+        )
+    print_footer()
+
+
+@recovery_app.command("show")
+def recovery_show(
+    run_id: str = typer.Argument(..., help="Run ID"),
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Show checkpoint details for one run id."""
+    from clawlet.config import RuntimeSettings
+    from clawlet.runtime import RecoveryManager
+
+    workspace_path = workspace or get_workspace_path()
+    runtime_cfg = RuntimeSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            runtime_cfg = RuntimeSettings(**(raw.get("runtime") or {}))
+        except Exception:
+            pass
+    replay_dir = Path(runtime_cfg.replay.directory).expanduser()
+    if not replay_dir.is_absolute():
+        replay_dir = workspace_path / replay_dir
+
+    manager = RecoveryManager(replay_dir / "checkpoints")
+    cp = manager.load(run_id)
+    print_section("Recovery", f"run={run_id}")
+    if cp is None:
+        console.print("│  [red]Checkpoint not found[/red]")
+        print_footer()
+        raise typer.Exit(1)
+
+    console.print(f"│  session={cp.session_id}")
+    console.print(f"│  stage={cp.stage}")
+    console.print(f"│  iteration={cp.iteration}")
+    console.print(f"│  channel={cp.channel}")
+    console.print(f"│  chat_id={cp.chat_id}")
+    console.print(f"│  notes={cp.notes}")
+    if cp.pending_confirmation:
+        console.print(f"│  pending_confirmation={cp.pending_confirmation}")
+    print_footer()
+
+
+@recovery_app.command("resume-payload")
+def recovery_resume_payload(
+    run_id: str = typer.Argument(..., help="Run ID"),
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Render recovery inbound payload for manual resume orchestration."""
+    import json
+    from clawlet.config import RuntimeSettings
+    from clawlet.runtime import RecoveryManager
+
+    workspace_path = workspace or get_workspace_path()
+    runtime_cfg = RuntimeSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            runtime_cfg = RuntimeSettings(**(raw.get("runtime") or {}))
+        except Exception:
+            pass
+    replay_dir = Path(runtime_cfg.replay.directory).expanduser()
+    if not replay_dir.is_absolute():
+        replay_dir = workspace_path / replay_dir
+
+    manager = RecoveryManager(replay_dir / "checkpoints")
+    payload = manager.build_resume_message(run_id)
+    if payload is None:
+        console.print("[red]Checkpoint not found[/red]")
+        raise typer.Exit(1)
+    console.print(json.dumps(payload, indent=2))
 
 
 # ── Plugin SDK commands ───────────────────────────────────────────────────────
