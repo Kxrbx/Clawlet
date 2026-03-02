@@ -88,7 +88,7 @@ def retrieve_context(
 
     scored: list[tuple[float, IndexedFile, str]] = []
     for item in files.values():
-        score, reason = _score_file(query_tokens, item)
+        score, reason = _score_file(query_tokens, query, item)
         if score <= 0:
             continue
         scored.append((score, item, reason))
@@ -98,10 +98,17 @@ def retrieve_context(
     snippets: list[ContextSnippet] = []
     used_chars = 0
     for score, item, reason in scored[:max_files]:
-        excerpt = _excerpt_for(item, query_tokens, max_chars=min(1200, char_budget))
+        remaining = max(0, char_budget - used_chars)
+        if remaining < 120:
+            break
+        # Higher-scored snippets get larger slices, but never starve later snippets completely.
+        target = min(1200, max(220, int(remaining * 0.7)))
+        excerpt = _excerpt_for(item, query_tokens, max_chars=target)
         if not excerpt:
             continue
-        if used_chars + len(excerpt) > char_budget:
+        if len(excerpt) > remaining:
+            excerpt = excerpt[:remaining]
+        if not excerpt:
             continue
         snippets.append(ContextSnippet(path=item.path, excerpt=excerpt, score=score, reason=reason))
         used_chars += len(excerpt)
@@ -129,7 +136,7 @@ def deserialize_pack(data: dict) -> ContextPack:
     )
 
 
-def _score_file(query_tokens: list[str], item: IndexedFile) -> tuple[float, str]:
+def _score_file(query_tokens: list[str], query: str, item: IndexedFile) -> tuple[float, str]:
     score = 0.0
     reason_parts: list[str] = []
 
@@ -150,6 +157,20 @@ def _score_file(query_tokens: list[str], item: IndexedFile) -> tuple[float, str]
     if preview_overlap:
         score += preview_overlap * 1.5
         reason_parts.append(f"content:{preview_overlap}")
+
+    # Bonus when query phrase aligns with concrete symbol names (AST-quality signals).
+    query_norm = " ".join(tokenize(query))
+    if query_norm:
+        phrase_hits = 0
+        for symbol in item.symbols:
+            sym_norm = " ".join(tokenize(symbol))
+            if not sym_norm:
+                continue
+            if sym_norm in query_norm or query_norm in sym_norm:
+                phrase_hits += 1
+        if phrase_hits:
+            score += phrase_hits * 2.5
+            reason_parts.append(f"symbol_phrase:{phrase_hits}")
 
     return score, ",".join(reason_parts)
 

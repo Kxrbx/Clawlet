@@ -8,6 +8,8 @@ import asyncio
 import os
 import subprocess
 import secrets
+from pathlib import Path
+from collections import deque
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -120,6 +122,25 @@ def get_dashboard_token() -> str:
                 f"Generated random dashboard token (set CLawlet_DASHBOARD_TOKEN to persist): {DASHBOARD_TOKEN}"
             )
     return DASHBOARD_TOKEN
+
+
+def _resolve_log_file() -> Path:
+    """Resolve dashboard log file path."""
+    configured = os.environ.get("CLAWLET_LOG_FILE", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".clawlet" / "clawlet.log"
+
+
+def _tail_lines(path: Path, limit: int) -> list[str]:
+    """Read the last N lines without loading the full file in memory."""
+    if limit <= 0:
+        return []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            return list(deque(f, maxlen=limit))
+    except FileNotFoundError:
+        return []
 
 
 async def verify_api_token(
@@ -442,20 +463,29 @@ async def get_cache_info(
 @app.get("/logs")
 async def get_logs(limit: int = 100, token: str = Depends(verify_api_token)):
     """Get recent logs."""
-    # TODO: Implement actual log retrieval
+    limit = max(1, min(limit, 1000))
+    log_file = _resolve_log_file()
+    lines = _tail_lines(log_file, limit)
+    logs = []
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if not line:
+            continue
+        level = "INFO"
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|", 2)]
+            if len(parts) >= 3:
+                timestamp = parts[0]
+                level = parts[1]
+                message = parts[2]
+                logs.append({"level": level, "message": message, "timestamp": timestamp})
+                continue
+        logs.append({"level": level, "message": line, "timestamp": ""})
+
     return {
-        "logs": [
-            {
-                "level": "INFO",
-                "message": "Agent started",
-                "timestamp": "2026-02-10T21:00:00Z",
-            },
-            {
-                "level": "INFO",
-                "message": "Connected to OpenRouter",
-                "timestamp": "2026-02-10T21:00:01Z",
-            },
-        ],
+        "logs": logs,
+        "log_file": str(log_file),
+        "exists": log_file.exists(),
         "limit": limit,
     }
 
@@ -465,15 +495,12 @@ async def get_logs(limit: int = 100, token: str = Depends(verify_api_token)):
 @app.get("/console")
 async def get_console_output(token: str = Depends(verify_api_token)):
     """Get recent console output."""
-    # TODO: Implement actual console output retrieval
+    log_file = _resolve_log_file()
+    output = [line.rstrip("\n") for line in _tail_lines(log_file, 200) if line.strip()]
     return {
-        "output": [
-            "[INFO] Agent started",
-            "[INFO] Connected to OpenRouter",
-            "[INFO] Loading identity from ~/.clawlet/",
-            "[INFO] Initializing Telegram channel...",
-            "[SUCCESS] Ready to receive messages",
-        ]
+        "output": output,
+        "log_file": str(log_file),
+        "exists": log_file.exists(),
     }
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from dataclasses import asdict
@@ -43,7 +44,7 @@ from clawlet.runtime import (
     RunCheckpoint,
     ToolCallEnvelope,
 )
-from clawlet.runtime.failures import classify_exception, to_payload as failure_payload
+from clawlet.runtime.failures import classify_error_text, classify_exception, to_payload as failure_payload
 from clawlet.runtime.rust_bridge import is_available as rust_core_available
 
 
@@ -248,6 +249,9 @@ class AgentLoop:
             "calls_executed": 0,
             "calls_rejected": 0,
             "calls_failed": 0,
+            "parallel_batches": 0,
+            "parallel_batch_tools": 0,
+            "serial_batches": 0,
         }
         
         # Persistence failure tracking
@@ -260,6 +264,10 @@ class AgentLoop:
         # Deterministic runtime + replay infrastructure
         self.runtime_config = runtime_config or RuntimeSettings()
         self._runtime_engine = self.runtime_config.engine
+        self._enable_parallel_read_batches = bool(
+            getattr(self.runtime_config, "enable_parallel_read_batches", True)
+        )
+        self._max_parallel_read_tools = max(1, int(getattr(self.runtime_config, "max_parallel_read_tools", 4) or 4))
         if self._runtime_engine == "hybrid_rust" and not rust_core_available():
             logger.warning("runtime.engine=hybrid_rust requested but Rust core is unavailable; falling back to python")
             self._runtime_engine = "python"
@@ -270,6 +278,8 @@ class AgentLoop:
         self._event_store = RuntimeEventStore(
             event_path,
             redact_tool_output=self.runtime_config.replay.redact_tool_outputs,
+            validate_events=self.runtime_config.replay.validate_events,
+            validation_mode=self.runtime_config.replay.validation_mode,
         )
         allowed_modes = tuple(self.runtime_config.policy.allowed_modes)  # type: ignore[arg-type]
         require_approval_for = tuple(self.runtime_config.policy.require_approval_for)  # type: ignore[arg-type]
@@ -283,6 +293,8 @@ class AgentLoop:
             policy=self._runtime_policy,
             enable_idempotency=self.runtime_config.enable_idempotency_cache,
             engine=self._runtime_engine,
+            remote_executor=self._build_remote_executor(),
+            lane_defaults=dict(self.runtime_config.policy.lanes),
         )
         self._context_engine = ContextEngine(workspace=self.workspace, cache_dir=replay_dir / "context")
         self._recovery_manager = RecoveryManager(replay_dir / "checkpoints")
@@ -296,6 +308,27 @@ class AgentLoop:
                 self.max_tool_calls_per_message,
             )
         )
+
+    def _build_remote_executor(self):
+        """Create optional remote executor (local-first fallback when unavailable)."""
+        remote_cfg = getattr(self.runtime_config, "remote", None)
+        if not remote_cfg or not getattr(remote_cfg, "enabled", False):
+            return None
+        endpoint = str(getattr(remote_cfg, "endpoint", "") or "").strip()
+        if not endpoint:
+            logger.warning("runtime.remote.enabled=true but endpoint is empty; remote execution disabled")
+            return None
+        api_key_env = str(getattr(remote_cfg, "api_key_env", "CLAWLET_REMOTE_API_KEY") or "CLAWLET_REMOTE_API_KEY")
+        api_key = os.environ.get(api_key_env, "")
+        timeout_seconds = float(getattr(remote_cfg, "timeout_seconds", 60.0) or 60.0)
+        try:
+            from clawlet.runtime.remote import RemoteToolExecutor
+
+            logger.info(f"Remote executor enabled at {endpoint}")
+            return RemoteToolExecutor(endpoint=endpoint, api_key=api_key, timeout_seconds=timeout_seconds)
+        except Exception as e:
+            logger.warning(f"Remote executor unavailable; using local-only execution: {e}")
+            return None
 
     def _queue_persist(self, session_id: str, role: str, content: str, metadata: Optional[dict] = None) -> None:
         """Queue persistence task with lifecycle tracking."""
@@ -385,24 +418,12 @@ class AgentLoop:
                     response = await self._process_message(msg)
                     if response:
                         logger.info(f"Sending response: {response.content[:50]}...")
-                        try:
-                            await self.bus.publish_outbound(response)
-                        except Exception as e:
-                            logger.error(f"Failed to publish outbound response: {e}")
-                            self._emit_runtime_event(
-                                EVENT_CHANNEL_FAILED,
-                                session_id=self._session_id or "session",
-                                payload={
-                                    "channel": getattr(response, "channel", ""),
-                                    "chat_id": getattr(response, "chat_id", ""),
-                                    "error": str(e),
-                                },
-                            )
+                        await self._publish_outbound_with_retry(response)
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
                     # Send error response
                     from clawlet.bus.queue import OutboundMessage
-                    await self.bus.publish_outbound(OutboundMessage(
+                    await self._publish_outbound_with_retry(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
                         content=f"Sorry, I encountered an error: {str(e)}"
@@ -747,7 +768,8 @@ class AgentLoop:
                         arguments={"url": explicit_urls[0]},
                     )
                     logger.info(
-                        f"Applying URL-first policy: model returned no tool call, forcing fetch_url for {explicit_urls[0]}"
+                        "Applying URL-first policy: model returned no tool call, "
+                        f"forcing fetch_url for {explicit_urls[0]}"
                     )
                     tool_calls = [forced]
                 tool_calls = self._prioritize_explicit_url_fetch(
@@ -813,43 +835,51 @@ class AgentLoop:
                         ]
                     ))
                     self._queue_persist(convo.session_id, "assistant", response_content)
-                    
-                    # Execute each tool call
+
+                    mapped_calls: list[ToolCall] = []
                     for tc in tool_calls:
-                        # Map tool name early for use in both execution and metadata
                         requested_tool_name = tc.name
                         mapped_tool_name = self._tool_aliases.get(requested_tool_name, requested_tool_name)
                         if mapped_tool_name != requested_tool_name:
                             logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{mapped_tool_name}'")
-                        
-                        # Execute with mapped name
                         tc.name = mapped_tool_name
-                        if self._is_destructive_tool_call(tc):
+                        mapped_calls.append(tc)
+
+                    # Confirmation checks remain serial and explicit before any execution.
+                    for tc in mapped_calls:
+                        confirm_reason = self._requires_confirmation(tc)
+                        if confirm_reason:
                             token = str(int(time.time()))[-6:]
                             self._pending_confirmations[convo_key] = {
                                 "token": token,
                                 "tool_call": tc,
                             }
                             final_response = (
-                                f"Destructive action blocked by default: `{tc.name}`.\n"
+                                f"{confirm_reason}: `{tc.name}`.\n"
                                 f"Reply with `confirm {token}` to continue or `cancel`."
                             )
                             is_error = False
                             break
-                        result = await self._execute_tool(tc)
+
+                    if final_response is not None:
+                        break
+
+                    executed = await self._execute_tool_calls_optimized(mapped_calls)
+
+                    for tc, result in executed:
                         rendered_tool_output = self._render_tool_result(result)
                         self._save_checkpoint(
                             stage="tool_executed",
                             iteration=iteration,
                             notes=f"tool={tc.name} success={result.success}",
                         )
-                        
-                        # Add tool result to history - use mapped name in metadata
-                        convo.history.append(Message(
-                            role="tool",
-                            content=rendered_tool_output,
-                            metadata={"tool_call_id": tc.id, "tool_name": mapped_tool_name}
-                        ))
+                        convo.history.append(
+                            Message(
+                                role="tool",
+                                content=rendered_tool_output,
+                                metadata={"tool_call_id": tc.id, "tool_name": tc.name},
+                            )
+                        )
                         self._queue_persist(convo.session_id, "tool", rendered_tool_output)
                     
                     if final_response is not None:
@@ -1246,23 +1276,34 @@ class AgentLoop:
         # DEBUG: Log available tools when tool is not found
         if self.tools.get(tool_name) is None:
             logger.warning(f"Rejected unknown tool call: {tool_name}")
-            logger.warning(f"DEBUG: Available tools: {list(self.tools._tools.keys()) if hasattr(self.tools, '_tools') else 'N/A'}")
+            logger.warning(
+                "DEBUG: Available tools: "
+                f"{list(self.tools._tools.keys()) if hasattr(self.tools, '_tools') else 'N/A'}"
+            )
             self._tool_stats["calls_rejected"] += 1
             return ToolResult(success=False, output="", error=f"Unknown tool: {tool_name}")
 
         # Validate tool invocation before execution.
         tool = self.tools.get(tool_name)
         schema = tool.parameters_schema if tool else None
+        raw_args = dict(tool_call.arguments or {})
+        execution_target_raw = str(raw_args.pop("_execution_target", "local")).strip().lower()
+        execution_target = "remote" if execution_target_raw == "remote" else "local"
+        lane = str(raw_args.pop("_lane", "")).strip().lower()
+
         valid, error_msg, sanitized = validate_tool_params(
             tool_name=tool_name,
-            params=tool_call.arguments,
+            params=raw_args,
             schema=schema,
         )
         if not valid:
             logger.warning(f"Rejected tool call for '{tool_name}': {error_msg}")
             self._tool_stats["calls_rejected"] += 1
             return ToolResult(success=False, output="", error=f"Invalid tool call: {error_msg}")
-        args = sanitized.get("params", tool_call.arguments)
+        args = dict(sanitized.get("params", raw_args))
+        if execution_target == "remote" and getattr(self._tool_runtime, "remote_executor", None) is None:
+            logger.warning("Remote execution requested but remote executor is unavailable; using local target")
+            execution_target = "local"
 
         envelope = ToolCallEnvelope(
             run_id=self._current_run_id or self._next_run_id(self._session_id or "session"),
@@ -1274,6 +1315,8 @@ class AgentLoop:
             workspace_path=str(self.workspace),
             timeout_seconds=self.runtime_config.default_tool_timeout_seconds,
             max_retries=self.runtime_config.default_tool_retries,
+            execution_target=execution_target,  # type: ignore[arg-type]
+            lane=lane,
         )
 
         try:
@@ -1307,6 +1350,93 @@ class AgentLoop:
                 logger.error(f"Circuit breaker tripped for tool '{tool_name}'! Open until {open_until.isoformat()}")
         
         return result
+
+    def _should_parallelize_tool_calls(self, tool_calls: list[ToolCall]) -> bool:
+        """Allow safe parallel execution for batches of read-only local tool calls."""
+        if not self._enable_parallel_read_batches:
+            return False
+        if len(tool_calls) < 2:
+            return False
+        for tc in tool_calls:
+            if not self._is_parallel_tool_call(tc):
+                return False
+        return True
+
+    def _is_parallel_tool_call(self, tool_call: ToolCall) -> bool:
+        """True when this tool call is safe for read-only parallel execution."""
+        args = dict(tool_call.arguments or {})
+        if str(args.get("_execution_target", "local")).strip().lower() == "remote":
+            return False
+        lane = str(args.get("_lane", "")).strip().lower()
+        if lane.startswith("serial:"):
+            return False
+        mode = self._runtime_policy.infer_mode(tool_call.name, args)
+        return mode == "read_only"
+
+    def _plan_tool_execution_groups(self, tool_calls: list[ToolCall]) -> list[tuple[str, list[ToolCall]]]:
+        """Group calls into deterministic execution blocks: parallel-read-only or serial."""
+        if not self._enable_parallel_read_batches:
+            return [("serial", [tc]) for tc in tool_calls]
+        groups: list[tuple[str, list[ToolCall]]] = []
+        pending_parallel: list[ToolCall] = []
+
+        def _flush_parallel():
+            nonlocal pending_parallel
+            if not pending_parallel:
+                return
+            if len(pending_parallel) == 1:
+                groups.append(("serial", [pending_parallel[0]]))
+            else:
+                groups.append(("parallel", list(pending_parallel)))
+            pending_parallel = []
+
+        for tc in tool_calls:
+            if self._is_parallel_tool_call(tc):
+                pending_parallel.append(tc)
+                continue
+            _flush_parallel()
+            groups.append(("serial", [tc]))
+
+        _flush_parallel()
+        return groups
+
+    async def _execute_tool_calls_optimized(self, tool_calls: list[ToolCall]) -> list[tuple[ToolCall, ToolResult]]:
+        """Execute mixed batches with parallel read-only groups and serial fallback."""
+        if not tool_calls:
+            return []
+
+        out: list[tuple[ToolCall, ToolResult]] = []
+        for mode, chunk in self._plan_tool_execution_groups(tool_calls):
+            if mode == "parallel":
+                out.extend(await self._execute_tool_batch_parallel(chunk))
+                continue
+            self._tool_stats["serial_batches"] = int(self._tool_stats.get("serial_batches", 0)) + 1
+            for tc in chunk:
+                out.append((tc, await self._execute_tool(tc)))
+        return out
+
+    async def _execute_tool_batch_parallel(self, tool_calls: list[ToolCall]) -> list[tuple[ToolCall, ToolResult]]:
+        """Execute tool calls concurrently and preserve call order for history determinism."""
+        limit = max(1, min(self._max_parallel_read_tools, len(tool_calls)))
+        semaphore = asyncio.Semaphore(limit)
+
+        async def _run(tc: ToolCall) -> ToolResult:
+            async with semaphore:
+                try:
+                    return await self._execute_tool(tc)
+                except Exception as e:
+                    return ToolResult(success=False, output="", error=str(e))
+
+        logger.info(
+            f"Executing {len(tool_calls)} read-only tool calls in parallel batch "
+            f"(max_parallel={limit})"
+        )
+        self._tool_stats["parallel_batches"] = int(self._tool_stats.get("parallel_batches", 0)) + 1
+        self._tool_stats["parallel_batch_tools"] = int(self._tool_stats.get("parallel_batch_tools", 0)) + len(
+            tool_calls
+        )
+        results = await asyncio.gather(*[_run(tc) for tc in tool_calls])
+        return list(zip(tool_calls, results))
     
     def _build_messages(self, history: list[Message], query_hint: Optional[str] = None) -> list[dict]:
         """Build messages list for LLM."""
@@ -1446,6 +1576,47 @@ class AgentLoop:
             "mkfs",
         )
         return any(pat in f" {cmd}" for pat in destructive_patterns)
+
+    def _requires_confirmation(self, tool_call: ToolCall) -> str:
+        """Return a non-empty reason if the tool call should require explicit user confirmation."""
+        mode = self._runtime_policy.infer_mode(tool_call.name, tool_call.arguments or {})
+        decision = self._runtime_policy.authorize(mode, approved=False)
+        if not decision.allowed and "requires explicit approval" in decision.reason.lower():
+            return f"Policy requires approval for {mode} action"
+        if self._is_destructive_tool_call(tool_call):
+            return "Destructive action blocked by default"
+        return ""
+
+    async def _publish_outbound_with_retry(self, response: "OutboundMessage") -> bool:
+        """Publish outbound messages with bounded retries and structured failure telemetry."""
+        retries = max(0, int(self.runtime_config.outbound_publish_retries))
+        backoff = max(0.0, float(self.runtime_config.outbound_publish_backoff_seconds))
+        attempts = retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                await self.bus.publish_outbound(response)
+                return True
+            except Exception as e:
+                failure = classify_error_text(str(e))
+                logger.error(
+                    f"Failed to publish outbound response (attempt {attempt}/{attempts}, code={failure.code}): {e}"
+                )
+                self._emit_runtime_event(
+                    EVENT_CHANNEL_FAILED,
+                    session_id=self._session_id or "session",
+                    payload={
+                        "channel": getattr(response, "channel", ""),
+                        "chat_id": getattr(response, "chat_id", ""),
+                        "attempt": attempt,
+                        "error": str(e),
+                        **failure_payload(failure),
+                    },
+                )
+                if attempt >= attempts:
+                    return False
+                if backoff > 0:
+                    await asyncio.sleep(backoff * attempt)
+        return False
     
     def clear_history(self) -> None:
         """Clear all history."""

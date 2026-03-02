@@ -33,6 +33,9 @@ __all__ = [
     "verify_resume_equivalence",
     "ReliabilityReport",
     "build_reliability_report",
+    "RetentionCleanupReport",
+    "cleanup_replay_artifacts",
+    "RemoteToolExecutor",
     "ToolCallEnvelope",
     "ToolExecutionMetadata",
 ]
@@ -68,6 +71,9 @@ _LAZY_IMPORTS = {
     "verify_resume_equivalence": ("clawlet.runtime.replay", "verify_resume_equivalence"),
     "ReliabilityReport": ("clawlet.runtime.reliability", "ReliabilityReport"),
     "build_reliability_report": ("clawlet.runtime.reliability", "build_reliability_report"),
+    "RetentionCleanupReport": ("clawlet.runtime.retention", "RetentionCleanupReport"),
+    "cleanup_replay_artifacts": ("clawlet.runtime.retention", "cleanup_replay_artifacts"),
+    "RemoteToolExecutor": ("clawlet.runtime.remote", "RemoteToolExecutor"),
     "ToolCallEnvelope": ("clawlet.runtime.types", "ToolCallEnvelope"),
     "ToolExecutionMetadata": ("clawlet.runtime.types", "ToolExecutionMetadata"),
 }

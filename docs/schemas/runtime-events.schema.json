@@ -58,7 +58,9 @@
               "tool_call_id": {"type": "string"},
               "tool_name": {"type": "string"},
               "arguments": {"type": "object"},
-              "execution_mode": {"type": "string", "enum": ["read_only", "workspace_write", "elevated"]}
+              "execution_mode": {"type": "string", "enum": ["read_only", "workspace_write", "elevated"]},
+              "execution_target": {"type": "string", "enum": ["local", "remote"]},
+              "lane": {"type": "string"}
             },
             "additionalProperties": true
           }
@@ -74,7 +76,8 @@
             "required": ["tool_call_id", "tool_name"],
             "properties": {
               "tool_call_id": {"type": "string"},
-              "tool_name": {"type": "string"}
+              "tool_name": {"type": "string"},
+              "lane": {"type": "string"}
             },
             "additionalProperties": true
           }
@@ -92,6 +95,7 @@
               "tool_call_id": {"type": "string"},
               "tool_name": {"type": "string"},
               "success": {"type": "boolean"},
+              "lane": {"type": "string"},
               "output": {"type": "string"}
             },
             "additionalProperties": true
@@ -110,6 +114,7 @@
               "tool_call_id": {"type": "string"},
               "tool_name": {"type": "string"},
               "error": {"type": "string"},
+              "lane": {"type": "string"},
               "failure_code": {"type": "string"},
               "retryable": {"type": "boolean"},
               "failure_category": {"type": "string"}

@@ -157,6 +157,137 @@ def test_should_enable_tools_is_true_for_actionable_requests(agent_loop):
     assert agent_loop._should_enable_tools("Run `git status`") is True
 
 
+def test_requires_confirmation_for_policy_controlled_mode(agent_loop):
+    from clawlet.agent.loop import ToolCall
+
+    agent_loop._runtime_policy.require_approval_for.add("workspace_write")
+    tool_call = ToolCall(id="tc-1", name="write_file", arguments={"path": "notes.txt", "content": "x"})
+
+    reason = agent_loop._requires_confirmation(tool_call)
+    assert "Policy requires approval" in reason
+
+
+def test_parallel_batch_eligible_for_read_only_calls(agent_loop):
+    from clawlet.agent.loop import ToolCall
+
+    calls = [
+        ToolCall(id="tc-1", name="read_file", arguments={"path": "README.md"}),
+        ToolCall(id="tc-2", name="list_dir", arguments={"path": "."}),
+    ]
+    assert agent_loop._should_parallelize_tool_calls(calls) is True
+
+
+def test_parallel_batch_disabled_for_write_or_serial_lane(agent_loop):
+    from clawlet.agent.loop import ToolCall
+
+    write_calls = [
+        ToolCall(id="tc-1", name="read_file", arguments={"path": "README.md"}),
+        ToolCall(id="tc-2", name="write_file", arguments={"path": "x.txt", "content": "x"}),
+    ]
+    serial_lane_calls = [
+        ToolCall(id="tc-1", name="read_file", arguments={"path": "README.md"}),
+        ToolCall(id="tc-2", name="list_dir", arguments={"path": ".", "_lane": "serial:forced"}),
+    ]
+
+    assert agent_loop._should_parallelize_tool_calls(write_calls) is False
+    assert agent_loop._should_parallelize_tool_calls(serial_lane_calls) is False
+
+
+def test_parallel_batch_respects_max_parallel_read_tools(agent_loop, event_loop):
+    from clawlet.agent.loop import ToolCall
+    from clawlet.tools.registry import ToolResult
+
+    running = 0
+    peak = 0
+
+    async def fake_execute(tc, approved=False):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.03)
+        running -= 1
+        return ToolResult(success=True, output=f"ok:{tc.id}")
+
+    agent_loop._max_parallel_read_tools = 2
+    agent_loop._execute_tool = fake_execute  # type: ignore[assignment]
+
+    calls = [
+        ToolCall(id=f"tc-{i}", name="read_file", arguments={"path": "README.md"})
+        for i in range(4)
+    ]
+    out = event_loop.run_until_complete(agent_loop._execute_tool_batch_parallel(calls))
+    assert len(out) == 4
+    assert peak <= 2
+
+
+def test_plan_tool_execution_groups_for_mixed_calls(agent_loop):
+    from clawlet.agent.loop import ToolCall
+
+    calls = [
+        ToolCall(id="tc-1", name="read_file", arguments={"path": "README.md"}),
+        ToolCall(id="tc-2", name="list_dir", arguments={"path": "."}),
+        ToolCall(id="tc-3", name="write_file", arguments={"path": "x.txt", "content": "x"}),
+        ToolCall(id="tc-4", name="read_file", arguments={"path": "MEMORY.md"}),
+        ToolCall(id="tc-5", name="read_file", arguments={"path": "SOUL.md"}),
+    ]
+
+    groups = agent_loop._plan_tool_execution_groups(calls)
+    assert [g[0] for g in groups] == ["parallel", "serial", "parallel"]
+    assert [tc.id for tc in groups[0][1]] == ["tc-1", "tc-2"]
+    assert [tc.id for tc in groups[1][1]] == ["tc-3"]
+    assert [tc.id for tc in groups[2][1]] == ["tc-4", "tc-5"]
+
+
+def test_execute_tool_calls_optimized_uses_parallel_and_serial(agent_loop, event_loop):
+    from clawlet.agent.loop import ToolCall
+    from clawlet.tools.registry import ToolResult
+
+    calls = [
+        ToolCall(id="tc-1", name="read_file", arguments={"path": "README.md"}),
+        ToolCall(id="tc-2", name="list_dir", arguments={"path": "."}),
+        ToolCall(id="tc-3", name="write_file", arguments={"path": "x.txt", "content": "x"}),
+        ToolCall(id="tc-4", name="read_file", arguments={"path": "MEMORY.md"}),
+        ToolCall(id="tc-5", name="read_file", arguments={"path": "SOUL.md"}),
+    ]
+
+    trace: list[str] = []
+
+    async def fake_parallel(batch):
+        trace.append("parallel:" + ",".join(tc.id for tc in batch))
+        return [(tc, ToolResult(success=True, output=f"p:{tc.id}")) for tc in batch]
+
+    async def fake_execute(tc, approved=False):
+        trace.append(f"serial:{tc.id}")
+        return ToolResult(success=True, output=f"s:{tc.id}")
+
+    agent_loop._execute_tool_batch_parallel = fake_parallel  # type: ignore[assignment]
+    agent_loop._execute_tool = fake_execute  # type: ignore[assignment]
+
+    out = event_loop.run_until_complete(agent_loop._execute_tool_calls_optimized(calls))
+    assert len(out) == 5
+    assert trace == [
+        "parallel:tc-1,tc-2",
+        "serial:tc-3",
+        "parallel:tc-4,tc-5",
+    ]
+    assert agent_loop._tool_stats["parallel_batches"] >= 2
+    assert agent_loop._tool_stats["parallel_batch_tools"] >= 4
+    assert agent_loop._tool_stats["serial_batches"] >= 1
+
+
+def test_plan_tool_execution_groups_when_parallel_disabled(agent_loop):
+    from clawlet.agent.loop import ToolCall
+
+    agent_loop._enable_parallel_read_batches = False
+    calls = [
+        ToolCall(id="tc-1", name="read_file", arguments={"path": "README.md"}),
+        ToolCall(id="tc-2", name="list_dir", arguments={"path": "."}),
+    ]
+    groups = agent_loop._plan_tool_execution_groups(calls)
+    assert groups == [("serial", [calls[0]]), ("serial", [calls[1]])]
+    assert agent_loop._should_parallelize_tool_calls(calls) is False
+
+
 def test_call_provider_without_tools_omits_tool_payload(event_loop):
     from clawlet.agent.loop import AgentLoop
     from clawlet.agent.identity import IdentityLoader

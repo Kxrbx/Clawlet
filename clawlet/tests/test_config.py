@@ -150,7 +150,18 @@ def test_init_config_template_is_valid_yaml_and_includes_agent_mode():
     assert "telegram" in data
     assert "discord" in data
     assert data["runtime"]["engine"] == "hybrid_rust"
+    assert data["runtime"]["enable_parallel_read_batches"] is True
+    assert data["runtime"]["max_parallel_read_tools"] == 4
+    assert data["runtime"]["remote"]["enabled"] is False
+    assert data["runtime"]["policy"]["lanes"]["read_only"] == "parallel:read_only"
+    assert data["runtime"]["policy"]["lanes"]["workspace_write"] == "serial:workspace_write"
     assert data["benchmarks"]["gates"]["min_deterministic_replay_pass_rate_pct"] == 98.0
+    assert data["benchmarks"]["gates"]["min_lane_speedup_ratio"] == 1.20
+    assert data["benchmarks"]["gates"]["max_lane_parallel_elapsed_ms"] == 1000
+    assert data["benchmarks"]["gates"]["min_context_cache_speedup_ratio"] == 1.05
+    assert data["benchmarks"]["gates"]["max_context_cache_warm_ms"] == 1200
+    assert data["benchmarks"]["gates"]["min_coding_loop_success_rate_pct"] == 99.0
+    assert data["benchmarks"]["gates"]["max_coding_loop_p95_total_ms"] == 2500
     assert data["plugins"]["sdk_version"] == "2.0.0"
 
 
@@ -186,3 +197,223 @@ runtime:
     registry2 = create_default_tool_registry(allowed_dir=str(temp_workspace), config=cfg)
     assert registry2.get("shell").use_rust_core is True
     assert registry2.get("read_file").use_rust_core is True
+
+
+def test_config_migration_analysis_detects_legacy_keys(temp_workspace):
+    from clawlet.config_migration import analyze_config_migration
+
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text(
+        """
+provider:
+  primary: openrouter
+telegram:
+  enabled: true
+agent:
+  full_exec: true
+legacy_custom_key: true
+"""
+    )
+
+    report = analyze_config_migration(config_path)
+    paths = {i.path for i in report.issues}
+    assert "telegram" in paths
+    assert "agent.full_exec" in paths
+    assert "legacy_custom_key" in paths
+    # provider.openrouter missing block should be surfaced
+    assert "provider.openrouter" in paths
+
+
+def test_config_migration_analysis_provider_blockers(temp_workspace):
+    from clawlet.config_migration import analyze_config_migration
+
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text("agent:\n  mode: safe\n")
+
+    report = analyze_config_migration(config_path)
+    assert report.has_blockers is True
+    assert any(i.path == "provider" and i.severity == "error" for i in report.issues)
+
+
+def test_config_migration_autofix_rewrites_legacy_keys(temp_workspace):
+    from clawlet.config_migration import apply_config_migration_autofix
+    import yaml
+
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text(
+        """
+provider:
+  primary: openrouter
+telegram:
+  enabled: true
+agent:
+  full_exec: false
+"""
+    )
+
+    dry = apply_config_migration_autofix(config_path, write=False)
+    assert dry.changed is True
+    assert any("agent.full_exec" in a for a in dry.actions)
+    assert any("telegram" in a for a in dry.actions)
+
+    applied = apply_config_migration_autofix(config_path, write=True, create_backup=True)
+    assert applied.changed is True
+    assert applied.backup_path.endswith(".bak")
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert "telegram" not in data
+    assert "channels" in data and "telegram" in data["channels"]
+    assert "full_exec" not in data["agent"]
+    assert data["agent"]["mode"] == "safe"
+
+
+def test_migration_matrix_scans_multiple_workspaces(temp_workspace):
+    from clawlet.config_migration_matrix import run_migration_matrix
+
+    root = temp_workspace / "matrix"
+    root.mkdir(parents=True, exist_ok=True)
+
+    ws_a = root / "a"
+    ws_a.mkdir()
+    (ws_a / "config.yaml").write_text(
+        "provider:\n  primary: openrouter\n  openrouter:\n    api_key: test\n",
+        encoding="utf-8",
+    )
+
+    ws_b = root / "b"
+    ws_b.mkdir()
+    (ws_b / "config.yaml").write_text(
+        "provider:\n  primary: openrouter\ntelegram:\n  enabled: true\nagent:\n  full_exec: true\n",
+        encoding="utf-8",
+    )
+
+    report = run_migration_matrix(root, pattern="config.yaml", max_workspaces=20)
+    assert report.scanned >= 2
+    assert report.with_issues >= 1
+    assert report.total_issues >= 1
+
+
+def test_summarize_migration_hints_returns_lines(temp_workspace):
+    from clawlet.config_migration import analyze_config_migration, summarize_migration_hints
+
+    config_path = temp_workspace / "config.yaml"
+    config_path.write_text(
+        "provider:\n  primary: openrouter\ntelegram:\n  enabled: true\nagent:\n  full_exec: true\n",
+        encoding="utf-8",
+    )
+    report = analyze_config_migration(config_path)
+    hints = summarize_migration_hints(report, max_items=3)
+    assert len(hints) >= 1
+    assert any("Hint:" in line for line in hints)
+
+
+def test_release_readiness_report_serialization(temp_workspace):
+    from clawlet.release_readiness import (
+        ReleaseReadinessReport,
+        run_release_readiness_smokecheck,
+        summarize_gate_breaches,
+        write_release_readiness_report,
+    )
+
+    report = ReleaseReadinessReport(
+        workspace=str(temp_workspace),
+        passed=True,
+        release_gate_passed=True,
+        migration_matrix_passed=True,
+        plugin_matrix_passed=True,
+        lane_scheduling_passed=True,
+        context_cache_passed=True,
+        coding_loop_passed=True,
+        remote_health_passed=True,
+        reasons=[],
+        gate_breaches=[],
+        breach_counts={},
+        release_gate={"passed": True},
+        migration_matrix={"with_errors": 0},
+        plugin_matrix={"passed": True},
+        lane_scheduling={"passed": True},
+        context_cache={"passed": True},
+        coding_loop={"passed": True},
+        remote_health={"checked": False, "status": "skipped", "detail": ""},
+    )
+    out = temp_workspace / "release-readiness-report.json"
+    write_release_readiness_report(out, report)
+    assert out.exists()
+    breaches = summarize_gate_breaches(report)
+    assert breaches == []
+    ok, errors = run_release_readiness_smokecheck(temp_workspace)
+    assert ok is True
+    assert errors == []
+
+
+def test_summarize_gate_breaches_groups_release_gate_reasons(temp_workspace):
+    from clawlet.release_readiness import ReleaseReadinessReport, summarize_gate_breaches
+
+    report = ReleaseReadinessReport(
+        workspace=str(temp_workspace),
+        passed=False,
+        release_gate_passed=False,
+        migration_matrix_passed=True,
+        plugin_matrix_passed=True,
+        lane_scheduling_passed=False,
+        context_cache_passed=False,
+        coding_loop_passed=False,
+        remote_health_passed=True,
+        reasons=["release_gate: failed"],
+        gate_breaches=[],
+        breach_counts={},
+        release_gate={
+            "passed": False,
+            "breach_counts": {"lane": 1, "context": 1},
+            "gate_breaches": [
+                "lane: lane_scheduling: parallel elapsed 2000.00ms exceeds gate 1000.00ms",
+                "context: context_cache: warm latency 1500.00ms exceeds gate 1200.00ms",
+            ],
+            "reasons": [
+                "local: p95 latency 5000.00ms exceeded gate 3000.00ms",
+                "lane_scheduling: parallel elapsed 2000.00ms exceeds gate 1000.00ms",
+                "context_cache: warm latency 1500.00ms exceeds gate 1200.00ms",
+                "coding_loop: success rate 70.00% is below gate 99.00%",
+            ],
+        },
+        migration_matrix={"with_errors": 0},
+        plugin_matrix={"passed": True},
+        lane_scheduling={"passed": False},
+        context_cache={"passed": False},
+        coding_loop={"passed": False},
+        remote_health={"checked": False, "status": "skipped", "detail": ""},
+    )
+    breaches = summarize_gate_breaches(report)
+    assert any(item.startswith("lane:") for item in breaches)
+    assert any(item.startswith("context:") for item in breaches)
+
+
+def test_summarize_gate_breaches_falls_back_to_reasons(temp_workspace):
+    from clawlet.release_readiness import ReleaseReadinessReport, summarize_gate_breaches
+
+    report = ReleaseReadinessReport(
+        workspace=str(temp_workspace),
+        passed=False,
+        release_gate_passed=False,
+        migration_matrix_passed=True,
+        plugin_matrix_passed=True,
+        lane_scheduling_passed=False,
+        context_cache_passed=True,
+        coding_loop_passed=True,
+        remote_health_passed=True,
+        reasons=["release_gate: failed"],
+        gate_breaches=[],
+        breach_counts={},
+        release_gate={
+            "passed": False,
+            "reasons": ["lane_scheduling: speedup ratio 1.00x is below gate 1.20x"],
+        },
+        migration_matrix={"with_errors": 0},
+        plugin_matrix={"passed": True},
+        lane_scheduling={"passed": False},
+        context_cache={"passed": True},
+        coding_loop={"passed": True},
+        remote_health={"checked": False, "status": "skipped", "detail": ""},
+    )
+    breaches = summarize_gate_breaches(report)
+    assert breaches
+    assert breaches[0].startswith("lane:")

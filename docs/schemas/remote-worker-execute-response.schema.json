@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawlet.dev/schemas/remote-worker-execute-response.schema.json",
+  "title": "Clawlet Remote Worker Execute Response",
+  "type": "object",
+  "required": ["success", "output"],
+  "properties": {
+    "success": {"type": "boolean"},
+    "output": {"type": "string"},
+    "error": {"type": ["string", "null"]},
+    "data": {"type": ["object", "array", "string", "number", "boolean", "null"]}
+  },
+  "additionalProperties": true
+}

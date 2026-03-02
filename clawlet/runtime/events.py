@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -48,14 +49,24 @@ class RuntimeEvent:
 class RuntimeEventStore:
     """Append-only jsonl event log for replay and diagnostics."""
 
-    def __init__(self, log_path: Path, redact_tool_output: bool = False):
+    def __init__(
+        self,
+        log_path: Path,
+        redact_tool_output: bool = False,
+        validate_events: bool = False,
+        validation_mode: str = "warn",
+    ):
         self.log_path = log_path
         self.redact_tool_output = redact_tool_output
+        self.validate_events = validate_events
+        self.validation_mode = validation_mode
         self._lock = threading.Lock()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._logger = logging.getLogger("clawlet.runtime.events")
 
     def append(self, event: RuntimeEvent) -> None:
         """Append an event record."""
+        self._maybe_validate(event)
         line = json.dumps(self._normalize_event(event), ensure_ascii=True, sort_keys=True)
         with self._lock:
             with self.log_path.open("a", encoding="utf-8") as f:
@@ -100,6 +111,30 @@ class RuntimeEventStore:
                     payload[key] = "[redacted]"
         data["payload"] = _to_jsonable(payload)
         return data
+
+    def _maybe_validate(self, event: RuntimeEvent) -> None:
+        if not self.validate_events:
+            return
+        try:
+            from clawlet.runtime.schema import validate_runtime_event
+
+            issues = validate_runtime_event(event)
+        except Exception as e:
+            if self.validation_mode == "error":
+                raise ValueError(f"Runtime event validation failed unexpectedly: {e}") from e
+            self._logger.warning(f"Runtime event validation skipped due to error: {e}")
+            return
+
+        if not issues:
+            return
+
+        joined = "; ".join(issues)
+        if self.validation_mode == "error":
+            raise ValueError(f"Runtime event contract violation: {joined}")
+        self._logger.warning(
+            "Runtime event contract violation (mode=warn): "
+            f"type={event.event_type} run_id={event.run_id} details={joined}"
+        )
 
 
 def _to_jsonable(value: Any) -> Any:

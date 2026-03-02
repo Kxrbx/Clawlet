@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -36,6 +37,7 @@ SUPPORTED_EXTENSIONS = {
 
 IGNORE_DIR_NAMES = {
     ".git",
+    ".runtime",
     "node_modules",
     "__pycache__",
     ".venv",
@@ -55,6 +57,7 @@ _GENERIC_SYMBOL_RE = re.compile(
     r"^\s*(?:function|class|interface|type|const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
 )
+_PY_ASSIGN_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]{2,})\s*=", re.MULTILINE)
 
 
 class RepositoryIndexer:
@@ -133,7 +136,13 @@ class RepositoryIndexer:
     def _extract_symbols(self, suffix: str, text: str) -> list[str]:
         if not text:
             return []
-        matches = _PY_SYMBOL_RE.findall(text) if suffix == ".py" else _GENERIC_SYMBOL_RE.findall(text)
+        if suffix == ".py":
+            matches = self._extract_python_symbols_ast(text)
+            if not matches:
+                matches = _PY_SYMBOL_RE.findall(text)
+            matches.extend(_PY_ASSIGN_RE.findall(text))
+        else:
+            matches = _GENERIC_SYMBOL_RE.findall(text)
         seen = set()
         out = []
         for item in matches:
@@ -143,6 +152,44 @@ class RepositoryIndexer:
             out.append(item)
             if len(out) >= 80:
                 break
+        return out
+
+    def _extract_python_symbols_ast(self, text: str) -> list[str]:
+        """Extract Python symbols using AST for higher-quality indexing."""
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return []
+
+        out: list[str] = []
+        seen: set[str] = set()
+
+        def add(name: str) -> None:
+            if not name or name in seen:
+                return
+            seen.add(name)
+            out.append(name)
+
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                add(node.name)
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    base = (alias.asname or alias.name.split(".")[0]).strip()
+                    if base:
+                        add(base)
+            if isinstance(node, ast.ClassDef):
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        add(f"{node.name}.{child.name}")
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.isupper() and len(target.id) >= 3:
+                        add(target.id)
+
+            if len(out) >= 120:
+                return out
+
         return out
 
     @staticmethod

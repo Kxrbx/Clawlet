@@ -5,6 +5,7 @@ Clawlet CLI commands.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import subprocess
@@ -93,6 +94,23 @@ def print_footer():
     console.print(f"└─ {'─' * 50}")
 
 
+def _filter_breach_lines(
+    breach_lines: list[str],
+    breach_category: Optional[str],
+) -> tuple[list[str], Optional[str]]:
+    category = (breach_category or "").strip().lower()
+    if not category:
+        return breach_lines, None
+    valid_categories = {"local", "corpus", "lane", "context", "coding", "comparison", "other"}
+    if category not in valid_categories:
+        return breach_lines, (
+            "Invalid --breach-category. Use one of: "
+            "local, corpus, lane, context, coding, comparison, other"
+        )
+    filtered = [item for item in breach_lines if item.lower().startswith(f"{category}:")]
+    return filtered, None
+
+
 def print_main_menu():
     """Print the main menu when clawlet is invoked without args."""
     print_sakura_banner()
@@ -112,6 +130,9 @@ def print_main_menu():
     print_command("health", "Run health checks", "clawlet health")
     print_command("validate", "Validate configuration", "clawlet validate")
     print_command("config", "View/edit configuration", "clawlet config")
+    print_command("migrate-config", "Analyze/autofix legacy config keys", "clawlet migrate-config")
+    print_command("migration-matrix", "Scan migration readiness across workspaces", "clawlet migration-matrix")
+    print_command("release-readiness", "Run consolidated release readiness checks", "clawlet release-readiness")
     
     print_footer()
     
@@ -764,6 +785,7 @@ def health():
 @app.command()
 def validate(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    migration: bool = typer.Option(False, "--migration", help="Run legacy migration compatibility analysis"),
 ):
     """🌸 Validate configuration file."""
     workspace_path = workspace or get_workspace_path()
@@ -791,6 +813,29 @@ def validate(
             console.print(f"│    Model: [{SAKURA_PINK}]{config.provider.openrouter.model}[/{SAKURA_PINK}]")
         console.print(f"│    Storage: [{SAKURA_PINK}]{config.storage.backend}[/{SAKURA_PINK}]")
         console.print(f"│    Max Iterations: [{SAKURA_PINK}]{config.agent.max_iterations}[/{SAKURA_PINK}]")
+
+        if migration:
+            from clawlet.config_migration import analyze_config_migration
+
+            report = analyze_config_migration(config_path)
+            console.print("│")
+            console.print(f"│  [bold]Migration Analysis:[/bold] {len(report.issues)} issue(s)")
+            for issue in report.issues:
+                marker = "•"
+                if issue.severity == "error":
+                    marker = "[red]✗[/red]"
+                elif issue.severity == "warning":
+                    marker = "[yellow]![/yellow]"
+                else:
+                    marker = "[cyan]i[/cyan]"
+                auto = " [dim](autofixable)[/dim]" if issue.can_autofix else ""
+                console.print(
+                    f"│    {marker} {issue.severity.upper()} {issue.path}: {issue.message}{auto}"
+                )
+                console.print(f"│      hint: {issue.hint}")
+            if report.has_blockers:
+                print_footer()
+                raise typer.Exit(2)
         
         print_footer()
         console.print()
@@ -850,6 +895,263 @@ def config(
         
         print_dict(config_data)
         print_footer()
+
+
+@app.command("migrate-config")
+def migrate_config(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    write: bool = typer.Option(False, "--write", help="Apply autofix changes to config.yaml"),
+    backup: bool = typer.Option(True, "--backup/--no-backup", help="Create .bak backup when writing"),
+):
+    """Analyze and optionally autofix legacy config keys."""
+    from clawlet.config_migration import analyze_config_migration, apply_config_migration_autofix
+
+    workspace_path = workspace or get_workspace_path()
+    config_path = workspace_path / "config.yaml"
+
+    print_section("Config Migration", str(config_path))
+    analysis = analyze_config_migration(config_path)
+    if analysis.issues:
+        console.print(f"│  Detected {len(analysis.issues)} issue(s):")
+        for issue in analysis.issues:
+            mark = "✗" if issue.severity == "error" else ("!" if issue.severity == "warning" else "i")
+            auto = " (autofixable)" if issue.can_autofix else ""
+            console.print(f"│   {mark} {issue.severity.upper()} {issue.path}: {issue.message}{auto}")
+            console.print(f"│      hint: {issue.hint}")
+    else:
+        console.print("│  No migration issues detected")
+
+    result = apply_config_migration_autofix(config_path, write=write, create_backup=backup)
+    console.print("│")
+    mode = "write" if write else "dry-run"
+    console.print(f"│  Autofix mode: {mode}")
+    console.print(f"│  Changes available: {'yes' if result.changed else 'no'}")
+    if result.actions:
+        for action in result.actions:
+            console.print(f"│   - {action}")
+    if write and result.changed and result.backup_path:
+        console.print(f"│  Backup: {result.backup_path}")
+
+    print_footer()
+
+    if analysis.has_blockers:
+        raise typer.Exit(2)
+
+
+@app.command("migration-matrix")
+def migration_matrix(
+    root: Path = typer.Option(Path("."), "--root", help="Root directory containing workspaces"),
+    pattern: str = typer.Option("config.yaml", "--pattern", help="Config filename/pattern to scan"),
+    max_workspaces: int = typer.Option(200, "--max-workspaces", min=1, max=5000, help="Maximum configs to scan"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON output report path"),
+    fail_on_errors: bool = typer.Option(
+        False,
+        "--fail-on-errors",
+        help="Exit non-zero if any scanned workspace has migration blocking errors",
+    ),
+):
+    """Scan many workspaces and report migration compatibility readiness."""
+    from clawlet.config_migration_matrix import run_migration_matrix, write_migration_matrix_report
+
+    report = run_migration_matrix(root=root, pattern=pattern, max_workspaces=max_workspaces)
+    print_section("Migration Matrix", f"root={root.resolve()}")
+    console.print(
+        "│  "
+        f"scanned={report.scanned} with_issues={report.with_issues} with_errors={report.with_errors}"
+    )
+    console.print(
+        "│  "
+        f"issues={report.total_issues} errors={report.total_errors} "
+        f"warnings={report.total_warnings} infos={report.total_infos} "
+        f"autofixable={report.total_autofixable}"
+    )
+    if report.results:
+        console.print("│")
+        top = sorted(report.results, key=lambda r: (r.errors, r.issues), reverse=True)[:20]
+        for item in top:
+            console.print(
+                "│  "
+                f"{item.workspace}: issues={item.issues} errors={item.errors} "
+                f"warnings={item.warnings} autofixable={item.autofixable}"
+            )
+
+    output = report_path or (Path(root).resolve() / "migration-matrix-report.json")
+    write_migration_matrix_report(output, report)
+    console.print(f"│  Report: {output}")
+    print_footer()
+
+    if fail_on_errors and report.with_errors > 0:
+        raise typer.Exit(2)
+
+
+@app.command("release-readiness")
+def release_readiness(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Primary workspace directory"),
+    local_iterations: int = typer.Option(25, "--local-iterations", min=1, max=500),
+    corpus_iterations: int = typer.Option(10, "--corpus-iterations", min=1, max=200),
+    baseline_report: Optional[Path] = typer.Option(None, "--baseline-report"),
+    target_improvement_pct: float = typer.Option(35.0, "--target-improvement-pct", min=0.0, max=100.0),
+    require_comparison: bool = typer.Option(False, "--require-comparison"),
+    migration_root: Optional[Path] = typer.Option(None, "--migration-root", help="Root path for migration matrix scan"),
+    migration_pattern: str = typer.Option("config.yaml", "--migration-pattern"),
+    migration_max_workspaces: int = typer.Option(200, "--migration-max-workspaces", min=1, max=5000),
+    check_remote_health: bool = typer.Option(False, "--check-remote-health"),
+    breach_category: Optional[str] = typer.Option(
+        None,
+        "--breach-category",
+        help="Filter displayed gate breaches by category: local|corpus|lane|context|coding|comparison|other",
+    ),
+    max_breaches: int = typer.Option(
+        8,
+        "--max-breaches",
+        min=1,
+        max=100,
+        help="Maximum number of breach lines to display",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+    fail_on_not_ready: bool = typer.Option(True, "--fail-on-not-ready/--no-fail-on-not-ready"),
+):
+    """Run consolidated release readiness checks across benchmarks/migration/plugins."""
+    from clawlet.config import BenchmarksSettings, load_config
+    from clawlet.release_readiness import (
+        run_release_readiness,
+        summarize_gate_breaches,
+        write_release_readiness_report,
+    )
+
+    workspace_path = workspace or get_workspace_path()
+    gates_cfg = BenchmarksSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            gates_cfg = BenchmarksSettings(**(raw.get("benchmarks") or {}))
+        except Exception:
+            pass
+
+    plugin_dirs = [workspace_path / "plugins"]
+    remote_endpoint = ""
+    remote_api_key = ""
+    remote_timeout_seconds = 60.0
+    try:
+        import os
+
+        cfg = load_config(workspace_path)
+        plugin_dirs = []
+        for raw_dir in cfg.plugins.directories:
+            p = Path(raw_dir).expanduser()
+            if not p.is_absolute():
+                p = workspace_path / p
+            plugin_dirs.append(p)
+        remote_endpoint = str(getattr(cfg.runtime.remote, "endpoint", "") or "")
+        remote_timeout_seconds = float(getattr(cfg.runtime.remote, "timeout_seconds", 60.0) or 60.0)
+        api_env = str(getattr(cfg.runtime.remote, "api_key_env", "CLAWLET_REMOTE_API_KEY") or "CLAWLET_REMOTE_API_KEY")
+        remote_api_key = os.environ.get(api_env, "")
+    except Exception:
+        pass
+
+    report = run_release_readiness(
+        workspace=workspace_path,
+        benchmark_gates=gates_cfg.gates,
+        local_iterations=local_iterations,
+        corpus_iterations=corpus_iterations,
+        baseline_report=baseline_report,
+        target_improvement_pct=target_improvement_pct,
+        require_comparison=require_comparison,
+        migration_root=migration_root,
+        migration_pattern=migration_pattern,
+        migration_max_workspaces=migration_max_workspaces,
+        plugin_dirs=plugin_dirs,
+        check_remote_health=check_remote_health,
+        remote_endpoint=remote_endpoint,
+        remote_api_key=remote_api_key,
+        remote_timeout_seconds=remote_timeout_seconds,
+    )
+
+    rg = report.release_gate or {}
+    local = rg.get("local_summary") or {}
+    lane = report.lane_scheduling or {}
+    context = report.context_cache or {}
+    coding = report.coding_loop or {}
+    gate_breaches = list(report.gate_breaches or [])[:max_breaches]
+    if not gate_breaches:
+        gate_breaches = summarize_gate_breaches(report, max_items=max_breaches)
+    gate_breaches, category_error = _filter_breach_lines(gate_breaches, breach_category)
+    if category_error:
+        console.print(f"[red]{category_error}[/red]")
+        raise typer.Exit(2)
+    breach_counts = dict(report.breach_counts or {})
+
+    output = report_path or (workspace_path / "release-readiness-report.json")
+    write_release_readiness_report(output, report)
+
+    if json_output:
+        payload = report.to_dict()
+        payload["display_gate_breaches"] = gate_breaches
+        payload["display_max_breaches"] = max_breaches
+        payload["display_breach_category"] = (breach_category or "").strip().lower()
+        payload["report_path"] = str(output)
+        console.print(json.dumps(payload, indent=2, sort_keys=True))
+        if fail_on_not_ready and not report.passed:
+            raise typer.Exit(2)
+        return
+
+    print_section("Release Readiness", str(workspace_path))
+    console.print(f"│  passed={'yes' if report.passed else 'no'}")
+    console.print(f"│  release_gate={'yes' if report.release_gate_passed else 'no'}")
+    console.print(f"│  migration_matrix={'yes' if report.migration_matrix_passed else 'no'}")
+    console.print(f"│  plugin_matrix={'yes' if report.plugin_matrix_passed else 'no'}")
+    console.print(f"│  lane_scheduling={'yes' if report.lane_scheduling_passed else 'no'}")
+    console.print(f"│  context_cache={'yes' if report.context_cache_passed else 'no'}")
+    console.print(f"│  coding_loop={'yes' if report.coding_loop_passed else 'no'}")
+    console.print(f"│  remote_health={'yes' if report.remote_health_passed else 'no'}")
+    if local or lane or context or coding:
+        console.print("│  Metrics:")
+        if local:
+            console.print(
+                "│    "
+                f"local_p95_ms={float(local.get('p95_ms', 0.0)):.2f} "
+                f"local_success={float(local.get('success_rate', 0.0)):.2f}% "
+                f"local_determinism={float(local.get('deterministic_replay_pass_rate_pct', 0.0)):.2f}%"
+            )
+        if lane:
+            console.print(
+                "│    "
+                f"lane_parallel_ms={float(lane.get('parallel_elapsed_ms', 0.0)):.2f} "
+                f"lane_speedup={float(lane.get('speedup_ratio', 0.0)):.2f}x"
+            )
+        if context:
+            console.print(
+                "│    "
+                f"context_warm_ms={float(context.get('warm_ms', 0.0)):.2f} "
+                f"context_speedup={float(context.get('speedup_ratio', 0.0)):.2f}x"
+            )
+        if coding:
+            console.print(
+                "│    "
+                f"coding_success={float(coding.get('success_rate', 0.0)):.2f}% "
+                f"coding_p95_total_ms={float(coding.get('p95_total_ms', 0.0)):.2f}"
+            )
+    if breach_counts:
+        compact = ", ".join(f"{k}={v}" for k, v in sorted(breach_counts.items()))
+        console.print(f"│  [red]Breach counts:[/red] {compact}")
+    if gate_breaches:
+        console.print("│  [red]Gate Breaches:[/red]")
+        for item in gate_breaches:
+            console.print(f"│    - {item}")
+    if report.reasons:
+        console.print("│  [red]Reasons:[/red]")
+        for reason in report.reasons:
+            console.print(f"│    - {reason}")
+
+    console.print(f"│  Report: {output}")
+    print_footer()
+
+    if fail_on_not_ready and not report.passed:
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -1294,16 +1596,31 @@ heartbeat:
 runtime:
   engine: hybrid_rust
   enable_idempotency_cache: true
+  enable_parallel_read_batches: true
+  max_parallel_read_tools: 4
   default_tool_timeout_seconds: 30
   default_tool_retries: 1
+  outbound_publish_retries: 2
+  outbound_publish_backoff_seconds: 0.5
   policy:
     allowed_modes: [read_only, workspace_write]
     require_approval_for: [elevated]
+    lanes:
+      read_only: "parallel:read_only"
+      workspace_write: "serial:workspace_write"
+      elevated: "serial:elevated"
   replay:
     enabled: true
     directory: ".runtime"
     retention_days: 30
     redact_tool_outputs: false
+    validate_events: true
+    validation_mode: "warn"
+  remote:
+    enabled: false
+    endpoint: ""
+    timeout_seconds: 60
+    api_key_env: "CLAWLET_REMOTE_API_KEY"
 
 # Benchmarks + hard quality gates
 benchmarks:
@@ -1312,6 +1629,12 @@ benchmarks:
     max_p95_latency_ms: 3000
     min_tool_success_rate_pct: 99.0
     min_deterministic_replay_pass_rate_pct: 98.0
+    min_lane_speedup_ratio: 1.20
+    max_lane_parallel_elapsed_ms: 1000
+    min_context_cache_speedup_ratio: 1.05
+    max_context_cache_warm_ms: 1200
+    min_coding_loop_success_rate_pct: 99.0
+    max_coding_loop_p95_total_ms: 2500
 
 # Plugin SDK v2
 plugins:
@@ -1356,6 +1679,11 @@ def benchmark_run(
     console.print(f"│  p95: {summary.p95_ms:.2f} ms")
     console.print(f"│  p99: {summary.p99_ms:.2f} ms")
     console.print(f"│  Success: {summary.success_rate:.2f}%")
+    console.print(
+        "│  Determinism: "
+        f"{summary.deterministic_replay_pass_rate_pct:.2f}% "
+        "(replay signature stability)"
+    )
 
     if failures:
         console.print("│")
@@ -1403,6 +1731,505 @@ def benchmark_equivalence(
     if strict_rust and not result.rust_available:
         raise typer.Exit(2)
     if not result.passed:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("remote-health")
+def benchmark_remote_health(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Check configured remote worker health endpoint."""
+    from clawlet.config import RuntimeSettings
+    from clawlet.runtime.remote import RemoteToolExecutor
+
+    workspace_path = workspace or get_workspace_path()
+    runtime_cfg = RuntimeSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            runtime_cfg = RuntimeSettings(**(raw.get("runtime") or {}))
+        except Exception:
+            pass
+
+    remote_cfg = runtime_cfg.remote
+    if not remote_cfg.enabled:
+        console.print("[yellow]Remote execution is disabled (runtime.remote.enabled=false)[/yellow]")
+        raise typer.Exit(1)
+    if not remote_cfg.endpoint:
+        console.print("[red]Remote execution enabled but endpoint is empty[/red]")
+        raise typer.Exit(1)
+
+    import os
+
+    api_key = os.environ.get(remote_cfg.api_key_env, "")
+    client = RemoteToolExecutor(
+        endpoint=remote_cfg.endpoint,
+        api_key=api_key,
+        timeout_seconds=remote_cfg.timeout_seconds,
+    )
+    ok, detail = asyncio.run(client.health())
+
+    print_section("Remote Health", remote_cfg.endpoint)
+    console.print(f"│  enabled={str(remote_cfg.enabled).lower()}")
+    console.print(f"│  api_key_env={remote_cfg.api_key_env}")
+    console.print(f"│  status={'ok' if ok else 'failed'}")
+    console.print(f"│  detail={detail}")
+    print_footer()
+
+    if not ok:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("remote-parity")
+def benchmark_remote_parity(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Run remote/local execution parity smokecheck."""
+    from clawlet.benchmarks import run_remote_parity_smokecheck
+
+    workspace_path = workspace or get_workspace_path()
+    ok, errors = run_remote_parity_smokecheck(workspace_path)
+    print_section("Remote Parity", str(workspace_path))
+    console.print(f"│  passed={'yes' if ok else 'no'}")
+    if errors:
+        for item in errors:
+            console.print(f"│  - {item}")
+    print_footer()
+    if not ok:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("lanes")
+def benchmark_lanes(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+):
+    """Run lane scheduling benchmark (serial vs parallel)."""
+    from clawlet.benchmarks import (
+        run_lane_contention_benchmark,
+        write_lane_contention_report,
+    )
+
+    workspace_path = workspace or get_workspace_path()
+    report = run_lane_contention_benchmark(workspace_path)
+
+    print_section("Lane Scheduling", str(workspace_path))
+    console.print(f"│  passed={'yes' if report.passed else 'no'}")
+    console.print(f"│  serial_elapsed_ms={report.serial_elapsed_ms:.1f}")
+    console.print(f"│  parallel_elapsed_ms={report.parallel_elapsed_ms:.1f}")
+    console.print(f"│  speedup_ratio={report.speedup_ratio:.2f}x")
+    if report.details:
+        for item in report.details:
+            console.print(f"│  - {item}")
+    output = report_path or (workspace_path / "benchmark-lanes-report.json")
+    write_lane_contention_report(output, report)
+    console.print(f"│  report={output}")
+    print_footer()
+
+    if not report.passed:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("context-cache")
+def benchmark_context_cache(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+):
+    """Run context-engine warm-cache vs cold-cache benchmark."""
+    from clawlet.benchmarks import (
+        run_context_cache_benchmark,
+        write_context_cache_report,
+    )
+
+    workspace_path = workspace or get_workspace_path()
+    report = run_context_cache_benchmark(workspace_path)
+
+    print_section("Context Cache", str(workspace_path))
+    console.print(f"│  passed={'yes' if report.passed else 'no'}")
+    console.print(f"│  cold_ms={report.cold_ms:.1f}")
+    console.print(f"│  warm_ms={report.warm_ms:.1f}")
+    console.print(f"│  speedup_ratio={report.speedup_ratio:.2f}x")
+    if report.details:
+        for item in report.details:
+            console.print(f"│  - {item}")
+    output = report_path or (workspace_path / "benchmark-context-cache-report.json")
+    write_context_cache_report(output, report)
+    console.print(f"│  report={output}")
+    print_footer()
+
+    if not report.passed:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("coding-loop")
+def benchmark_coding_loop(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    iterations: int = typer.Option(10, "--iterations", min=1, max=200, help="Benchmark iterations"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+):
+    """Run coding-loop benchmark (inspect -> patch -> verify -> summarize)."""
+    from clawlet.benchmarks import (
+        run_coding_loop_benchmark,
+        write_coding_loop_report,
+    )
+
+    workspace_path = workspace or get_workspace_path()
+    report = run_coding_loop_benchmark(workspace_path, iterations=iterations)
+
+    print_section("Coding Loop", str(workspace_path))
+    console.print(f"│  passed={'yes' if report.passed else 'no'}")
+    console.print(f"│  iterations={report.iterations}")
+    console.print(f"│  success_rate={report.success_rate:.2f}%")
+    console.print(f"│  p95_total_ms={report.p95_total_ms:.2f}")
+    console.print(
+        "│  "
+        f"avg_inspect_ms={report.avg_inspect_ms:.2f} "
+        f"avg_patch_ms={report.avg_patch_ms:.2f} "
+        f"avg_verify_ms={report.avg_verify_ms:.2f} "
+        f"avg_summarize_ms={report.avg_summarize_ms:.2f}"
+    )
+    if report.details:
+        for item in report.details:
+            console.print(f"│  - {item}")
+    output = report_path or (workspace_path / "benchmark-coding-loop-report.json")
+    write_coding_loop_report(output, report)
+    console.print(f"│  report={output}")
+    print_footer()
+
+    if not report.passed:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("corpus")
+def benchmark_corpus(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    iterations: int = typer.Option(10, "--iterations", min=1, max=200, help="Iterations per scenario"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+    baseline_report: Optional[Path] = typer.Option(
+        None,
+        "--baseline-report",
+        help="Optional baseline report JSON (OpenClaw or previous Clawlet run)",
+    ),
+    target_improvement_pct: float = typer.Option(
+        35.0,
+        "--target-improvement-pct",
+        min=0.0,
+        max=100.0,
+        help="Required p95 improvement percent vs baseline",
+    ),
+    fail_on_gate: bool = typer.Option(False, "--fail-on-gate", help="Exit non-zero when quality gates fail"),
+    fail_on_regression: bool = typer.Option(
+        False,
+        "--fail-on-regression",
+        help="Exit non-zero on baseline regressions or target miss",
+    ),
+):
+    """Run OpenClaw-matched corpus and optional baseline comparison."""
+    from clawlet.benchmarks import (
+        check_corpus_gates,
+        compare_corpus_to_baseline,
+        run_openclaw_matched_corpus,
+        write_corpus_report,
+    )
+    from clawlet.config import BenchmarksSettings
+
+    workspace_path = workspace or get_workspace_path()
+    gates_cfg = BenchmarksSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            gates_cfg = BenchmarksSettings(**(raw.get("benchmarks") or {}))
+        except Exception:
+            pass
+
+    print_section("Benchmark Corpus", f"OpenClaw-matched scenarios x {iterations} iteration(s)")
+    report = run_openclaw_matched_corpus(workspace=workspace_path, iterations=iterations)
+    gate_failures = check_corpus_gates(report, gates_cfg.gates)
+
+    summary = report.summary
+    console.print(f"│  Corpus: {report.corpus_id}")
+    console.print(f"│  Samples: {int(summary.get('samples', 0))}")
+    console.print(f"│  p50: {float(summary.get('p50_ms', 0.0)):.2f} ms")
+    console.print(f"│  p95: {float(summary.get('p95_ms', 0.0)):.2f} ms")
+    console.print(f"│  p99: {float(summary.get('p99_ms', 0.0)):.2f} ms")
+    console.print(f"│  Success: {float(summary.get('success_rate', 0.0)):.2f}%")
+    console.print("│")
+    for scenario in report.scenarios:
+        console.print(
+            "│  "
+            f"{scenario.scenario_id}: p95={scenario.p95_ms:.2f}ms "
+            f"success={scenario.success_rate:.2f}%"
+        )
+
+    comparison = None
+    if baseline_report is not None:
+        comparison = compare_corpus_to_baseline(
+            report=report,
+            baseline_path=baseline_report,
+            target_improvement_pct=target_improvement_pct,
+        )
+        console.print("│")
+        console.print(f"│  Baseline: {comparison.baseline_source}")
+        console.print(
+            "│  Improvement: "
+            f"{comparison.improvement_pct:.2f}% "
+            f"(target {comparison.target_improvement_pct:.2f}%)"
+        )
+        console.print(f"│  Meets target: {'yes' if comparison.meets_target else 'no'}")
+        for row in comparison.scenario_comparisons:
+            console.print(
+                "│    "
+                f"{row.scenario_id}: baseline_p95={row.baseline_p95_ms:.2f}ms "
+                f"current_p95={row.current_p95_ms:.2f}ms "
+                f"delta={row.improvement_pct:.2f}%"
+            )
+        if comparison.regressions:
+            console.print("│  [red]Regressions:[/red]")
+            for item in comparison.regressions:
+                console.print(f"│    - {item}")
+
+    if gate_failures:
+        console.print("│")
+        console.print("│  [red]Gate failures:[/red]")
+        for failure in gate_failures:
+            console.print(f"│    - {failure}")
+    else:
+        console.print("│")
+        console.print("│  [green]All corpus gates passed[/green]")
+
+    output = report_path or (workspace_path / "benchmark-corpus-report.json")
+    write_corpus_report(output, report, gate_failures, comparison=comparison)
+    console.print(f"│  Report: {output}")
+    print_footer()
+
+    if fail_on_gate and gate_failures:
+        raise typer.Exit(2)
+    if fail_on_regression and comparison is not None and not comparison.meets_target:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("compare")
+def benchmark_compare(
+    current_report: Path = typer.Option(..., "--current-report", help="Current corpus report JSON"),
+    baseline_report: Path = typer.Option(..., "--baseline-report", help="Baseline corpus report JSON"),
+    target_improvement_pct: float = typer.Option(
+        35.0,
+        "--target-improvement-pct",
+        min=0.0,
+        max=100.0,
+        help="Required p95 improvement percent vs baseline",
+    ),
+    fail_on_regression: bool = typer.Option(
+        True,
+        "--fail-on-regression/--no-fail-on-regression",
+        help="Exit non-zero on regressions or target miss",
+    ),
+):
+    """Compare two saved OpenClaw-matched corpus reports."""
+    from clawlet.benchmarks import compare_corpus_reports
+
+    comparison = compare_corpus_reports(
+        current_path=current_report,
+        baseline_path=baseline_report,
+        target_improvement_pct=target_improvement_pct,
+    )
+
+    print_section("Benchmark Compare", "Current vs baseline corpus reports")
+    console.print(f"│  Baseline: {comparison.baseline_source}")
+    console.print(f"│  Baseline p95: {comparison.baseline_p95_ms:.2f} ms")
+    console.print(f"│  Current p95: {comparison.current_p95_ms:.2f} ms")
+    console.print(
+        "│  Improvement: "
+        f"{comparison.improvement_pct:.2f}% "
+        f"(target {comparison.target_improvement_pct:.2f}%)"
+    )
+    console.print(f"│  Meets target: {'yes' if comparison.meets_target else 'no'}")
+    for row in comparison.scenario_comparisons:
+        console.print(
+            "│  "
+            f"{row.scenario_id}: baseline_p95={row.baseline_p95_ms:.2f}ms "
+            f"current_p95={row.current_p95_ms:.2f}ms "
+            f"delta={row.improvement_pct:.2f}%"
+        )
+    if comparison.regressions:
+        console.print("│  [red]Regressions:[/red]")
+        for item in comparison.regressions:
+            console.print(f"│    - {item}")
+    print_footer()
+
+    if fail_on_regression and not comparison.meets_target:
+        raise typer.Exit(2)
+
+
+@benchmark_app.command("release-gate")
+def benchmark_release_gate(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    local_iterations: int = typer.Option(
+        25,
+        "--local-iterations",
+        min=1,
+        max=500,
+        help="Iterations for local runtime benchmark",
+    ),
+    corpus_iterations: int = typer.Option(
+        10,
+        "--corpus-iterations",
+        min=1,
+        max=200,
+        help="Iterations per corpus scenario",
+    ),
+    baseline_report: Optional[Path] = typer.Option(
+        None,
+        "--baseline-report",
+        help="Optional baseline corpus report for superiority comparison",
+    ),
+    target_improvement_pct: float = typer.Option(
+        35.0,
+        "--target-improvement-pct",
+        min=0.0,
+        max=100.0,
+        help="Required p95 improvement vs baseline",
+    ),
+    require_comparison: bool = typer.Option(
+        False,
+        "--require-comparison",
+        help="Fail gate when --baseline-report is not provided",
+    ),
+    report_path: Optional[Path] = typer.Option(
+        None,
+        "--report",
+        help="Optional JSON report output path",
+    ),
+    breach_category: Optional[str] = typer.Option(
+        None,
+        "--breach-category",
+        help="Filter displayed gate breaches by category: local|corpus|lane|context|coding|comparison|other",
+    ),
+    max_breaches: int = typer.Option(
+        8,
+        "--max-breaches",
+        min=1,
+        max=100,
+        help="Maximum number of breach lines to display",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
+    fail_on_gate: bool = typer.Option(
+        True,
+        "--fail-on-gate/--no-fail-on-gate",
+        help="Exit non-zero when any release gate fails",
+    ),
+):
+    """Run consolidated benchmark release gates in one command."""
+    from clawlet.benchmarks import run_release_gate, write_release_gate_report
+    from clawlet.config import BenchmarksSettings
+
+    workspace_path = workspace or get_workspace_path()
+    gates_cfg = BenchmarksSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            gates_cfg = BenchmarksSettings(**(raw.get("benchmarks") or {}))
+        except Exception:
+            pass
+
+    report = run_release_gate(
+        workspace=workspace_path,
+        gates=gates_cfg.gates,
+        local_iterations=local_iterations,
+        corpus_iterations=corpus_iterations,
+        baseline_report=baseline_report,
+        target_improvement_pct=target_improvement_pct,
+        require_comparison=require_comparison,
+    )
+
+    output = report_path or (workspace_path / "benchmark-release-gate-report.json")
+    write_release_gate_report(output, report)
+
+    breach_lines = list(report.gate_breaches or report.reasons)
+    breach_lines, category_error = _filter_breach_lines(breach_lines, breach_category)
+    if category_error:
+        console.print(f"[red]{category_error}[/red]")
+        raise typer.Exit(2)
+
+    if json_output:
+        payload = report.to_dict()
+        payload["display_gate_breaches"] = breach_lines[:max_breaches]
+        payload["display_max_breaches"] = max_breaches
+        payload["display_breach_category"] = (breach_category or "").strip().lower()
+        payload["report_path"] = str(output)
+        console.print(json.dumps(payload, indent=2, sort_keys=True))
+        if fail_on_gate and not report.passed:
+            raise typer.Exit(2)
+        return
+
+    print_section("Benchmark Release Gate", f"workspace={workspace_path}")
+    console.print("│  Local benchmark:")
+    console.print(
+        "│    "
+        f"p95={report.local_summary.p95_ms:.2f}ms "
+        f"success={report.local_summary.success_rate:.2f}% "
+        f"determinism={report.local_summary.deterministic_replay_pass_rate_pct:.2f}%"
+    )
+    console.print("│  Corpus benchmark:")
+    console.print(
+        "│    "
+        f"p95={float(report.corpus_report.summary.get('p95_ms', 0.0)):.2f}ms "
+        f"success={float(report.corpus_report.summary.get('success_rate', 0.0)):.2f}%"
+    )
+    console.print("│  Lane scheduling:")
+    console.print(
+        "│    "
+        f"passed={'yes' if report.lane_scheduling.get('passed') else 'no'} "
+        f"serial_ms={float(report.lane_scheduling.get('serial_elapsed_ms', 0.0)):.2f} "
+        f"parallel_ms={float(report.lane_scheduling.get('parallel_elapsed_ms', 0.0)):.2f} "
+        f"speedup={float(report.lane_scheduling.get('speedup_ratio', 0.0)):.2f}x"
+    )
+    console.print("│  Context cache:")
+    console.print(
+        "│    "
+        f"passed={'yes' if report.context_cache.get('passed') else 'no'} "
+        f"cold_ms={float(report.context_cache.get('cold_ms', 0.0)):.2f} "
+        f"warm_ms={float(report.context_cache.get('warm_ms', 0.0)):.2f} "
+        f"speedup={float(report.context_cache.get('speedup_ratio', 0.0)):.2f}x"
+    )
+    console.print("│  Coding loop:")
+    console.print(
+        "│    "
+        f"passed={'yes' if report.coding_loop.get('passed') else 'no'} "
+        f"success={float(report.coding_loop.get('success_rate', 0.0)):.2f}% "
+        f"p95_total_ms={float(report.coding_loop.get('p95_total_ms', 0.0)):.2f}"
+    )
+    if report.comparison is not None:
+        console.print("│  Baseline comparison:")
+        console.print(
+            "│    "
+            f"improvement={report.comparison.improvement_pct:.2f}% "
+            f"target={report.comparison.target_improvement_pct:.2f}% "
+            f"meets_target={'yes' if report.comparison.meets_target else 'no'}"
+        )
+    if report.reasons:
+        counts = report.breach_counts or {}
+        if counts:
+            compact = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+            console.print(f"│  [red]Breach counts:[/red] {compact}")
+        console.print("│  [red]Gate failures:[/red]")
+        for reason in breach_lines[:max_breaches]:
+            console.print(f"│    - {reason}")
+    else:
+        console.print("│  [green]All release gates passed[/green]")
+    console.print(f"│  Report: {output}")
+    print_footer()
+
+    if fail_on_gate and not report.passed:
         raise typer.Exit(2)
 
 
@@ -1683,6 +2510,62 @@ def recovery_resume_payload(
     console.print(json.dumps(payload, indent=2))
 
 
+@recovery_app.command("cleanup")
+def recovery_cleanup(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    retention_days: int = typer.Option(
+        0,
+        "--retention-days",
+        min=0,
+        help="Override runtime.replay.retention_days (0 uses config value)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview cleanup without modifying files",
+    ),
+):
+    """Prune replay events/checkpoints older than retention policy."""
+    from clawlet.config import RuntimeSettings
+    from clawlet.runtime import cleanup_replay_artifacts
+
+    workspace_path = workspace or get_workspace_path()
+    runtime_cfg = RuntimeSettings()
+    config_path = workspace_path / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            runtime_cfg = RuntimeSettings(**(raw.get("runtime") or {}))
+        except Exception:
+            pass
+    replay_dir = Path(runtime_cfg.replay.directory).expanduser()
+    if not replay_dir.is_absolute():
+        replay_dir = workspace_path / replay_dir
+
+    effective_retention_days = int(retention_days or runtime_cfg.replay.retention_days)
+    report = cleanup_replay_artifacts(
+        replay_dir=replay_dir,
+        retention_days=effective_retention_days,
+        dry_run=dry_run,
+    )
+
+    print_section("Recovery Cleanup", f"retention_days={effective_retention_days} dry_run={str(dry_run).lower()}")
+    console.print(f"│  replay_dir={report.replay_dir}")
+    console.print(
+        "│  events: "
+        f"total={report.event_lines_total} kept={report.event_lines_kept} "
+        f"removed={report.event_lines_removed} malformed={report.event_lines_malformed}"
+    )
+    console.print(
+        "│  checkpoints: "
+        f"total={report.checkpoints_total} kept={report.checkpoints_kept} "
+        f"removed={report.checkpoints_removed}"
+    )
+    print_footer()
+
+
 # ── Plugin SDK commands ───────────────────────────────────────────────────────
 
 @plugin_app.command("init")
@@ -1718,9 +2601,15 @@ def plugin_init(
 @plugin_app.command("test")
 def plugin_test(
     path: Path = typer.Option(..., "--path", help="Plugin directory containing plugin.py"),
+    strict: bool = typer.Option(
+        True,
+        "--strict/--no-strict",
+        help="Fail on conformance errors",
+    ),
 ):
     """Load and validate a plugin package."""
     from clawlet.plugins.loader import PluginLoader
+    from clawlet.plugins.conformance import check_plugin_conformance
 
     loader = PluginLoader([path])
     tools = loader.load_tools()
@@ -1732,6 +2621,104 @@ def plugin_test(
     console.print(f"[green]✓ Loaded {len(tools)} plugin tool(s)[/green]")
     for tool in tools:
         console.print(f"  - {tool.name}: {tool.description}")
+
+    report = check_plugin_conformance(tools)
+    if report.issues:
+        console.print()
+        console.print(f"[bold]Conformance:[/bold] {len(report.issues)} issue(s)")
+        for issue in report.issues:
+            color = "red" if issue.severity == "error" else ("yellow" if issue.severity == "warning" else "cyan")
+            console.print(
+                f"[{color}]• {issue.severity.upper()}[/{color}] "
+                f"{issue.plugin_name} [{issue.code}] {issue.message}"
+            )
+            console.print(f"  hint: {issue.hint}")
+
+    if strict and not report.passed:
+        raise typer.Exit(2)
+
+
+@plugin_app.command("conformance")
+def plugin_conformance(
+    path: Path = typer.Option(..., "--path", help="Plugin directory containing plugin.py"),
+):
+    """Run Plugin SDK v2 conformance checks."""
+    from clawlet.plugins.loader import PluginLoader
+    from clawlet.plugins.conformance import check_plugin_conformance
+
+    loader = PluginLoader([path])
+    tools = loader.load_tools()
+    report = check_plugin_conformance(tools)
+
+    print_section("Plugin Conformance", f"path={path}")
+    console.print(
+        "│  "
+        f"checked={report.checked} errors={len(report.errors)} "
+        f"warnings={len(report.warnings)} infos={len(report.infos)}"
+    )
+    if report.issues:
+        console.print("│")
+        for issue in report.issues:
+            console.print(
+                "│  "
+                f"{issue.severity.upper()} {issue.plugin_name} [{issue.code}] {issue.message}"
+            )
+            console.print(f"│    hint: {issue.hint}")
+    print_footer()
+
+    if not report.passed:
+        raise typer.Exit(2)
+
+
+@plugin_app.command("matrix")
+def plugin_matrix(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
+    fail_on_errors: bool = typer.Option(
+        False,
+        "--fail-on-errors",
+        help="Exit non-zero when plugin conformance errors are detected",
+    ),
+):
+    """Scan plugin directories and summarize conformance compatibility."""
+    from clawlet.config import load_config
+    from clawlet.plugins.matrix import run_plugin_conformance_matrix, write_plugin_matrix_report
+
+    workspace_path = workspace or get_workspace_path()
+    try:
+        config = load_config(workspace_path)
+        plugin_dirs = []
+        for raw_dir in config.plugins.directories:
+            p = Path(raw_dir).expanduser()
+            if not p.is_absolute():
+                p = workspace_path / p
+            plugin_dirs.append(p)
+    except Exception:
+        plugin_dirs = [workspace_path / "plugins"]
+
+    report = run_plugin_conformance_matrix(plugin_dirs)
+    print_section("Plugin Matrix", f"workspace={workspace_path}")
+    console.print(
+        "│  "
+        f"directories={report.scanned_directories} tools={report.scanned_tools} "
+        f"errors={report.total_errors} warnings={report.total_warnings} infos={report.total_infos}"
+    )
+    if report.results:
+        console.print("│")
+        for item in report.results:
+            console.print(
+                "│  "
+                f"{item.directory}: tools={item.loaded_tools} "
+                f"errors={item.errors} warnings={item.warnings} "
+                f"passed={'yes' if item.passed else 'no'}"
+            )
+    output = report_path or (workspace_path / "plugin-matrix-report.json")
+    write_plugin_matrix_report(output, report)
+    console.print(f"│  Report: {output}")
+    print_footer()
+
+    if fail_on_errors and not report.passed:
+        raise typer.Exit(2)
 
 
 @plugin_app.command("publish")

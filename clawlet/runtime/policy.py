@@ -77,8 +77,8 @@ class RuntimePolicyEngine:
         if mode not in self.allowed_modes and mode != "elevated":
             return PolicyDecision(False, f"Mode '{mode}' is not allowed by runtime policy")
 
-        if mode == "elevated" and mode in self.require_approval_for and not approved:
-            return PolicyDecision(False, "Elevated mode requires explicit approval")
+        if mode in self.require_approval_for and not approved:
+            return PolicyDecision(False, f"{mode} mode requires explicit approval")
 
         if mode == "elevated" and "elevated" not in self.allowed_modes and not approved:
             return PolicyDecision(False, "Elevated mode is disabled")

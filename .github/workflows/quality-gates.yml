@@ -62,6 +62,75 @@ jobs:
           print('runtime event schema smoke check passed')
           PY
 
+      - name: Remote worker schema sanity
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          req = Path("docs/schemas/remote-worker-execute-request.schema.json")
+          resp = Path("docs/schemas/remote-worker-execute-response.schema.json")
+          json.loads(req.read_text(encoding="utf-8"))
+          json.loads(resp.read_text(encoding="utf-8"))
+          print("remote worker schemas are valid JSON")
+          PY
+
+      - name: Remote parity smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_remote_parity_smokecheck
+
+          ok, errors = run_remote_parity_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('remote parity smoke check passed')
+          PY
+
+      - name: Lane scheduling smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_lane_contention_smokecheck
+
+          ok, errors = run_lane_contention_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('lane scheduling smoke check passed')
+          PY
+
+      - name: Context cache smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_context_cache_smokecheck
+
+          ok, errors = run_context_cache_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('context cache smoke check passed')
+          PY
+
+      - name: Coding-loop smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_coding_loop_smokecheck
+
+          ok, errors = run_coding_loop_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('coding-loop smoke check passed')
+          PY
+
       - name: Failure taxonomy smoke check
         run: |
           python - <<'PY'
@@ -88,6 +157,104 @@ jobs:
                   print(item)
               raise SystemExit(2)
           print('replay reexecution smoke check passed')
+          PY
+
+      - name: Replay retention smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_replay_retention_smokecheck
+
+          ok, errors = run_replay_retention_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('replay retention smoke check passed')
+          PY
+
+      - name: OpenClaw-matched corpus smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_openclaw_matched_corpus_smokecheck
+
+          ok, errors = run_openclaw_matched_corpus_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('openclaw-matched corpus smoke check passed')
+          PY
+
+      - name: Corpus compare smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_corpus_compare_smokecheck
+
+          ok, errors = run_corpus_compare_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('corpus compare smoke check passed')
+          PY
+
+      - name: Release gate smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.benchmarks import run_release_gate_smokecheck
+
+          ok, errors = run_release_gate_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('release gate smoke check passed')
+          PY
+
+      - name: Migration matrix smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.config_migration_matrix import run_migration_matrix_smokecheck
+
+          ok, errors = run_migration_matrix_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('migration matrix smoke check passed')
+          PY
+
+      - name: Plugin matrix smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.plugins.matrix import run_plugin_matrix_smokecheck
+
+          ok, errors = run_plugin_matrix_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('plugin matrix smoke check passed')
+          PY
+
+      - name: Release readiness smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from clawlet.release_readiness import run_release_readiness_smokecheck
+
+          ok, errors = run_release_readiness_smokecheck(Path('.'))
+          if not ok:
+              for item in errors:
+                  print(item)
+              raise SystemExit(2)
+          print('release readiness smoke check passed')
           PY
 
   quality-strict-rust:
@@ -135,3 +302,7 @@ jobs:
       - name: Benchmark gate check
         run: |
           python -m clawlet benchmark run --workspace . --iterations 10 --fail-on-gate
+
+      - name: Consolidated release-gate check
+        run: |
+          python -m clawlet benchmark release-gate --workspace . --local-iterations 5 --corpus-iterations 2 --fail-on-gate

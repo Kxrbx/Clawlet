@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 ToolExecutionMode = Literal["read_only", "workspace_write", "elevated"]
+ExecutionTarget = Literal["local", "remote"]
 
 
 @dataclass(slots=True)
@@ -23,6 +24,8 @@ class ToolCallEnvelope:
     timeout_seconds: float = 30.0
     max_retries: int = 0
     idempotency_key: str = ""
+    execution_target: ExecutionTarget = "local"
+    lane: str = ""
     requested_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

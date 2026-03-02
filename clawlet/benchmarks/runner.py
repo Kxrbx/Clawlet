@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from clawlet.config import BenchmarkGatesSettings
+from clawlet.benchmarks.determinism import run_determinism_trials
 from clawlet.tools import create_default_tool_registry
 
 
@@ -18,6 +19,7 @@ class BenchmarkSummary:
     p95_ms: float
     p99_ms: float
     success_rate: float
+    deterministic_replay_pass_rate_pct: float
 
     def to_dict(self) -> dict:
         return {
@@ -26,6 +28,7 @@ class BenchmarkSummary:
             "p95_ms": self.p95_ms,
             "p99_ms": self.p99_ms,
             "success_rate": self.success_rate,
+            "deterministic_replay_pass_rate_pct": self.deterministic_replay_pass_rate_pct,
         }
 
 
@@ -68,12 +71,14 @@ def run_local_runtime_benchmark(workspace: Path, iterations: int = 25) -> Benchm
             successes += 1
 
     ordered = sorted(latencies)
+    determinism_pass_rate = run_determinism_trials(workspace, trials=max(5, min(50, iterations)))
     return BenchmarkSummary(
         samples=len(latencies),
         p50_ms=_percentile(ordered, 50),
         p95_ms=_percentile(ordered, 95),
         p99_ms=_percentile(ordered, 99),
         success_rate=(successes / max(1, len(latencies))) * 100.0,
+        deterministic_replay_pass_rate_pct=determinism_pass_rate,
     )
 
 
@@ -87,6 +92,12 @@ def check_gates(summary: BenchmarkSummary, gates: BenchmarkGatesSettings) -> lis
     if summary.success_rate < gates.min_tool_success_rate_pct:
         failures.append(
             f"success rate {summary.success_rate:.2f}% below gate {gates.min_tool_success_rate_pct:.2f}%"
+        )
+    if summary.deterministic_replay_pass_rate_pct < gates.min_deterministic_replay_pass_rate_pct:
+        failures.append(
+            "deterministic replay pass rate "
+            f"{summary.deterministic_replay_pass_rate_pct:.2f}% below gate "
+            f"{gates.min_deterministic_replay_pass_rate_pct:.2f}%"
         )
     return failures
 

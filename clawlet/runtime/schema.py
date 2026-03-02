@@ -44,6 +44,12 @@ def validate_event_payload(event_type: str, payload: dict[str, Any]) -> list[str
 
     if event_type == EVENT_TOOL_REQUESTED and "arguments" in payload and not isinstance(payload["arguments"], dict):
         errors.append("payload.arguments must be an object")
+    if event_type == EVENT_TOOL_REQUESTED and "execution_target" in payload:
+        if payload["execution_target"] not in ("local", "remote"):
+            errors.append("payload.execution_target must be 'local' or 'remote'")
+    if event_type in (EVENT_TOOL_REQUESTED, EVENT_TOOL_STARTED, EVENT_TOOL_COMPLETED, EVENT_TOOL_FAILED):
+        if "lane" in payload and not isinstance(payload["lane"], str):
+            errors.append("payload.lane must be a string")
 
     if (
         event_type in (EVENT_TOOL_FAILED, EVENT_PROVIDER_FAILED)

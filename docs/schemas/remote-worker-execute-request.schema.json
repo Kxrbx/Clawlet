@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawlet.dev/schemas/remote-worker-execute-request.schema.json",
+  "title": "Clawlet Remote Worker Execute Request",
+  "type": "object",
+  "required": [
+    "run_id",
+    "session_id",
+    "tool_call_id",
+    "tool_name",
+    "arguments",
+    "execution_mode",
+    "workspace_path",
+    "timeout_seconds"
+  ],
+  "properties": {
+    "run_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "tool_call_id": {"type": "string", "minLength": 1},
+    "tool_name": {"type": "string", "minLength": 1},
+    "arguments": {"type": "object"},
+    "execution_mode": {
+      "type": "string",
+      "enum": ["read_only", "workspace_write", "elevated"]
+    },
+    "workspace_path": {"type": "string"},
+    "timeout_seconds": {"type": "number", "minimum": 0.1}
+  },
+  "additionalProperties": false
+}

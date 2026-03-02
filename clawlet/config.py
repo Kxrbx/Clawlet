@@ -355,6 +355,31 @@ class RuntimePolicySettings(BaseModel):
     require_approval_for: list[Literal["read_only", "workspace_write", "elevated"]] = Field(
         default_factory=lambda: ["elevated"]
     )
+    lanes: dict[Literal["read_only", "workspace_write", "elevated"], str] = Field(
+        default_factory=lambda: {
+            "read_only": "parallel:read_only",
+            "workspace_write": "serial:workspace_write",
+            "elevated": "serial:elevated",
+        }
+    )
+
+    @field_validator("lanes")
+    @classmethod
+    def _validate_lanes(cls, value: dict[Literal["read_only", "workspace_write", "elevated"], str]):
+        required = ("read_only", "workspace_write", "elevated")
+        missing = [k for k in required if k not in value]
+        if missing:
+            raise ValueError(f"runtime.policy.lanes missing keys: {', '.join(missing)}")
+        for mode, lane in value.items():
+            if not isinstance(lane, str) or not lane.strip():
+                raise ValueError(f"runtime.policy.lanes.{mode} must be a non-empty string")
+            lane_norm = lane.strip().lower()
+            if not (lane_norm.startswith("serial:") or lane_norm.startswith("parallel:")):
+                raise ValueError(
+                    f"runtime.policy.lanes.{mode} must start with 'serial:' or 'parallel:'"
+                )
+            value[mode] = lane_norm
+        return value
 
 
 class RuntimeReplaySettings(BaseModel):
@@ -364,6 +389,17 @@ class RuntimeReplaySettings(BaseModel):
     directory: str = ".runtime"
     retention_days: int = Field(default=30, ge=1, le=3650)
     redact_tool_outputs: bool = False
+    validate_events: bool = True
+    validation_mode: Literal["warn", "error"] = "warn"
+
+
+class RuntimeRemoteSettings(BaseModel):
+    """Remote optional worker settings."""
+
+    enabled: bool = False
+    endpoint: str = ""
+    timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
+    api_key_env: str = "CLAWLET_REMOTE_API_KEY"
 
 
 class RuntimeSettings(BaseModel):
@@ -372,9 +408,14 @@ class RuntimeSettings(BaseModel):
     engine: Literal["python", "hybrid_rust"] = "hybrid_rust"
     policy: RuntimePolicySettings = Field(default_factory=RuntimePolicySettings)
     replay: RuntimeReplaySettings = Field(default_factory=RuntimeReplaySettings)
+    remote: RuntimeRemoteSettings = Field(default_factory=RuntimeRemoteSettings)
     enable_idempotency_cache: bool = True
+    enable_parallel_read_batches: bool = True
+    max_parallel_read_tools: int = Field(default=4, ge=1, le=64)
     default_tool_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
     default_tool_retries: int = Field(default=1, ge=0, le=5)
+    outbound_publish_retries: int = Field(default=2, ge=0, le=10)
+    outbound_publish_backoff_seconds: float = Field(default=0.5, ge=0.0, le=30.0)
 
 
 class BenchmarkGatesSettings(BaseModel):
@@ -383,6 +424,12 @@ class BenchmarkGatesSettings(BaseModel):
     max_p95_latency_ms: float = Field(default=3000.0, ge=1.0)
     min_tool_success_rate_pct: float = Field(default=99.0, ge=0.0, le=100.0)
     min_deterministic_replay_pass_rate_pct: float = Field(default=98.0, ge=0.0, le=100.0)
+    min_lane_speedup_ratio: float = Field(default=1.20, ge=1.0, le=20.0)
+    max_lane_parallel_elapsed_ms: float = Field(default=1000.0, ge=1.0)
+    min_context_cache_speedup_ratio: float = Field(default=1.05, ge=1.0, le=20.0)
+    max_context_cache_warm_ms: float = Field(default=1200.0, ge=1.0)
+    min_coding_loop_success_rate_pct: float = Field(default=99.0, ge=0.0, le=100.0)
+    max_coding_loop_p95_total_ms: float = Field(default=2500.0, ge=1.0)
 
 
 class BenchmarksSettings(BaseModel):
@@ -543,6 +590,20 @@ def load_config(workspace: Optional[Path] = None) -> Config:
         except Exception as e:
             logger.debug(f"Could not check config file permissions: {e}")
         
+        try:
+            from clawlet.config_migration import analyze_config_migration, summarize_migration_hints
+
+            migration_report = analyze_config_migration(config_path)
+            if migration_report.issues:
+                logger.warning(
+                    f"Detected {len(migration_report.issues)} migration-related config issue(s). "
+                    "Run `clawlet validate --migration` or `clawlet migrate-config --write`."
+                )
+                for line in summarize_migration_hints(migration_report, max_items=5):
+                    logger.warning(f"Migration hint: {line}")
+        except Exception as migration_err:
+            logger.debug(f"Migration analysis skipped: {migration_err}")
+
         config = Config.from_yaml(config_path)
         config.config_path = config_path
         return config

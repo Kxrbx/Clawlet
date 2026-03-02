@@ -34,17 +34,23 @@ class DeterministicToolRuntime:
         policy: RuntimePolicyEngine,
         enable_idempotency: bool = True,
         engine: str = "python",
+        remote_executor=None,
+        lane_defaults: Optional[dict[str, str]] = None,
     ):
         self.registry = registry
         self.event_store = event_store
         self.policy = policy
         self.enable_idempotency = enable_idempotency
         self.engine = engine
+        self.remote_executor = remote_executor
         self._idempotency_cache: dict[str, ToolResult] = {}
+        self._lane_locks: dict[str, asyncio.Lock] = {}
+        self._lane_defaults = dict(lane_defaults or {})
 
     async def execute(self, envelope: ToolCallEnvelope, approved: bool = False) -> tuple[ToolResult, ToolExecutionMetadata]:
         """Execute a tool call envelope with policy and replay events."""
         args = envelope.arguments or {}
+        lane = self._resolve_lane(envelope)
 
         self.event_store.append(
             RuntimeEvent(
@@ -55,6 +61,8 @@ class DeterministicToolRuntime:
                     "tool_call_id": envelope.tool_call_id,
                     "tool_name": envelope.tool_name,
                     "execution_mode": envelope.execution_mode,
+                    "execution_target": envelope.execution_target,
+                    "lane": lane,
                     "arguments": args,
                 },
             )
@@ -72,6 +80,7 @@ class DeterministicToolRuntime:
                     payload={
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
+                        "lane": lane,
                         "error": result.error,
                         **to_payload(failure),
                     },
@@ -91,6 +100,7 @@ class DeterministicToolRuntime:
                     payload={
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
+                        "lane": lane,
                         "cached": True,
                         "success": cached.success,
                     },
@@ -98,55 +108,12 @@ class DeterministicToolRuntime:
             )
             return cached, meta
 
-        attempts = 0
-        started = time.perf_counter()
-        last_result = ToolResult(success=False, output="", error="unknown error")
-
-        self.event_store.append(
-            RuntimeEvent(
-                event_type=EVENT_TOOL_STARTED,
-                run_id=envelope.run_id,
-                session_id=envelope.session_id,
-                payload={
-                    "tool_call_id": envelope.tool_call_id,
-                    "tool_name": envelope.tool_name,
-                },
-            )
-        )
-
-        tool = self.registry.get(envelope.tool_name)
-        exec_args = dict(args)
-        # Inject runtime context only for Plugin SDK tools.
-        if tool is not None:
-            try:
-                from clawlet.plugins.sdk import PluginTool
-
-                if isinstance(tool, PluginTool):
-                    exec_args["_run_id"] = envelope.run_id
-                    exec_args["_session_id"] = envelope.session_id
-                    exec_args["_workspace_path"] = envelope.workspace_path
-            except Exception:
-                pass
-
-        for attempt in range(max(1, envelope.max_retries + 1)):
-            attempts += 1
-            try:
-                result = await asyncio.wait_for(
-                    self.registry.execute(envelope.tool_name, **exec_args),
-                    timeout=max(0.1, float(envelope.timeout_seconds)),
-                )
-            except asyncio.TimeoutError:
-                result = ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Tool execution timed out after {envelope.timeout_seconds:.1f}s",
-                )
-            last_result = result
-            if result.success or not self._is_retryable_error(result.error):
-                break
-
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        metadata = ToolExecutionMetadata(duration_ms=elapsed_ms, attempts=attempts, cached=False)
+        lane_lock = self._lane_lock(lane)
+        if lane_lock is None:
+            last_result, metadata, use_remote = await self._execute_inner(envelope, args, lane)
+        else:
+            async with lane_lock:
+                last_result, metadata, use_remote = await self._execute_inner(envelope, args, lane)
 
         if last_result.success:
             if self.enable_idempotency:
@@ -159,7 +126,8 @@ class DeterministicToolRuntime:
                     payload={
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
-                        "engine": self.engine,
+                        "lane": lane,
+                        "engine": f"{self.engine}:remote" if use_remote else self.engine,
                         "metadata": asdict(metadata),
                         "success": True,
                         "output": last_result.output,
@@ -176,7 +144,8 @@ class DeterministicToolRuntime:
                     payload={
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
-                        "engine": self.engine,
+                        "lane": lane,
+                        "engine": f"{self.engine}:remote" if use_remote else self.engine,
                         "metadata": asdict(metadata),
                         "error": last_result.error,
                         **to_payload(failure),
@@ -205,3 +174,90 @@ class DeterministicToolRuntime:
     @staticmethod
     def _is_retryable_error(error: Optional[str]) -> bool:
         return classify_error_text(error).retryable
+
+    def _resolve_lane(self, envelope: ToolCallEnvelope) -> str:
+        lane = (envelope.lane or "").strip().lower()
+        if lane:
+            return lane
+        configured = self._lane_defaults.get(envelope.execution_mode)
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip().lower()
+        if envelope.execution_mode == "read_only":
+            return "parallel:read_only"
+        if envelope.execution_mode == "elevated":
+            return "serial:elevated"
+        return "serial:workspace_write"
+
+    def _lane_lock(self, lane: str) -> Optional[asyncio.Lock]:
+        if lane.startswith("parallel:"):
+            return None
+        lock = self._lane_locks.get(lane)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._lane_locks[lane] = lock
+        return lock
+
+    async def _execute_inner(
+        self,
+        envelope: ToolCallEnvelope,
+        args: dict,
+        lane: str,
+    ) -> tuple[ToolResult, ToolExecutionMetadata, bool]:
+        attempts = 0
+        started = time.perf_counter()
+        last_result = ToolResult(success=False, output="", error="unknown error")
+
+        self.event_store.append(
+            RuntimeEvent(
+                event_type=EVENT_TOOL_STARTED,
+                run_id=envelope.run_id,
+                session_id=envelope.session_id,
+                payload={
+                    "tool_call_id": envelope.tool_call_id,
+                    "tool_name": envelope.tool_name,
+                    "lane": lane,
+                },
+            )
+        )
+
+        use_remote = envelope.execution_target == "remote" and self.remote_executor is not None
+        tool = self.registry.get(envelope.tool_name)
+        exec_args = dict(args)
+        # Inject runtime context only for Plugin SDK tools.
+        if tool is not None:
+            try:
+                from clawlet.plugins.sdk import PluginTool
+
+                if isinstance(tool, PluginTool):
+                    exec_args["_run_id"] = envelope.run_id
+                    exec_args["_session_id"] = envelope.session_id
+                    exec_args["_workspace_path"] = envelope.workspace_path
+            except Exception:
+                pass
+
+        for attempt in range(max(1, envelope.max_retries + 1)):
+            attempts += 1
+            if use_remote:
+                try:
+                    result = await self.remote_executor.execute(envelope)
+                except Exception as e:
+                    result = ToolResult(success=False, output="", error=f"Remote execution exception: {e}")
+            else:
+                try:
+                    result = await asyncio.wait_for(
+                        self.registry.execute(envelope.tool_name, **exec_args),
+                        timeout=max(0.1, float(envelope.timeout_seconds)),
+                    )
+                except asyncio.TimeoutError:
+                    result = ToolResult(
+                        success=False,
+                        output="",
+                        error=f"Tool execution timed out after {envelope.timeout_seconds:.1f}s",
+                    )
+            last_result = result
+            if result.success or not self._is_retryable_error(result.error):
+                break
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        metadata = ToolExecutionMetadata(duration_ms=elapsed_ms, attempts=attempts, cached=False)
+        return last_result, metadata, use_remote
