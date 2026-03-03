@@ -346,6 +346,14 @@ class HeartbeatSettings(BaseModel):
     quiet_hours_end: int = Field(default=9, ge=0, le=23)
 
 
+class RateLimitSettings(BaseModel):
+    """Rate limiting settings."""
+    enabled: bool = True
+    max_entries: int = Field(default=10000, ge=1000, le=100000)
+    default_requests_per_minute: int = Field(default=60, ge=1, le=1000)
+    tool_requests_per_minute: int = Field(default=30, ge=1, le=500)
+
+
 class RuntimePolicySettings(BaseModel):
     """Runtime execution policy settings."""
 
@@ -458,6 +466,7 @@ class Config(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
+    rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     benchmarks: BenchmarksSettings = Field(default_factory=BenchmarksSettings)

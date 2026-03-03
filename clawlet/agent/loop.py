@@ -194,9 +194,6 @@ class AgentLoop:
             self._tool_aliases = self.TOOL_ALIASES.copy()
         logger.info(f"Loaded tool aliases: {self._tool_aliases}")
         
-        # DEBUG: Log available tools at initialization
-        if hasattr(self.tools, '_tools'):
-            logger.info(f"DEBUG: Registered tools at init: {list(self.tools._tools.keys())}")
         
         # Initialize memory manager (long-term persistence to MEMORY.md)
         self.memory = MemoryManager(workspace)
@@ -1273,13 +1270,8 @@ class AgentLoop:
         
         logger.info(f"Executing tool: {tool_name} with args: {tool_call.arguments}")
 
-        # DEBUG: Log available tools when tool is not found
         if self.tools.get(tool_name) is None:
             logger.warning(f"Rejected unknown tool call: {tool_name}")
-            logger.warning(
-                "DEBUG: Available tools: "
-                f"{list(self.tools._tools.keys()) if hasattr(self.tools, '_tools') else 'N/A'}"
-            )
             self._tool_stats["calls_rejected"] += 1
             return ToolResult(success=False, output="", error=f"Unknown tool: {tool_name}")
 

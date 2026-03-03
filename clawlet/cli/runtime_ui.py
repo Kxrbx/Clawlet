@@ -82,7 +82,14 @@ def run_logs_command(log_file: Path, lines: int, follow: bool) -> None:
     try:
         if follow:
             console.print(f"[dim]Following {log_file} (Ctrl+C to stop)...[/dim]")
-            subprocess.run(["tail", "-f", str(log_file)])
+            try:
+                subprocess.run(["tail", "-f", str(log_file)], check=True)
+            except FileNotFoundError:
+                # tail command not available (e.g., on Windows), use Python implementation
+                console.print("[dim]tail command not found, using Python implementation...[/dim]")
+                _follow_logs_python(log_file)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Error running tail command: {e}[/red]")
         else:
             with open(log_file) as f:
                 all_lines = f.readlines()
@@ -94,6 +101,20 @@ def run_logs_command(log_file: Path, lines: int, follow: bool) -> None:
     except Exception as e:
         console.print(f"[red]Error reading log file: {e}[/red]")
         raise typer.Exit(1)
+
+
+def _follow_logs_python(log_file: Path) -> None:
+    """Follow logs using Python (cross-platform alternative to tail -f)."""
+    import time
+    with open(log_file, 'r') as f:
+        # Seek to end of file
+        f.seek(0, 2)
+        while True:
+            line = f.readline()
+            if not line:
+                time.sleep(0.1)
+                continue
+            console.print(line.rstrip())
 
 
 def _create_provider(config, model: Optional[str]):

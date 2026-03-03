@@ -96,6 +96,58 @@ DASHBOARD_TOKEN: Optional[str] = None
 # Security scheme for Bearer token
 security = HTTPBearer(auto_error=False)
 
+# Simple in-memory rate limiter for API endpoints
+class APIRateLimiter:
+    """Simple rate limiter for API requests."""
+    def __init__(self, max_requests: int = 100, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._requests: dict[str, list[float]] = {}
+    
+    def is_allowed(self, client_id: str) -> tuple[bool, float]:
+        """Check if request is allowed for client."""
+        import time
+        now = time.time()
+        
+        # Clean old requests
+        if client_id in self._requests:
+            self._requests[client_id] = [
+                ts for ts in self._requests[client_id] 
+                if now - ts < self.window_seconds
+            ]
+        else:
+            self._requests[client_id] = []
+        
+        # Check limit
+        if len(self._requests[client_id]) >= self.max_requests:
+            retry_after = self.window_seconds - (now - self._requests[client_id][0])
+            return False, max(0, retry_after)
+        
+        # Record request
+        self._requests[client_id].append(now)
+        return True, 0.0
+
+# Global rate limiter instance
+api_rate_limiter = APIRateLimiter(max_requests=100, window_seconds=60)
+
+
+async def rate_limit_middleware(request, call_next):
+    """Rate limiting middleware."""
+    # Get client IP
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Check rate limit (skip for health endpoint)
+    if request.url.path != "/health":
+        allowed, retry_after = api_rate_limiter.is_allowed(client_ip)
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded", "retry_after": int(retry_after)}
+            )
+    
+    response = await call_next(request)
+    return response
+
 
 def get_cors_origins() -> list[str]:
     """Get CORS origins from environment variable."""
@@ -202,9 +254,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Clawlet Dashboard API",
     description="API for Clawlet dashboard",
-    version="0.1.0",
+    version="0.2.6",
     lifespan=lifespan,
 )
+
+# Add rate limiting middleware
+app.middleware("http")(rate_limit_middleware)
 
 # Add CORS with configurable origins
 app.add_middleware(
@@ -291,11 +346,13 @@ async def start_agent(token: str = Depends(verify_api_token)):
     
     # Start agent as subprocess
     import subprocess
+    import sys
     try:
+        # Use sys.executable to ensure we use the same Python interpreter
         agent_process = subprocess.Popen(
-            ["python", "-m", "clawlet"],
-            cwd=config.workspace,
-            env={**os.environ, "CLAWLET_CONFIG": str(config.config_path)}
+            [sys.executable, "-m", "clawlet"],
+            cwd=config.workspace if hasattr(config, 'workspace') else Path.home() / ".clawlet",
+            env={**os.environ, "CLAWLET_CONFIG": str(config.config_path) if hasattr(config, 'config_path') else ""}
         )
         agent_status["running"] = True
         agent_status["uptime_seconds"] = 0
@@ -306,9 +363,18 @@ async def start_agent(token: str = Depends(verify_api_token)):
         
         logger.info("Agent started via API")
         return {"success": True, "message": f"Agent started (PID: {agent_process.pid})"}
+    except FileNotFoundError as e:
+        logger.error(f"Failed to start agent: Python executable not found - {e}")
+        return {"success": False, "message": "Python executable not found. Please ensure Python is properly installed."}
+    except PermissionError as e:
+        logger.error(f"Failed to start agent: Permission denied - {e}")
+        return {"success": False, "message": "Permission denied when starting agent process."}
+    except subprocess.SubprocessError as e:
+        logger.error(f"Failed to start agent: Subprocess error - {e}")
+        return {"success": False, "message": f"Failed to start agent subprocess: {str(e)}"}
     except Exception as e:
         logger.error(f"Failed to start agent: {e}")
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": f"Unexpected error: {str(e)}"}
 
 
 @app.post("/agent/stop")

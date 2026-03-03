@@ -64,13 +64,14 @@ class RateLimiter:
     - Automatic cleanup of stale entries
     """
     
-    # Maximum number of entries to prevent memory growth
-    MAX_ENTRIES = 10000
+    # Default maximum number of entries to prevent memory growth
+    DEFAULT_MAX_ENTRIES = 10000
     
     def __init__(
         self,
         default_limit: Optional[RateLimit] = None,
         tool_limit: Optional[RateLimit] = None,
+        max_entries: int = DEFAULT_MAX_ENTRIES,
     ):
         """
         Initialize rate limiter.
@@ -78,15 +79,17 @@ class RateLimiter:
         Args:
             default_limit: Default rate limit for messages
             tool_limit: Rate limit for tool executions
+            max_entries: Maximum number of entries to prevent memory growth (default: 10000)
         """
         self.default_limit = default_limit or RateLimit.per_minute(60)
         self.tool_limit = tool_limit or RateLimit.per_minute(30)
+        self.max_entries = max_entries
         
         self._entries: dict[str, RateLimitEntry] = defaultdict(RateLimitEntry)
         self._cleanup_interval = 60.0  # Cleanup every minute
         self._last_cleanup = time.time()
         
-        logger.info(f"RateLimiter initialized: messages={self.default_limit}, tools={self.tool_limit}")
+        logger.info(f"RateLimiter initialized: messages={self.default_limit}, tools={self.tool_limit}, max_entries={self.max_entries}")
     
     def is_allowed(self, key: str, limit: Optional[RateLimit] = None) -> tuple[bool, float]:
         """
@@ -106,12 +109,12 @@ class RateLimiter:
             self._cleanup()
         
         # Limit total entries to prevent memory growth
-        if len(self._entries) >= self.MAX_ENTRIES:
-            logger.warning(f"Rate limiter entries limit reached ({self.MAX_ENTRIES}), running aggressive cleanup")
+        if len(self._entries) >= self.max_entries:
+            logger.warning(f"Rate limiter entries limit reached ({self.max_entries}), running aggressive cleanup")
             self._cleanup(aggressive=True)
             
             # If still at limit after aggressive cleanup, reject the new key
-            if len(self._entries) >= self.MAX_ENTRIES:
+            if len(self._entries) >= self.max_entries:
                 logger.error(f"Rate limiter cannot accept new key {key}: too many entries")
                 return False, 60.0  # Retry after 1 minute
         

@@ -78,17 +78,13 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
     import logging
     logger = logging.getLogger("clawlet")
     
-    logger.info(f"[DEBUG] create_default_tool_registry called with allowed_dir={allowed_dir}")
-    
     registry = ToolRegistry()
     
     agent_mode = getattr(getattr(config, "agent", None), "mode", "safe") if config is not None else "safe"
     allow_dangerous = bool(getattr(getattr(config, "agent", None), "shell_allow_dangerous", False)) if config is not None else False
-    logger.info(f"[DEBUG] agent_mode={agent_mode}, allow_dangerous={allow_dangerous}")
     effective_allowed_dir = None if agent_mode == "full_exec" else allowed_dir
 
     # Add file tools
-    logger.info("[DEBUG] Creating FileTool...")
     runtime_engine = getattr(getattr(config, "runtime", None), "engine", "python") if config is not None else "python"
     rust_available = rust_core_available()
     use_rust_core = runtime_engine == "hybrid_rust" and rust_available
@@ -96,9 +92,7 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
         logger.warning("runtime.engine=hybrid_rust but Rust core extension is unavailable; tools will use python path")
 
     file_tool = FileTool(allowed_dir=effective_allowed_dir, use_rust_core=use_rust_core)
-    logger.info(f"[DEBUG] FileTool created with {len(file_tool.tools)} tools")
     for tool in file_tool.tools:
-        logger.info(f"[DEBUG] Registering tool: {tool.name}")
         registry.register(tool)
     
     # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
