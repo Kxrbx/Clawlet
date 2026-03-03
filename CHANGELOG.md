@@ -2,6 +2,30 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.3.0] - 2026-03-03
+
+### Code Quality
+
+- **Debug Logging Cleanup**: Removed 16+ `[DEBUG]`-prefixed log statements from production code across 6 files (`agent/identity.py`, `agent/loop.py`, `channels/telegram.py`, `tools/__init__.py`, `providers/openrouter.py`, `providers/openai.py`) for cleaner production logs.
+
+### Features
+
+- **Dashboard API Rate Limiting**: Added configurable rate limiting middleware to dashboard API with 100 requests/minute default. Includes `APIRateLimiter` class and per-IP tracking with health endpoint exclusion.
+- **Configurable Rate Limiter**: Added `RateLimitSettings` configuration class with `max_entries` parameter (range: 1000-100000) for memory growth control. Updated `RateLimiter` to accept configurable entry limits.
+
+### Enhancements
+
+- **Subprocess Error Handling**: Enhanced cross-platform subprocess handling in CLI:
+  - Added `FileNotFoundError` handling for missing `tail` command with Python fallback implementation
+  - Added `CalledProcessError` handling for subprocess failures
+  - Implemented `_follow_logs_python()` as cross-platform log following alternative
+  - Changed dashboard agent subprocess to use `sys.executable` for better cross-platform compatibility
+- **API Error Handling**: Added specific exception handling for agent subprocess startup (`FileNotFoundError`, `PermissionError`, `SubprocessError`) with user-friendly error messages.
+
+### Maintenance
+
+- **Version Synchronization**: Updated all version references to 0.3.0 across `__init__.py`, `pyproject.toml`, `dashboard/api.py`, and `README.md` for consistency.
+
 ## [0.2.8] - 2026-02-25
 
 ### Fixes
