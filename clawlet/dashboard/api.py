@@ -254,7 +254,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Clawlet Dashboard API",
     description="API for Clawlet dashboard",
-    version="0.2.6",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
