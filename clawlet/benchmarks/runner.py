@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from clawlet.config import BenchmarkGatesSettings
+from clawlet.benchmarks.async_utils import run_async as _run_async
 from clawlet.benchmarks.determinism import run_determinism_trials
+from clawlet.benchmarks.stats_utils import percentile
 from clawlet.tools import create_default_tool_registry
 
 
@@ -74,9 +76,9 @@ def run_local_runtime_benchmark(workspace: Path, iterations: int = 25) -> Benchm
     determinism_pass_rate = run_determinism_trials(workspace, trials=max(5, min(50, iterations)))
     return BenchmarkSummary(
         samples=len(latencies),
-        p50_ms=_percentile(ordered, 50),
-        p95_ms=_percentile(ordered, 95),
-        p99_ms=_percentile(ordered, 99),
+        p50_ms=percentile(ordered, 50),
+        p95_ms=percentile(ordered, 95),
+        p99_ms=percentile(ordered, 99),
         success_rate=(successes / max(1, len(latencies))) * 100.0,
         deterministic_replay_pass_rate_pct=determinism_pass_rate,
     )
@@ -112,42 +114,3 @@ def write_report(path: Path, summary: BenchmarkSummary, failures: list[str]) -> 
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
-def _percentile(values: list[float], pct: float) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return values[0]
-
-    rank = (pct / 100.0) * (len(values) - 1)
-    lower = int(rank)
-    upper = min(lower + 1, len(values) - 1)
-    weight = rank - lower
-    return (values[lower] * (1 - weight)) + (values[upper] * weight)
-
-
-def _run_async(coro):
-    import asyncio
-    from concurrent.futures import Future
-    import threading
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        # Rare path: execute in a dedicated thread to avoid nested-loop errors.
-        future: Future = Future()
-
-        def _runner():
-            try:
-                future.set_result(asyncio.run(coro))
-            except Exception as e:
-                future.set_exception(e)
-
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-        t.join()
-        return future.result()
-
-    return asyncio.run(coro)

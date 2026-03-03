@@ -586,6 +586,52 @@ def test_rust_bridge_file_helpers_use_fake_module(monkeypatch):
     assert rust_bridge.list_dir_entries(".") == (True, [("a.txt", False), ("src", True)], "")
 
 
+def test_rust_bridge_apply_unified_patch_uses_fake_module(monkeypatch):
+    import sys
+    import types
+    from clawlet.runtime import rust_bridge
+
+    fake = types.SimpleNamespace(
+        apply_unified_patch=lambda original, patch: (True, "patched\n", ""),
+    )
+    monkeypatch.setitem(sys.modules, "clawlet_rust_core", fake)
+
+    result = rust_bridge.apply_unified_patch("before\n", "@@ -1,1 +1,1 @@\n-before\n+patched\n")
+    assert result == (True, "patched\n", "")
+
+
+def test_apply_patch_tool_uses_rust_bridge_when_available(temp_workspace, event_loop, monkeypatch):
+    from clawlet.tools.patch import ApplyPatchTool
+
+    target = temp_workspace / "a.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    patch = "@@ -1,2 +1,2 @@\n alpha\n-beta\n+beta_done\n"
+
+    monkeypatch.setattr("clawlet.tools.patch.rust_apply_unified_patch", lambda original, diff: (True, "rust\n", ""))
+    tool = ApplyPatchTool(allowed_dir=temp_workspace, use_rust_core=True)
+
+    result = event_loop.run_until_complete(tool.execute("a.txt", patch))
+    assert result.success is True
+    assert result.data["engine"] == "rust"
+    assert target.read_text(encoding="utf-8") == "rust\n"
+
+
+def test_apply_patch_tool_falls_back_to_python_when_rust_unavailable(temp_workspace, event_loop, monkeypatch):
+    from clawlet.tools.patch import ApplyPatchTool
+
+    target = temp_workspace / "a.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+    patch = "@@ -1,2 +1,2 @@\n alpha\n-beta\n+beta_done\n"
+
+    monkeypatch.setattr("clawlet.tools.patch.rust_apply_unified_patch", lambda original, diff: None)
+    tool = ApplyPatchTool(allowed_dir=temp_workspace, use_rust_core=True)
+
+    result = event_loop.run_until_complete(tool.execute("a.txt", patch))
+    assert result.success is True
+    assert result.data["engine"] == "python"
+    assert "beta_done" in target.read_text(encoding="utf-8")
+
+
 def test_read_file_uses_rust_bridge_when_available(temp_workspace, event_loop, monkeypatch):
     from clawlet.tools.files import ReadFileTool
 

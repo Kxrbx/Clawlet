@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 
+from clawlet.benchmarks.async_utils import run_async as _run_async
 from clawlet.runtime import rust_bridge
 from clawlet.tools.files import ListDirTool, ReadFileTool, WriteFileTool
 from clawlet.tools.shell import ShellTool
@@ -90,31 +92,50 @@ def _check_patch_equivalence(rust_available: bool, details: list[str]) -> bool:
         "-old\n"
         "+new\n"
     )
+    apply_patch = (
+        "@@ -1,2 +1,2 @@\n"
+        " alpha\n"
+        "-beta\n"
+        "+beta_done\n"
+    )
 
     py_valid = rust_bridge._validate_patch_python(valid_patch)
     py_invalid = rust_bridge._validate_patch_python(invalid_patch)
     runtime_valid = rust_bridge.validate_patch(valid_patch)
     runtime_invalid = rust_bridge.validate_patch(invalid_patch)
+    py_applied = _apply_patch_python("alpha\nbeta\n", apply_patch)
+    runtime_apply = rust_bridge.apply_unified_patch("alpha\nbeta\n", apply_patch)
 
     if not rust_available:
-        ok = py_valid == runtime_valid and py_invalid == runtime_invalid
+        ok = py_valid == runtime_valid and py_invalid == runtime_invalid and runtime_apply is None
         if ok:
             details.append("patch: rust unavailable; python fallback parity validated")
         else:
             details.append(
                 f"patch fallback mismatch: py_valid={py_valid} runtime_valid={runtime_valid} "
-                f"py_invalid={py_invalid} runtime_invalid={runtime_invalid}"
+                f"py_invalid={py_invalid} runtime_invalid={runtime_invalid} "
+                f"runtime_apply={runtime_apply}"
             )
         return ok
 
-    # Rust is available: compare only the success/failure class for robust cross-engine parity.
-    ok = (py_valid[0] == runtime_valid[0]) and (py_invalid[0] == runtime_invalid[0])
+    # Rust is available: compare success/failure class and resulting content for apply path.
+    if runtime_apply is None:
+        details.append("patch mismatch: rust available but apply_unified_patch bridge returned None")
+        return False
+
+    ok = (
+        (py_valid[0] == runtime_valid[0])
+        and (py_invalid[0] == runtime_invalid[0])
+        and runtime_apply[0]
+        and (runtime_apply[1] == py_applied)
+    )
     if ok:
         details.append("patch: python/rust equivalent")
     else:
         details.append(
             f"patch mismatch: py_valid={py_valid} rust_valid={runtime_valid} "
-            f"py_invalid={py_invalid} rust_invalid={runtime_invalid}"
+            f"py_invalid={py_invalid} rust_invalid={runtime_invalid} "
+            f"py_applied={py_applied!r} rust_apply={runtime_apply}"
         )
     return ok
 
@@ -156,28 +177,50 @@ def _check_file_equivalence(workspace: Path, rust_available: bool, details: list
         return False
 
 
-def _run_async(coro):
-    import asyncio
-    from concurrent.futures import Future
-    import threading
+def _apply_patch_python(original: str, patch: str) -> str:
+    src_lines = original.splitlines(keepends=True)
+    hunk_re = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+    out: list[str] = []
+    src_idx = 0
+    lines = patch.splitlines()
+    i = 0
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    while i < len(lines):
+        m = hunk_re.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        old_start = int(m.group(1)) - 1
+        out.extend(src_lines[src_idx:old_start])
+        src_idx = old_start
+        i += 1
 
-    if loop and loop.is_running():
-        future: Future = Future()
+        while i < len(lines) and not lines[i].startswith("@@"):
+            line = lines[i]
+            if line.startswith("--- ") or line.startswith("+++ "):
+                i += 1
+                continue
 
-        def _runner():
-            try:
-                future.set_result(asyncio.run(coro))
-            except Exception as e:
-                future.set_exception(e)
+            token = line[0] if line else " "
+            body = line[1:] if line else ""
+            if token == " ":
+                expected = src_lines[src_idx].rstrip("\n")
+                if expected != body:
+                    raise ValueError("Patch context mismatch")
+                out.append(src_lines[src_idx])
+                src_idx += 1
+            elif token == "-":
+                expected = src_lines[src_idx].rstrip("\n")
+                if expected != body:
+                    raise ValueError("Patch removal mismatch")
+                src_idx += 1
+            elif token == "+":
+                out.append(body + "\n")
+            elif token == "\\":
+                pass
+            else:
+                raise ValueError(f"Unsupported diff token: {token}")
+            i += 1
 
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-        t.join()
-        return future.result()
-
-    return asyncio.run(coro)
+    out.extend(src_lines[src_idx:])
+    return "".join(out)

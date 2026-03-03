@@ -1,0 +1,231 @@
+"""Workspace template content helpers for CLI initialization."""
+
+from __future__ import annotations
+
+
+def get_soul_template() -> str:
+    return """# SOUL.md - Who You Are
+
+This file defines your agent's core identity, personality, and values.
+
+## Name
+Clawlet
+
+## Purpose
+I am a lightweight AI assistant designed to be helpful, honest, and harmless.
+
+## Personality
+- Warm and supportive
+- Clear and concise
+- Curious and eager to help
+- Respectful of boundaries
+
+## Values
+1. **Helpfulness**: I strive to provide genuinely useful assistance
+2. **Honesty**: I'm truthful about my capabilities and limitations
+3. **Privacy**: I respect your data and never share it inappropriately
+4. **Growth**: I learn from our interactions to become better
+
+## Communication Style
+- Use emojis sparingly but warmly
+- Be direct when needed, gentle when appropriate
+- Ask clarifying questions when uncertain
+- Celebrate wins together
+
+---
+
+_This file is yours to customize. Make your agent unique!_
+"""
+
+
+def get_user_template() -> str:
+    return """# USER.md - About Your Human
+
+Tell your agent about yourself so it can help you better.
+
+## Name
+[Your name]
+
+## What to call you
+[Preferred name/nickname]
+
+## Pronouns
+[Optional]
+
+## Timezone
+[Your timezone, e.g., UTC, America/New_York]
+
+## Notes
+- What do you care about?
+- What projects are you working on?
+- What annoys you?
+- What makes you laugh?
+
+---
+
+_The more your agent knows, the better it can help!_
+"""
+
+
+def get_memory_template() -> str:
+    return """# MEMORY.md - Long-Term Memory
+
+This file stores important memories that persist across sessions.
+
+## Key Information
+- Add important facts here
+- Decisions made
+- Lessons learned
+- Things to remember
+
+## Recent Updates
+- [Date] Initial setup
+
+---
+
+_Memories are consolidated from daily notes automatically._
+"""
+
+
+def get_heartbeat_template() -> str:
+    return """# HEARTBEAT.md - Periodic Tasks
+
+This file defines tasks your agent performs periodically.
+
+## Check Interval
+Every 2 hours
+
+## Tasks
+- [ ] Check for important updates
+- [ ] Review recent activity
+- [ ] Update memory if needed
+
+## Quiet Hours
+2am - 9am UTC (no heartbeats during this time)
+
+---
+
+_Heartbeats help your agent stay proactive._
+"""
+
+
+def get_config_template() -> str:
+    return """# Clawlet Configuration
+
+# LLM Provider Settings
+provider:
+  # Primary provider: openrouter, ollama, lmstudio
+  primary: openrouter
+  
+  # OpenRouter settings
+  openrouter:
+    api_key: "YOUR_OPENROUTER_API_KEY"
+    model: "anthropic/claude-sonnet-4"
+  
+  # Ollama settings (local)
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "llama3.2"
+  
+  # LM Studio settings (local)
+  lmstudio:
+    base_url: "http://localhost:1234"
+    model: "local-model"
+
+# Channel Settings
+channels:
+  telegram:
+    enabled: false
+    token: "YOUR_TELEGRAM_BOT_TOKEN"
+  
+  discord:
+    enabled: false
+    token: "YOUR_DISCORD_BOT_TOKEN"
+  
+  whatsapp:
+    enabled: false
+
+# Storage Settings
+storage:
+  # backend: sqlite or postgres
+  backend: sqlite
+  
+  # SQLite settings
+  sqlite:
+    path: "~/.clawlet/clawlet.db"
+  
+  # PostgreSQL settings
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "clawlet"
+    user: "clawlet"
+    password: "your_password"
+
+# Agent Settings
+agent:
+  max_iterations: 20
+  max_tool_calls_per_message: 6
+  context_window: 20
+  temperature: 0.7
+  mode: safe
+  shell_allow_dangerous: false
+
+# Heartbeat Settings
+heartbeat:
+  interval_minutes: 120
+  quiet_hours_start: 2  # 2am UTC
+  quiet_hours_end: 9    # 9am UTC
+
+# Runtime v2 Settings
+runtime:
+  engine: hybrid_rust
+  enable_idempotency_cache: true
+  enable_parallel_read_batches: true
+  max_parallel_read_tools: 4
+  default_tool_timeout_seconds: 30
+  default_tool_retries: 1
+  outbound_publish_retries: 2
+  outbound_publish_backoff_seconds: 0.5
+  policy:
+    allowed_modes: [read_only, workspace_write]
+    require_approval_for: [elevated]
+    lanes:
+      read_only: "parallel:read_only"
+      workspace_write: "serial:workspace_write"
+      elevated: "serial:elevated"
+  replay:
+    enabled: true
+    directory: ".runtime"
+    retention_days: 30
+    redact_tool_outputs: false
+    validate_events: true
+    validation_mode: "warn"
+  remote:
+    enabled: false
+    endpoint: ""
+    timeout_seconds: 60
+    api_key_env: "CLAWLET_REMOTE_API_KEY"
+
+# Benchmarks + hard quality gates
+benchmarks:
+  enabled: true
+  gates:
+    max_p95_latency_ms: 3000
+    min_tool_success_rate_pct: 99.0
+    min_deterministic_replay_pass_rate_pct: 98.0
+    min_lane_speedup_ratio: 1.20
+    max_lane_parallel_elapsed_ms: 1000
+    min_context_cache_speedup_ratio: 1.05
+    max_context_cache_warm_ms: 1200
+    min_coding_loop_success_rate_pct: 99.0
+    max_coding_loop_p95_total_ms: 2500
+    require_rust_equivalence: false
+
+# Plugin SDK v2
+plugins:
+  auto_load: true
+  directories:
+    - "~/.clawlet/plugins"
+  sdk_version: "2.0.0"
+"""

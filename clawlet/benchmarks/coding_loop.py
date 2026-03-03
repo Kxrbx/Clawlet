@@ -7,6 +7,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from clawlet.benchmarks.async_utils import run_async as _run_async
+from clawlet.benchmarks.stats_utils import mean, percentile
 from clawlet.tools import create_default_tool_registry
 
 
@@ -85,16 +87,16 @@ def run_coding_loop_benchmark(workspace: Path, iterations: int = 10) -> CodingLo
             details.append(f"iteration {i} failed")
 
     success_rate = (successes / max(1, iterations)) * 100.0
-    p95_total = _percentile(sorted(totals), 95)
+    p95_total = percentile(sorted(totals), 95)
     report = CodingLoopBenchmarkReport(
         passed=success_rate >= 99.0,
         iterations=iterations,
         success_rate=success_rate,
         p95_total_ms=p95_total,
-        avg_inspect_ms=_mean(inspect_ms),
-        avg_patch_ms=_mean(patch_ms),
-        avg_verify_ms=_mean(verify_ms),
-        avg_summarize_ms=_mean(summarize_ms),
+        avg_inspect_ms=mean(inspect_ms),
+        avg_patch_ms=mean(patch_ms),
+        avg_verify_ms=mean(verify_ms),
+        avg_summarize_ms=mean(summarize_ms),
         details=details,
     )
     return report
@@ -117,47 +119,3 @@ def write_coding_loop_report(path: Path, report: CodingLoopBenchmarkReport) -> N
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
-
-def _mean(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    return sum(values) / len(values)
-
-
-def _percentile(values: list[float], pct: float) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return values[0]
-    rank = (pct / 100.0) * (len(values) - 1)
-    lower = int(rank)
-    upper = min(lower + 1, len(values) - 1)
-    weight = rank - lower
-    return (values[lower] * (1 - weight)) + (values[upper] * weight)
-
-
-def _run_async(coro):
-    import asyncio
-    from concurrent.futures import Future
-    import threading
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        future: Future = Future()
-
-        def _runner():
-            try:
-                future.set_result(asyncio.run(coro))
-            except Exception as e:
-                future.set_exception(e)
-
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-        t.join()
-        return future.result()
-
-    return asyncio.run(coro)

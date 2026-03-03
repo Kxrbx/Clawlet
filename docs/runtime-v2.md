@@ -1,7 +1,7 @@
 # Runtime v2
 
 Runtime v2 introduces deterministic tool execution with append-only event logs and replay signatures.
-In `hybrid_rust` mode, Clawlet uses Rust fast paths for hashing, patch validation, shell execution, and file primitives when the extension is available.
+In `hybrid_rust` mode, Clawlet uses Rust fast paths for hashing, patch validation and patch application, shell execution, and file primitives when the extension is available.
 
 ## Config
 
@@ -46,16 +46,24 @@ benchmarks:
     max_context_cache_warm_ms: 1200
     min_coding_loop_success_rate_pct: 99.0
     max_coding_loop_p95_total_ms: 2500
+    require_rust_equivalence: false
 ```
 
 ## Commands
 
 - `clawlet benchmark run --workspace <path>`
 - `clawlet benchmark corpus --workspace <path> --iterations 10 --baseline-report <path>`
+- `clawlet benchmark corpus --workspace <path> --baseline-report <path> --publish-report --publish-report-path <path>`
 - `clawlet benchmark compare --current-report <path> --baseline-report <path>`
+- `clawlet benchmark compare --current-report <path> --baseline-report <path> --publish-report-path <path>`
+- `clawlet benchmark compare --current-report <path> --baseline-report <path> --json`
+- `clawlet benchmark publish-report --current-report <path> --baseline-report <path> --out benchmark-openclaw-report.md`
+- `clawlet benchmark competitive-report --workspace <path> --baseline-report <path> --bundle-out benchmark-openclaw-competitive.json --markdown-out benchmark-openclaw-report.md`
+- `clawlet benchmark competitive-report --workspace <path> --baseline-report <path> --json`
 - `clawlet benchmark release-gate --workspace <path> --baseline-report <path>`
 - `clawlet benchmark release-gate --workspace <path> --max-breaches 12`
 - `clawlet benchmark release-gate --workspace <path> --breach-category coding`
+- `clawlet benchmark release-gate --workspace <path> --breach-category rust`
 - `clawlet benchmark release-gate --workspace <path> --json`
 - `clawlet benchmark remote-health --workspace <path>`
 - `clawlet benchmark remote-parity --workspace <path>`
@@ -72,6 +80,7 @@ benchmarks:
 - `clawlet migration-matrix --root <path> --fail-on-errors`
 - `clawlet release-readiness --workspace <path> --baseline-report <path> --check-remote-health`
 - `clawlet release-readiness --workspace <path> --breach-category lane`
+- `clawlet release-readiness --workspace <path> --breach-category rust`
 - `clawlet release-readiness --workspace <path> --breach-category lane --max-breaches 5`
 - `clawlet release-readiness --workspace <path> --json`
 
@@ -122,11 +131,14 @@ Published schema:
 `benchmark release-gate` also hard-fails on coding-loop success-rate regressions.
 Speedup thresholds are configured via `benchmarks.gates.min_lane_speedup_ratio` and `benchmarks.gates.min_context_cache_speedup_ratio`.
 Coding-loop thresholds are configured via `benchmarks.gates.min_coding_loop_success_rate_pct` and `benchmarks.gates.max_coding_loop_p95_total_ms`.
+Rust parity enforcement is configured via `benchmarks.gates.require_rust_equivalence`.
 Absolute latency thresholds are configured via `benchmarks.gates.max_lane_parallel_elapsed_ms` and `benchmarks.gates.max_context_cache_warm_ms`.
 Release-gate artifacts now include machine-readable `gate_breaches` and `breach_counts` for dashboard/CI consumption.
+Competitive-report bundle artifacts include a machine-readable `rust_equivalence` block.
 `clawlet release-readiness` now also evaluates lane scheduling, context-cache, and coding-loop benchmark health.
 Release-readiness artifacts include top-level `gate_breaches` and `breach_counts` mirrored from release-gate output.
 Use `--breach-category` to filter displayed breach lines during CLI triage.
 Use `--breach-category` and `--max-breaches` to filter and bound displayed breach lines in both `benchmark release-gate` and `release-readiness`.
+Supported breach categories now include `rust`.
 Use `--json` for machine-readable command output (includes `display_gate_breaches`, filters, and report path).
 Config loading now emits deprecation/migration warnings with actionable hints when legacy keys are detected.

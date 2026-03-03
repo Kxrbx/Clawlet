@@ -18,6 +18,7 @@ class ReleaseReadinessReport:
     lane_scheduling_passed: bool
     context_cache_passed: bool
     coding_loop_passed: bool
+    rust_equivalence_passed: bool
     remote_health_passed: bool
     reasons: list[str]
     gate_breaches: list[str]
@@ -28,6 +29,7 @@ class ReleaseReadinessReport:
     lane_scheduling: dict[str, Any]
     context_cache: dict[str, Any]
     coding_loop: dict[str, Any]
+    rust_equivalence: dict[str, Any]
     remote_health: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,6 +42,7 @@ class ReleaseReadinessReport:
             "lane_scheduling_passed": self.lane_scheduling_passed,
             "context_cache_passed": self.context_cache_passed,
             "coding_loop_passed": self.coding_loop_passed,
+            "rust_equivalence_passed": self.rust_equivalence_passed,
             "remote_health_passed": self.remote_health_passed,
             "reasons": list(self.reasons),
             "gate_breaches": list(self.gate_breaches),
@@ -50,6 +53,7 @@ class ReleaseReadinessReport:
             "lane_scheduling": dict(self.lane_scheduling),
             "context_cache": dict(self.context_cache),
             "coding_loop": dict(self.coding_loop),
+            "rust_equivalence": dict(self.rust_equivalence),
             "remote_health": dict(self.remote_health),
         }
 
@@ -120,6 +124,8 @@ def run_release_readiness(
 
     coding_data = dict((rg_dict.get("coding_loop") or {}))
     coding_loop_passed = bool(coding_data.get("passed", False))
+    rust_data = dict((rg_dict.get("rust_equivalence") or {}))
+    rust_equivalence_passed = bool(rust_data.get("gate_passed", rust_data.get("passed", True)))
 
     remote_health_passed = True
     remote_health: dict[str, Any] = {"checked": False, "status": "skipped", "detail": ""}
@@ -159,6 +165,7 @@ def run_release_readiness(
         and lane_scheduling_passed
         and context_cache_passed
         and coding_loop_passed
+        and rust_equivalence_passed
         and remote_health_passed
     )
     gate_breaches = list(rg_dict.get("gate_breaches") or [])
@@ -174,6 +181,7 @@ def run_release_readiness(
         lane_scheduling_passed=lane_scheduling_passed,
         context_cache_passed=context_cache_passed,
         coding_loop_passed=coding_loop_passed,
+        rust_equivalence_passed=rust_equivalence_passed,
         remote_health_passed=remote_health_passed,
         reasons=reasons,
         gate_breaches=gate_breaches,
@@ -184,6 +192,7 @@ def run_release_readiness(
         lane_scheduling=lane_data,
         context_cache=context_data,
         coding_loop=coding_data,
+        rust_equivalence=rust_data,
         remote_health=remote_health,
     )
 
@@ -213,6 +222,7 @@ def _summarize_release_gate_reasons(reasons: list[str], max_items: int = 10) -> 
         "lane": [],
         "context": [],
         "coding": [],
+        "rust": [],
         "comparison": [],
         "other": [],
     }
@@ -229,19 +239,22 @@ def _summarize_release_gate_reasons(reasons: list[str], max_items: int = 10) -> 
             buckets["context"].append(text)
         elif lowered.startswith("coding_loop:"):
             buckets["coding"].append(text)
+        elif lowered.startswith("rust_equivalence:"):
+            buckets["rust"].append(text)
         elif lowered.startswith("comparison:"):
             buckets["comparison"].append(text)
         else:
             buckets["other"].append(text)
 
     out: list[str] = []
-    order = ["local", "corpus", "lane", "context", "coding", "comparison", "other"]
+    order = ["local", "corpus", "lane", "context", "coding", "rust", "comparison", "other"]
     labels = {
         "local": "local",
         "corpus": "corpus",
         "lane": "lane",
         "context": "context",
         "coding": "coding",
+        "rust": "rust",
         "comparison": "comparison",
         "other": "other",
     }
@@ -266,6 +279,7 @@ def run_release_readiness_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
         lane_scheduling_passed=True,
         context_cache_passed=True,
         coding_loop_passed=True,
+        rust_equivalence_passed=True,
         remote_health_passed=True,
         reasons=[],
         gate_breaches=[],
@@ -276,6 +290,7 @@ def run_release_readiness_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
         lane_scheduling={"passed": True},
         context_cache={"passed": True},
         coding_loop={"passed": True},
+        rust_equivalence={"passed": True, "gate_passed": True},
         remote_health={"checked": False, "status": "skipped", "detail": ""},
     )
     write_release_readiness_report(out, report)
@@ -302,6 +317,8 @@ def run_release_readiness_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
         errors.append("expected context_cache_passed=true")
     if payload.get("coding_loop_passed") is not True:
         errors.append("expected coding_loop_passed=true")
+    if payload.get("rust_equivalence_passed") is not True:
+        errors.append("expected rust_equivalence_passed=true")
     if payload.get("remote_health_passed") is not True:
         errors.append("expected remote_health_passed=true")
     if not isinstance(payload.get("gate_breaches"), list):

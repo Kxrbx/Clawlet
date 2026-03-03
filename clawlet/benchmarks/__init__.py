@@ -9,6 +9,9 @@ __all__ = [
     "check_corpus_gates",
     "compare_corpus_reports",
     "compare_corpus_to_baseline",
+    "build_publishable_corpus_report_from_paths",
+    "build_competitive_corpus_bundle",
+    "format_publishable_corpus_report",
     "load_corpus_benchmark_report",
     "ReleaseGateReport",
     "run_release_gate",
@@ -37,6 +40,8 @@ __all__ = [
     "run_local_runtime_benchmark",
     "write_report",
     "write_corpus_report",
+    "write_publishable_corpus_report",
+    "write_competitive_corpus_bundle",
 ]
 
 _LAZY_IMPORTS = {
@@ -46,6 +51,12 @@ _LAZY_IMPORTS = {
     "check_corpus_gates": ("clawlet.benchmarks.corpus", "check_corpus_gates"),
     "compare_corpus_reports": ("clawlet.benchmarks.corpus", "compare_corpus_reports"),
     "compare_corpus_to_baseline": ("clawlet.benchmarks.corpus", "compare_corpus_to_baseline"),
+    "build_publishable_corpus_report_from_paths": (
+        "clawlet.benchmarks.corpus",
+        "build_publishable_corpus_report_from_paths",
+    ),
+    "build_competitive_corpus_bundle": ("clawlet.benchmarks.corpus", "build_competitive_corpus_bundle"),
+    "format_publishable_corpus_report": ("clawlet.benchmarks.corpus", "format_publishable_corpus_report"),
     "load_corpus_benchmark_report": ("clawlet.benchmarks.corpus", "load_corpus_benchmark_report"),
     "ReleaseGateReport": ("clawlet.benchmarks.release_gate", "ReleaseGateReport"),
     "run_release_gate": ("clawlet.benchmarks.release_gate", "run_release_gate"),
@@ -77,6 +88,8 @@ _LAZY_IMPORTS = {
     "run_local_runtime_benchmark": ("clawlet.benchmarks.runner", "run_local_runtime_benchmark"),
     "write_report": ("clawlet.benchmarks.runner", "write_report"),
     "write_corpus_report": ("clawlet.benchmarks.corpus", "write_corpus_report"),
+    "write_publishable_corpus_report": ("clawlet.benchmarks.corpus", "write_publishable_corpus_report"),
+    "write_competitive_corpus_bundle": ("clawlet.benchmarks.corpus", "write_competitive_corpus_bundle"),
 }
 
 

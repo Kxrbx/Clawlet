@@ -58,7 +58,7 @@ class FileTool:
         self.read = ReadFileTool(allowed_dir, use_rust_core=use_rust_core)
         self.write = WriteFileTool(allowed_dir, use_rust_core=use_rust_core)
         self.edit = EditFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.patch = ApplyPatchTool(allowed_dir)
+        self.patch = ApplyPatchTool(allowed_dir, use_rust_core=use_rust_core)
         self.list = ListDirTool(allowed_dir, use_rust_core=use_rust_core)
     
     @property

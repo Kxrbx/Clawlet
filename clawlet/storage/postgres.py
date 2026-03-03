@@ -81,6 +81,10 @@ class PostgresStorage:
         await self._create_tables()
         
         logger.info("PostgreSQL connection pool established")
+
+    async def initialize(self) -> None:
+        """Compatibility alias for StorageBackend-like initialization."""
+        await self.connect()
     
     async def close(self) -> None:
         """Close connection pool."""
@@ -203,6 +207,49 @@ class PostgresStorage:
                 session_id,
             )
             return int(result.split()[-1])
+
+    async def list_sessions(self, limit: int = 50) -> list[tuple[str, int, str]]:
+        """List recent sessions with message counts and latest timestamp."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT session_id, COUNT(*) AS msg_count, MAX(created_at) AS last_seen
+                FROM conversations
+                GROUP BY session_id
+                ORDER BY last_seen DESC
+                LIMIT $1
+                """,
+                int(limit),
+            )
+            result: list[tuple[str, int, str]] = []
+            for row in rows:
+                last_seen = row["last_seen"].isoformat() if row["last_seen"] is not None else ""
+                result.append((str(row["session_id"]), int(row["msg_count"]), last_seen))
+            return result
+
+    async def export_messages(self) -> list[dict]:
+        """Export all conversation messages (newest first)."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, session_id, role, content, metadata, created_at
+                FROM conversations
+                ORDER BY created_at DESC
+                """
+            )
+            result: list[dict] = []
+            for row in rows:
+                result.append(
+                    {
+                        "id": int(row["id"]) if row["id"] is not None else None,
+                        "session_id": str(row["session_id"]),
+                        "role": str(row["role"]),
+                        "content": str(row["content"]),
+                        "metadata": row["metadata"] or {},
+                        "created_at": row["created_at"].isoformat() if row["created_at"] is not None else "",
+                    }
+                )
+            return result
     
     # Memory methods
     

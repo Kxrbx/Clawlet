@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from clawlet.benchmarks.async_utils import run_async as _run_async
+from clawlet.benchmarks.stats_utils import percentile
 
 @dataclass(slots=True)
 class ScenarioResult:
@@ -194,9 +196,9 @@ def run_openclaw_matched_corpus(workspace: Path, iterations: int = 10) -> Corpus
             title=title,
             description=description,
             samples=len(latencies),
-            p50_ms=_percentile(ordered, 50),
-            p95_ms=_percentile(ordered, 95),
-            p99_ms=_percentile(ordered, 99),
+            p50_ms=percentile(ordered, 50),
+            p95_ms=percentile(ordered, 95),
+            p99_ms=percentile(ordered, 99),
             success_rate=(successes / max(1, len(latencies))) * 100.0,
         )
         scenario_results.append(scenario_result)
@@ -207,9 +209,9 @@ def run_openclaw_matched_corpus(workspace: Path, iterations: int = 10) -> Corpus
     ordered_all = sorted(all_latencies)
     summary = {
         "samples": float(total_samples),
-        "p50_ms": _percentile(ordered_all, 50),
-        "p95_ms": _percentile(ordered_all, 95),
-        "p99_ms": _percentile(ordered_all, 99),
+        "p50_ms": percentile(ordered_all, 50),
+        "p95_ms": percentile(ordered_all, 95),
+        "p99_ms": percentile(ordered_all, 99),
         "success_rate": (total_successes / max(1, total_samples)) * 100.0,
     }
 
@@ -322,6 +324,115 @@ def write_corpus_report(
         payload["comparison_passed"] = bool(comparison.meets_target)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def format_publishable_corpus_report(
+    current_report: CorpusBenchmarkReport,
+    comparison: CorpusComparisonReport,
+) -> str:
+    """Render a publishable markdown benchmark summary."""
+    current_p95 = float(current_report.summary.get("p95_ms", 0.0))
+    current_success = float(current_report.summary.get("success_rate", 0.0))
+    lines: list[str] = []
+    lines.append("# Clawlet vs OpenClaw Benchmark Report")
+    lines.append("")
+    lines.append(f"- Corpus: `{current_report.corpus_id}`")
+    lines.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
+    lines.append(f"- Current report created_at: {current_report.created_at}")
+    lines.append(f"- Baseline source: `{comparison.baseline_source}`")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+    lines.append(f"- Baseline p95: **{comparison.baseline_p95_ms:.2f} ms**")
+    lines.append(f"- Current p95: **{comparison.current_p95_ms:.2f} ms**")
+    lines.append(
+        f"- Improvement: **{comparison.improvement_pct:.2f}%** "
+        f"(target {comparison.target_improvement_pct:.2f}%)"
+    )
+    lines.append(f"- Meets target: **{'yes' if comparison.meets_target else 'no'}**")
+    lines.append(f"- Current success rate: **{current_success:.2f}%**")
+    lines.append(f"- Current aggregate p95: **{current_p95:.2f} ms**")
+    lines.append("")
+    lines.append("## Scenario Deltas")
+    lines.append("")
+    lines.append("| Scenario | Baseline p95 (ms) | Current p95 (ms) | Delta (%) |")
+    lines.append("|---|---:|---:|---:|")
+    for row in comparison.scenario_comparisons:
+        lines.append(
+            f"| `{row.scenario_id}` | {row.baseline_p95_ms:.2f} | "
+            f"{row.current_p95_ms:.2f} | {row.improvement_pct:.2f}% |"
+        )
+    if not comparison.scenario_comparisons:
+        lines.append("| _no overlapping scenarios_ | - | - | - |")
+    lines.append("")
+    lines.append("## Regressions")
+    lines.append("")
+    if comparison.regressions:
+        for item in comparison.regressions:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- None")
+    lines.append("")
+    lines.append("## Current Scenario Results")
+    lines.append("")
+    lines.append("| Scenario | Samples | p95 (ms) | Success (%) |")
+    lines.append("|---|---:|---:|---:|")
+    for scenario in current_report.scenarios:
+        lines.append(
+            f"| `{scenario.scenario_id}` | {scenario.samples} | "
+            f"{scenario.p95_ms:.2f} | {scenario.success_rate:.2f}% |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_publishable_corpus_report(path: Path, markdown_text: str) -> None:
+    """Write publishable benchmark markdown report."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown_text, encoding="utf-8")
+
+
+def build_competitive_corpus_bundle(
+    report: CorpusBenchmarkReport,
+    comparison: CorpusComparisonReport,
+    gate_failures: list[str],
+    rust_equivalence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a machine-readable competitive benchmark artifact payload."""
+    rust_data = dict(rust_equivalence or {})
+    rust_gate_passed = bool(rust_data.get("gate_passed", rust_data.get("passed", True)))
+    gate_passed = (len(gate_failures) == 0) and rust_gate_passed
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "passed": gate_passed and bool(comparison.meets_target),
+        "gate_passed": gate_passed,
+        "comparison_passed": bool(comparison.meets_target),
+        "gate_failures": list(gate_failures),
+        "rust_equivalence": rust_data,
+        "report": report.to_dict(),
+        "comparison": comparison.to_dict(),
+    }
+
+
+def write_competitive_corpus_bundle(path: Path, payload: dict[str, Any]) -> None:
+    """Write machine-readable competitive benchmark bundle JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def build_publishable_corpus_report_from_paths(
+    current_path: Path,
+    baseline_path: Path,
+    target_improvement_pct: float = 35.0,
+) -> tuple[CorpusComparisonReport, str]:
+    """Load reports from disk and build publishable markdown text."""
+    current = load_corpus_benchmark_report(current_path)
+    comparison = compare_corpus_reports(
+        current_path=current_path,
+        baseline_path=baseline_path,
+        target_improvement_pct=target_improvement_pct,
+    )
+    markdown = format_publishable_corpus_report(current, comparison)
+    return comparison, markdown
 
 
 def run_openclaw_matched_corpus_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
@@ -469,43 +580,3 @@ def _improvement_pct(baseline_ms: float, current_ms: float) -> float:
     if baseline_ms <= 0:
         return 0.0
     return ((baseline_ms - current_ms) / baseline_ms) * 100.0
-
-
-def _percentile(values: list[float], pct: float) -> float:
-    if not values:
-        return 0.0
-    if len(values) == 1:
-        return values[0]
-
-    rank = (pct / 100.0) * (len(values) - 1)
-    lower = int(rank)
-    upper = min(lower + 1, len(values) - 1)
-    weight = rank - lower
-    return (values[lower] * (1 - weight)) + (values[upper] * weight)
-
-
-def _run_async(coro):
-    import asyncio
-    from concurrent.futures import Future
-    import threading
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        future: Future = Future()
-
-        def _runner():
-            try:
-                future.set_result(asyncio.run(coro))
-            except Exception as e:
-                future.set_exception(e)
-
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-        t.join()
-        return future.result()
-
-    return asyncio.run(coro)

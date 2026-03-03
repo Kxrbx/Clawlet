@@ -38,6 +38,19 @@ def validate_patch(patch: str) -> Tuple[bool, str]:
         return _validate_patch_python(patch)
 
 
+def apply_unified_patch(original_text: str, patch: str) -> Optional[tuple[bool, str, str]]:
+    """Apply unified diff patch via Rust core when available."""
+    try:
+        import clawlet_rust_core  # type: ignore
+
+        result = clawlet_rust_core.apply_unified_patch(str(original_text), str(patch))
+        if isinstance(result, tuple) and len(result) == 3:
+            return (bool(result[0]), str(result[1]), str(result[2]))
+    except Exception:
+        return None
+    return None
+
+
 def execute_command_argv(
     argv: list[str],
     cwd: str,

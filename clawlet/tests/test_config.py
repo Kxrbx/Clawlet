@@ -147,8 +147,9 @@ def test_init_config_template_is_valid_yaml_and_includes_agent_mode():
 
     assert data["agent"]["mode"] == "safe"
     assert data["agent"]["shell_allow_dangerous"] is False
-    assert "telegram" in data
-    assert "discord" in data
+    assert "channels" in data
+    assert "telegram" in data["channels"]
+    assert "discord" in data["channels"]
     assert data["runtime"]["engine"] == "hybrid_rust"
     assert data["runtime"]["enable_parallel_read_batches"] is True
     assert data["runtime"]["max_parallel_read_tools"] == 4
@@ -162,6 +163,7 @@ def test_init_config_template_is_valid_yaml_and_includes_agent_mode():
     assert data["benchmarks"]["gates"]["max_context_cache_warm_ms"] == 1200
     assert data["benchmarks"]["gates"]["min_coding_loop_success_rate_pct"] == 99.0
     assert data["benchmarks"]["gates"]["max_coding_loop_p95_total_ms"] == 2500
+    assert data["benchmarks"]["gates"]["require_rust_equivalence"] is False
     assert data["plugins"]["sdk_version"] == "2.0.0"
 
 
@@ -323,6 +325,7 @@ def test_release_readiness_report_serialization(temp_workspace):
         lane_scheduling_passed=True,
         context_cache_passed=True,
         coding_loop_passed=True,
+        rust_equivalence_passed=True,
         remote_health_passed=True,
         reasons=[],
         gate_breaches=[],
@@ -333,6 +336,7 @@ def test_release_readiness_report_serialization(temp_workspace):
         lane_scheduling={"passed": True},
         context_cache={"passed": True},
         coding_loop={"passed": True},
+        rust_equivalence={"passed": True, "gate_passed": True},
         remote_health={"checked": False, "status": "skipped", "detail": ""},
     )
     out = temp_workspace / "release-readiness-report.json"
@@ -357,6 +361,7 @@ def test_summarize_gate_breaches_groups_release_gate_reasons(temp_workspace):
         lane_scheduling_passed=False,
         context_cache_passed=False,
         coding_loop_passed=False,
+        rust_equivalence_passed=True,
         remote_health_passed=True,
         reasons=["release_gate: failed"],
         gate_breaches=[],
@@ -380,6 +385,7 @@ def test_summarize_gate_breaches_groups_release_gate_reasons(temp_workspace):
         lane_scheduling={"passed": False},
         context_cache={"passed": False},
         coding_loop={"passed": False},
+        rust_equivalence={"passed": True, "gate_passed": True},
         remote_health={"checked": False, "status": "skipped", "detail": ""},
     )
     breaches = summarize_gate_breaches(report)
@@ -399,6 +405,7 @@ def test_summarize_gate_breaches_falls_back_to_reasons(temp_workspace):
         lane_scheduling_passed=False,
         context_cache_passed=True,
         coding_loop_passed=True,
+        rust_equivalence_passed=True,
         remote_health_passed=True,
         reasons=["release_gate: failed"],
         gate_breaches=[],
@@ -412,8 +419,46 @@ def test_summarize_gate_breaches_falls_back_to_reasons(temp_workspace):
         lane_scheduling={"passed": False},
         context_cache={"passed": True},
         coding_loop={"passed": True},
+        rust_equivalence={"passed": True, "gate_passed": True},
         remote_health={"checked": False, "status": "skipped", "detail": ""},
     )
     breaches = summarize_gate_breaches(report)
     assert breaches
     assert breaches[0].startswith("lane:")
+
+
+def test_summarize_gate_breaches_groups_rust_reason(temp_workspace):
+    from clawlet.release_readiness import ReleaseReadinessReport, summarize_gate_breaches
+
+    report = ReleaseReadinessReport(
+        workspace=str(temp_workspace),
+        passed=False,
+        release_gate_passed=False,
+        migration_matrix_passed=True,
+        plugin_matrix_passed=True,
+        lane_scheduling_passed=True,
+        context_cache_passed=True,
+        coding_loop_passed=True,
+        rust_equivalence_passed=False,
+        remote_health_passed=True,
+        reasons=["release_gate: failed"],
+        gate_breaches=[],
+        breach_counts={},
+        release_gate={
+            "passed": False,
+            "reasons": [
+                "rust_equivalence: rust extension unavailable while benchmarks.gates.require_rust_equivalence=true"
+            ],
+        },
+        migration_matrix={"with_errors": 0},
+        plugin_matrix={"passed": True},
+        lane_scheduling={"passed": True},
+        context_cache={"passed": True},
+        coding_loop={"passed": True},
+        rust_equivalence={"passed": False, "gate_passed": False},
+        remote_health={"checked": False, "status": "skipped", "detail": ""},
+    )
+
+    breaches = summarize_gate_breaches(report)
+    assert breaches
+    assert breaches[0].startswith("rust:")

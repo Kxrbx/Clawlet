@@ -91,5 +91,89 @@ async def test_sqlite_storage_multiple_sessions():
         await storage.close()
 
 
+@pytest.mark.asyncio
+async def test_postgres_storage_list_sessions_uses_conversations_table(monkeypatch):
+    from datetime import datetime, timezone
+    import clawlet.storage.postgres as pgmod
+
+    monkeypatch.setattr(pgmod, "POSTGRES_AVAILABLE", True)
+    storage = pgmod.PostgresStorage()
+
+    class _FakeConn:
+        async def fetch(self, query, *args):
+            assert "FROM conversations" in query
+            assert "GROUP BY session_id" in query
+            assert int(args[0]) == 5
+            return [
+                {"session_id": "sess-a", "msg_count": 3, "last_seen": datetime(2026, 3, 3, tzinfo=timezone.utc)},
+                {"session_id": "sess-b", "msg_count": 1, "last_seen": datetime(2026, 3, 2, tzinfo=timezone.utc)},
+            ]
+
+    class _AcquireCtx:
+        async def __aenter__(self):
+            return _FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakePool:
+        def acquire(self):
+            return _AcquireCtx()
+
+    storage._pool = _FakePool()
+    rows = await storage.list_sessions(limit=5)
+    assert rows[0][0] == "sess-a"
+    assert rows[0][1] == 3
+    assert "2026-03-03" in rows[0][2]
+
+
+@pytest.mark.asyncio
+async def test_postgres_storage_export_messages_returns_serializable_rows(monkeypatch):
+    from datetime import datetime, timezone
+    import clawlet.storage.postgres as pgmod
+
+    monkeypatch.setattr(pgmod, "POSTGRES_AVAILABLE", True)
+    storage = pgmod.PostgresStorage()
+
+    class _FakeConn:
+        async def fetch(self, query, *args):
+            assert "FROM conversations" in query
+            assert "ORDER BY created_at DESC" in query
+            return [
+                {
+                    "id": 10,
+                    "session_id": "sess-a",
+                    "role": "user",
+                    "content": "hello",
+                    "metadata": {"k": "v"},
+                    "created_at": datetime(2026, 3, 3, tzinfo=timezone.utc),
+                }
+            ]
+
+    class _AcquireCtx:
+        async def __aenter__(self):
+            return _FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakePool:
+        def acquire(self):
+            return _AcquireCtx()
+
+    storage._pool = _FakePool()
+    rows = await storage.export_messages()
+    assert rows == [
+        {
+            "id": 10,
+            "session_id": "sess-a",
+            "role": "user",
+            "content": "hello",
+            "metadata": {"k": "v"},
+            "created_at": "2026-03-03T00:00:00+00:00",
+        }
+    ]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

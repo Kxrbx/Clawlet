@@ -58,6 +58,12 @@ def run_coding_loop_benchmark(workspace: Path):
     return _impl(workspace, iterations=5)
 
 
+def run_engine_equivalence_smokecheck(workspace: Path):
+    from clawlet.benchmarks.equivalence import run_engine_equivalence_smokecheck as _impl
+
+    return _impl(workspace)
+
+
 @dataclass(slots=True)
 class ReleaseGateReport:
     local_summary: Any
@@ -67,6 +73,7 @@ class ReleaseGateReport:
     lane_scheduling: dict[str, Any]
     context_cache: dict[str, Any]
     coding_loop: dict[str, Any]
+    rust_equivalence: dict[str, Any]
     comparison: Optional[CorpusComparisonReport]
     target_improvement_pct: float
     require_comparison: bool
@@ -86,6 +93,7 @@ class ReleaseGateReport:
             "lane_scheduling": dict(self.lane_scheduling),
             "context_cache": dict(self.context_cache),
             "coding_loop": dict(self.coding_loop),
+            "rust_equivalence": dict(self.rust_equivalence),
             "target_improvement_pct": float(self.target_improvement_pct),
             "require_comparison": bool(self.require_comparison),
             "passed": bool(self.passed),
@@ -117,6 +125,7 @@ def run_release_gate(
     lane_report = run_lane_contention_benchmark(workspace)
     context_report = run_context_cache_benchmark(workspace)
     coding_report = run_coding_loop_benchmark(workspace)
+    rust_report = run_engine_equivalence_smokecheck(workspace)
 
     comparison: CorpusComparisonReport | None = None
     reasons: list[str] = []
@@ -167,6 +176,15 @@ def run_release_gate(
             "coding_loop: "
             f"p95 total latency {coding_report.p95_total_ms:.2f}ms exceeds gate "
             f"{max_coding_loop_p95_total_ms:.2f}ms"
+        )
+    require_rust_equivalence = bool(getattr(gates, "require_rust_equivalence", False))
+    if not rust_report.passed:
+        details = "; ".join(rust_report.details) or "python/rust equivalence benchmark failed"
+        reasons.append(f"rust_equivalence: {details}")
+    elif require_rust_equivalence and not rust_report.rust_available:
+        reasons.append(
+            "rust_equivalence: rust extension unavailable while "
+            "benchmarks.gates.require_rust_equivalence=true"
         )
 
     if baseline_report is not None:
@@ -222,6 +240,15 @@ def run_release_gate(
             "min_success_rate_gate": min_coding_loop_success_rate,
             "details": list(coding_report.details),
         },
+        rust_equivalence={
+            "passed": bool(rust_report.passed),
+            "rust_available": bool(rust_report.rust_available),
+            "require_rust_equivalence_gate": require_rust_equivalence,
+            "gate_passed": bool(
+                rust_report.passed and (rust_report.rust_available or (not require_rust_equivalence))
+            ),
+            "details": list(rust_report.details),
+        },
         comparison=comparison,
         target_improvement_pct=float(target_improvement_pct),
         require_comparison=bool(require_comparison),
@@ -245,6 +272,7 @@ def run_release_gate_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
         max_context_cache_warm_ms = 999999.0
         min_coding_loop_success_rate_pct = 1.0
         max_coding_loop_p95_total_ms = 999999.0
+        require_rust_equivalence = False
 
     gates = _Gates()
     report = run_release_gate(
@@ -268,6 +296,10 @@ def run_release_gate_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
         errors.append("context_cache summary missing passed field")
     if "passed" not in report.coding_loop:
         errors.append("coding_loop summary missing passed field")
+    if "passed" not in report.rust_equivalence:
+        errors.append("rust_equivalence summary missing passed field")
+    if "gate_passed" not in report.rust_equivalence:
+        errors.append("rust_equivalence summary missing gate_passed field")
     if not isinstance(report.gate_breaches, list):
         errors.append("gate_breaches must be a list")
     if not isinstance(report.breach_counts, dict):
@@ -282,7 +314,7 @@ def write_release_gate_report(path: Path, report: ReleaseGateReport) -> None:
 
 
 def _summarize_gate_breaches(reasons: list[str], max_items: int = 30) -> tuple[list[str], dict[str, int]]:
-    categories = ["local", "corpus", "lane", "context", "coding", "comparison", "other"]
+    categories = ["local", "corpus", "lane", "context", "coding", "rust", "comparison", "other"]
     buckets: dict[str, list[str]] = {k: [] for k in categories}
     for reason in reasons:
         text = str(reason)
@@ -297,6 +329,8 @@ def _summarize_gate_breaches(reasons: list[str], max_items: int = 30) -> tuple[l
             buckets["context"].append(text)
         elif lowered.startswith("coding_loop:"):
             buckets["coding"].append(text)
+        elif lowered.startswith("rust_equivalence:"):
+            buckets["rust"].append(text)
         elif lowered.startswith("comparison:"):
             buckets["comparison"].append(text)
         else:

@@ -115,6 +115,127 @@ fn validate_patch(patch: &str) -> PyResult<(bool, String)> {
     Ok((true, "ok".to_string()))
 }
 
+fn apply_unified_patch_internal(original_text: &str, patch: &str) -> Result<String, String> {
+    let hunk_re = Regex::new(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+        .map_err(|e| format!("Regex error: {e}"))?;
+
+    let src_lines: Vec<String> = {
+        if original_text.is_empty() {
+            Vec::new()
+        } else {
+            let mut out = Vec::new();
+            let mut start = 0usize;
+            for (idx, ch) in original_text.char_indices() {
+                if ch == '\n' {
+                    out.push(original_text[start..=idx].to_string());
+                    start = idx + 1;
+                }
+            }
+            if start < original_text.len() {
+                out.push(original_text[start..].to_string());
+            }
+            out
+        }
+    };
+
+    let diff_lines: Vec<&str> = patch.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut src_idx = 0usize;
+    let mut i = 0usize;
+
+    while i < diff_lines.len() {
+        let line = diff_lines[i];
+        let caps = match hunk_re.captures(line) {
+            Some(v) => v,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        let old_start = caps
+            .get(1)
+            .and_then(|m| m.as_str().parse::<usize>().ok())
+            .unwrap_or(1)
+            .saturating_sub(1);
+
+        if old_start > src_lines.len() {
+            return Err("Patch context points beyond source content".to_string());
+        }
+
+        out.extend_from_slice(&src_lines[src_idx..old_start]);
+        src_idx = old_start;
+        i += 1;
+
+        while i < diff_lines.len() && !diff_lines[i].starts_with("@@") {
+            let line = diff_lines[i];
+            if line.starts_with("--- ") || line.starts_with("+++ ") {
+                i += 1;
+                continue;
+            }
+
+            let (token, body) = if line.is_empty() {
+                (' ', "")
+            } else {
+                let mut chars = line.chars();
+                let token = chars.next().unwrap_or(' ');
+                let body = &line[token.len_utf8()..];
+                (token, body)
+            };
+
+            match token {
+                ' ' => {
+                    if src_idx >= src_lines.len() {
+                        return Err("Patch context mismatch".to_string());
+                    }
+                    let expected = src_lines[src_idx]
+                        .trim_end_matches('\n')
+                        .trim_end_matches('\r');
+                    if expected != body {
+                        return Err("Patch context mismatch".to_string());
+                    }
+                    out.push(src_lines[src_idx].clone());
+                    src_idx += 1;
+                }
+                '-' => {
+                    if src_idx >= src_lines.len() {
+                        return Err("Patch removal mismatch".to_string());
+                    }
+                    let expected = src_lines[src_idx]
+                        .trim_end_matches('\n')
+                        .trim_end_matches('\r');
+                    if expected != body {
+                        return Err("Patch removal mismatch".to_string());
+                    }
+                    src_idx += 1;
+                }
+                '+' => {
+                    out.push(format!("{body}\n"));
+                }
+                '\\' => {}
+                _ => {
+                    return Err(format!("Unsupported diff token: {token}"));
+                }
+            }
+            i += 1;
+        }
+    }
+
+    out.extend_from_slice(&src_lines[src_idx..]);
+    Ok(out.concat())
+}
+
+#[pyfunction]
+fn apply_unified_patch(original_text: String, patch: String) -> PyResult<(bool, String, String)> {
+    let (valid, reason) = validate_patch(&patch)?;
+    if !valid {
+        return Ok((false, "".to_string(), reason));
+    }
+    match apply_unified_patch_internal(&original_text, &patch) {
+        Ok(updated) => Ok((true, updated, "".to_string())),
+        Err(e) => Ok((false, "".to_string(), e)),
+    }
+}
+
 #[pyfunction]
 fn execute_command_argv(
     argv: Vec<String>,
@@ -247,6 +368,7 @@ fn list_dir_entries(path: String) -> PyResult<(bool, Vec<(String, bool)>, String
 fn clawlet_rust_core(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_hash, m)?)?;
     m.add_function(wrap_pyfunction!(validate_patch, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_unified_patch, m)?)?;
     m.add_function(wrap_pyfunction!(execute_command_argv, m)?)?;
     m.add_function(wrap_pyfunction!(read_text_file, m)?)?;
     m.add_function(wrap_pyfunction!(write_text_file, m)?)?;

@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from clawlet.runtime.rust_bridge import apply_unified_patch as rust_apply_unified_patch
 from clawlet.runtime.rust_bridge import validate_patch
 from clawlet.tools.files import _secure_resolve
 from clawlet.tools.registry import BaseTool, ToolResult
@@ -16,8 +17,9 @@ from clawlet.tools.registry import BaseTool, ToolResult
 class ApplyPatchTool(BaseTool):
     """Apply a unified diff patch to a single file."""
 
-    def __init__(self, allowed_dir: Optional[Path] = None):
+    def __init__(self, allowed_dir: Optional[Path] = None, use_rust_core: bool = True):
         self.allowed_dir = allowed_dir
+        self.use_rust_core = use_rust_core
 
     @property
     def name(self) -> str:
@@ -49,13 +51,30 @@ class ApplyPatchTool(BaseTool):
             if error:
                 return ToolResult(success=False, output="", error=error)
 
-            original_lines = resolved_path.read_text(encoding="utf-8").splitlines(keepends=True)
+            engine_used = "python"
+            original_text = resolved_path.read_text(encoding="utf-8")
+            if self.use_rust_core:
+                rust_result = rust_apply_unified_patch(original_text, patch)
+                if rust_result is not None:
+                    ok, updated_text, error = rust_result
+                    if not ok:
+                        return ToolResult(success=False, output="", error=error or "Patch apply error")
+                    resolved_path.write_text(updated_text, encoding="utf-8")
+                    line_count = len(updated_text.splitlines())
+                    engine_used = "rust"
+                    return ToolResult(
+                        success=True,
+                        output=f"Successfully applied patch to {path}",
+                        data={"path": str(resolved_path), "line_count": line_count, "engine": engine_used},
+                    )
+
+            original_lines = original_text.splitlines(keepends=True)
             new_lines = self._apply_unified_diff(original_lines, patch)
             resolved_path.write_text("".join(new_lines), encoding="utf-8")
             return ToolResult(
                 success=True,
                 output=f"Successfully applied patch to {path}",
-                data={"path": str(resolved_path), "line_count": len(new_lines)},
+                data={"path": str(resolved_path), "line_count": len(new_lines), "engine": engine_used},
             )
         except Exception as e:
             return ToolResult(success=False, output="", error=str(e))

@@ -430,6 +430,7 @@ class BenchmarkGatesSettings(BaseModel):
     max_context_cache_warm_ms: float = Field(default=1200.0, ge=1.0)
     min_coding_loop_success_rate_pct: float = Field(default=99.0, ge=0.0, le=100.0)
     max_coding_loop_p95_total_ms: float = Field(default=2500.0, ge=1.0)
+    require_rust_equivalence: bool = False
 
 
 class BenchmarksSettings(BaseModel):

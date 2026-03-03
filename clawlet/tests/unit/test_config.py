@@ -120,6 +120,7 @@ def test_config_default_values():
     assert cfg.benchmarks.gates.max_context_cache_warm_ms == 1200.0
     assert cfg.benchmarks.gates.min_coding_loop_success_rate_pct == 99.0
     assert cfg.benchmarks.gates.max_coding_loop_p95_total_ms == 2500.0
+    assert cfg.benchmarks.gates.require_rust_equivalence is False
     assert cfg.plugins.sdk_version == "2.0.0"
 
 
