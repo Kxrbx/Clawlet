@@ -124,6 +124,9 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
         logger.warning("WebSearchTool: No API key found. Set WEB_SEARCH_API_KEY or BRAVE_SEARCH_API_KEY environment variable.")
     
     registry.register(WebSearchTool(api_key=api_key))
+    registry.register_alias("search_web", "web_search")
+    registry.register_alias("websearch", "web_search")
+    registry.register_alias("brave_search", "web_search")
     
     # Add skill management tools
     registry.register(InstallSkillTool())

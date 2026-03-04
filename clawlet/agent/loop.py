@@ -116,29 +116,53 @@ class AgentLoop:
     }
     INSTALL_KEYWORDS = ("install", "add", "setup", "set up")
     TOOL_INTENT_PATTERNS = [
+        r"\blist\b",
+        r"\bliste\b",
         r"\binstall\b",
         r"\bsearch\b",
+        r"\brecherche\b",
+        r"\bcherche\b",
         r"\bfind\b",
+        r"\btrouve\b",
         r"\blook up\b",
         r"\blatest\b",
         r"\bcurrent\b",
         r"\bnews\b",
+        r"\bweb\b",
         r"\bprice\b",
         r"\bweather\b",
         r"\bstock\b",
         r"\bfile\b",
+        r"\bfiles\b",
         r"\bfolder\b",
+        r"\bfolders\b",
+        r"\bdossier\b",
+        r"\bdossiers\b",
         r"\bdirectory\b",
+        r"\bdirectories\b",
+        r"\bworkspace\b",
+        r"\bespace de travail\b",
+        r"\bcontent\b",
+        r"\bcontents\b",
+        r"\bcontenu\b",
         r"\bread\b",
+        r"\blire\b",
         r"\bwrite\b",
+        r"\bécrire\b",
         r"\bedit\b",
+        r"\bmodifier\b",
         r"\bcreate\b",
+        r"\bcréer\b",
         r"\bdelete\b",
+        r"\bsupprimer\b",
         r"\brun\b",
         r"\bexecute\b",
+        r"\bexécuter\b",
         r"\bcommand\b",
+        r"\bcommande\b",
         r"\bshell\b",
         r"\bgit\b",
+        r"\bgithub\b",
         r"\bclawhub\b",
         r"\bskill\b",
         r"\bapi\b",
@@ -187,11 +211,10 @@ class AgentLoop:
             int(max_tool_calls_per_message or self.MAX_TOOL_CALLS_PER_MESSAGE),
         )
         
-        # Load tool aliases from registry, fall back to class constant for backward compatibility
-        self._tool_aliases = self.tools.get_aliases() if self.tools else {}
-        if not self._tool_aliases:
-            # Use class-level aliases as fallback
-            self._tool_aliases = self.TOOL_ALIASES.copy()
+        # Load registry aliases and merge class defaults for backward compatibility.
+        self._tool_aliases = self.TOOL_ALIASES.copy()
+        if self.tools:
+            self._tool_aliases.update(self.tools.get_aliases())
         logger.info(f"Loaded tool aliases: {self._tool_aliases}")
         
         
@@ -423,7 +446,7 @@ class AgentLoop:
                     await self._publish_outbound_with_retry(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=f"Sorry, I encountered an error: {str(e)}"
+                        content=self._format_user_facing_error(e)
                     ))
             except asyncio.TimeoutError:
                 continue
@@ -585,12 +608,15 @@ class AgentLoop:
         
         for attempt in range(1, max_retries + 1):
             try:
+                request_kwargs: dict[str, object] = {}
+                if enable_tools:
+                    request_kwargs["tools"] = self.tools.to_openai_tools()
+                    request_kwargs["tool_choice"] = "auto"
                 response = await self.provider.complete(
                     messages=messages,
                     model=self.model,
                     temperature=0.7,
-                    tools=self.tools.to_openai_tools() if enable_tools else None,
-                    tool_choice="auto" if enable_tools else None,
+                    **request_kwargs,
                 )
                 # Success: reset error counter
                 self._consecutive_errors = 0
@@ -631,6 +657,32 @@ class AgentLoop:
                 logger.info(f"Retrying in {delay}s...")
                 await asyncio.sleep(delay)
         raise RuntimeError("Unreachable: retry loop exhausted")
+
+    def _format_user_facing_error(self, exc: Exception) -> str:
+        """Map internal exceptions to concise, actionable user-facing messages."""
+        failure = classify_exception(exc)
+        if failure.code in {"provider_rate_limited", "rate_limited"}:
+            return (
+                "The upstream model is temporarily rate-limited (HTTP 429). "
+                f"Provider: {self.provider.name}, model: {self.model}. "
+                "Please retry in a minute or switch to another model."
+            )
+        if failure.code in {
+            "provider_timeout",
+            "provider_connect_error",
+            "provider_read_error",
+            "provider_request_error",
+        }:
+            return (
+                "I could not reach the model provider due to a transient network/provider issue. "
+                "Please try again shortly."
+            )
+        if failure.code in {"provider_client_error", "provider_http_error"}:
+            return (
+                "The model provider rejected the request. "
+                "Please check provider/model configuration and try again."
+            )
+        return f"Sorry, I encountered an error: {str(exc)}"
 
     async def _process_message(self, msg: "InboundMessage") -> Optional["OutboundMessage"]:
         """
@@ -732,8 +784,13 @@ class AgentLoop:
         no_progress_count = 0
         last_signature: Optional[str] = None
         enable_tools = self._should_enable_tools(user_message)
+        tool_gate_promoted = False
+        action_nudge_used = False
         tool_calls_used = 0
         explicit_urls = self._extract_explicit_urls(user_message)
+        explicit_github_url = self._extract_github_url(user_message)
+        install_skill_intent = self._is_skill_install_intent(user_message)
+        action_intent = self._is_action_intent(user_message)
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -753,6 +810,24 @@ class AgentLoop:
                 tool_calls = self._extract_provider_tool_calls(response)
                 if not tool_calls:
                     tool_calls = self._extract_tool_calls(response_content)
+                tool_calls = self._dedupe_tool_calls(tool_calls)
+                if (
+                    not tool_calls
+                    and install_skill_intent
+                    and explicit_github_url
+                    and tool_calls_used == 0
+                    and self.tools.get("install_skill") is not None
+                ):
+                    forced = ToolCall(
+                        id="forced_install_skill_missing_tool_call",
+                        name="install_skill",
+                        arguments={"github_url": explicit_github_url},
+                    )
+                    logger.info(
+                        "Applying install-first policy: model returned no tool call, "
+                        f"forcing install_skill for {explicit_github_url}"
+                    )
+                    tool_calls = [forced]
                 if (
                     not tool_calls
                     and explicit_urls
@@ -797,7 +872,29 @@ class AgentLoop:
                 
                 if tool_calls:
                     if not enable_tools:
+                        if (
+                            not tool_gate_promoted
+                            and self._should_promote_tools_for_parsed_calls(user_message, tool_calls)
+                        ):
+                            logger.info(
+                                "Parsed tool calls while tools were disabled; "
+                                "promoting this request to tools-enabled and retrying"
+                            )
+                            tool_gate_promoted = True
+                            enable_tools = True
+                            continue
                         logger.warning("Ignoring tool calls because tools are disabled for this request")
+                        cleaned = self._strip_tool_call_markup(response_content)
+                        if not cleaned and "<tool_call" in (response_content or "").lower():
+                            cleaned = (
+                                "I detected an action-style tool call but tools are disabled for this turn. "
+                                "Please ask with an explicit action request."
+                            )
+                        if cleaned and cleaned != response_content:
+                            convo.history.append(Message(role="assistant", content=cleaned))
+                            self._queue_persist(convo.session_id, "assistant", cleaned)
+                            final_response = cleaned
+                            break
                         tool_calls = []
 
                 if tool_calls:
@@ -885,6 +982,21 @@ class AgentLoop:
                     # Continue loop to get next response
                     continue
                 
+                # If this looks actionable but the model skipped tools, nudge once and retry.
+                if enable_tools and action_intent and tool_calls_used == 0 and not action_nudge_used:
+                    logger.info("Action intent detected with no tool calls; nudging model to use tools")
+                    action_nudge_used = True
+                    convo.history.append(
+                        Message(
+                            role="system",
+                            content=(
+                                "This request is actionable. Use available tools when needed, "
+                                "then provide the final answer. Do not output tool-call markup."
+                            ),
+                        )
+                    )
+                    continue
+
                 # No tool calls - this is the final response
                 convo.history.append(Message(role="assistant", content=response_content))
                 self._queue_persist(convo.session_id, "assistant", response_content)
@@ -894,7 +1006,7 @@ class AgentLoop:
             except Exception as e:
                 logger.error(f"Error in agent loop iteration {iteration}: {e}")
                 self._save_checkpoint(stage="error", iteration=iteration, notes=str(e))
-                final_response = f"Sorry, I encountered an error: {str(e)}"
+                final_response = self._format_user_facing_error(e)
                 is_error = True
                 break
         
@@ -977,45 +1089,19 @@ class AgentLoop:
         if "skill" not in lowered and "clawhub" not in lowered:
             return None
 
-        target = self._extract_skill_target(user_message)
-        if not target:
-            return "I can install it, but I need the skill name or slug (for example: `install skilltree`)."
-
-        github_url = self._find_github_url_for_target(target, history)
-        if github_url and self.tools.get("install_skill"):
+        direct_github_url = self._extract_github_url(user_message)
+        if direct_github_url and self.tools.get("install_skill"):
             tc = ToolCall(
-                id="direct_install_skill",
+                id="direct_install_skill_url",
                 name="install_skill",
-                arguments={"github_url": github_url},
+                arguments={"github_url": direct_github_url},
             )
             result = await self._execute_tool(tc)
             if result.success:
                 return result.output
             return f"Install failed: {result.error or result.output}"
-
-        slug = self._find_clawhub_slug_for_target(target, history) or self._slugify(target)
-        if not slug:
-            return f"I couldn't resolve a valid slug for '{target}'. Please send the exact slug from Clawhub."
-
-        if self.tools.get("shell"):
-            tc = ToolCall(
-                id="direct_clawhub_install",
-                name="shell",
-                arguments={"command": f"clawhub install {slug}"},
-            )
-            result = await self._execute_tool(tc)
-            if result.success:
-                return f"Installed `{slug}`.\n\n{result.output}"
-            return (
-                f"I couldn't install `{slug}` automatically.\n"
-                f"Error: {result.error or result.output}\n"
-                "If this is a GitHub-based skill, send the repository URL."
-            )
-
-        return (
-            f"I can install `{slug}`, but the shell tool is unavailable in this runtime. "
-            f"Please run `clawhub install {slug}` manually or send a GitHub URL."
-        )
+        # Let the normal reasoning/tool loop handle ambiguous install requests.
+        return None
 
     def _extract_skill_target(self, user_message: str) -> Optional[str]:
         """Extract a likely skill target from natural language install requests."""
@@ -1023,15 +1109,41 @@ class AgentLoop:
         if not text:
             return None
 
-        # Example: "install skilltree", "ok install SkillTree", "please add clawai-town skill"
-        m = re.search(r"(?:install|add|setup|set up)\s+(.+)", text, re.IGNORECASE)
+        # Examples:
+        # "install skilltree", "ok install SkillTree", "please add clawai-town skill"
+        # "installe ce skill ...", "installer skilltree", "ajoute ce skill ..."
+        m = re.search(r"(?:install|installer|installe|add|ajoute|setup|set up)\s+(.+)", text, re.IGNORECASE)
         if not m:
             return None
 
         candidate = m.group(1).strip().strip("`'\".,!?")
-        candidate = re.sub(r"\b(skill|please|now|for me)\b", "", candidate, flags=re.IGNORECASE).strip()
+        candidate = re.sub(
+            r"\b(skill|please|now|for me|ce|cette|le|la|les|moi)\b",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        ).strip()
+        candidate = re.sub(r"https://github\.com/[^\s)]+", "", candidate, flags=re.IGNORECASE).strip()
         candidate = re.sub(r"\s+", " ", candidate).strip(" -")
         return candidate or None
+
+    def _extract_github_url(self, text: str) -> Optional[str]:
+        """Extract first GitHub repo URL from a text snippet."""
+        if not text:
+            return None
+        m = re.search(r"https://github\.com/[^\s)]+", text, re.IGNORECASE)
+        if not m:
+            return None
+        return m.group(0).rstrip(".,)")
+
+    def _is_skill_install_intent(self, text: str) -> bool:
+        """Detect install intent for skills in both EN/FR phrasing."""
+        lowered = (text or "").strip().lower()
+        if not lowered:
+            return False
+        has_install = any(word in lowered for word in ("install", "installer", "installe", "add", "ajoute", "setup", "set up"))
+        has_skill_context = any(word in lowered for word in ("skill", "github", "clawhub"))
+        return has_install and has_skill_context
 
     def _find_github_url_for_target(self, target: str, history: list[Message]) -> Optional[str]:
         """Find a GitHub URL in recent conversation matching the requested target."""
@@ -1066,26 +1178,111 @@ class AgentLoop:
         return slug
 
     def _should_enable_tools(self, user_message: str) -> bool:
-        """Heuristic gate: disable tools for simple conversational requests."""
+        """Enable tools for most requests; disable only trivial chat/acks."""
         text = user_message.strip()
         if not text:
             return False
 
         lowered = text.lower()
-        if lowered in {"hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no"}:
+        if self._is_trivial_chat_message(lowered):
             return False
 
-        for pattern in self.TOOL_INTENT_PATTERNS:
-            if re.search(pattern, lowered, re.IGNORECASE):
-                return True
-
-        # Keep short plain-language prompts tool-free by default.
-        if len(text) <= 120 and "?" in text:
-            return False
-        if len(text) <= 80 and not any(ch.isdigit() for ch in text):
+        if self._is_ack_message(lowered):
             return False
 
         return True
+
+    def _is_trivial_chat_message(self, lowered_text: str) -> bool:
+        """True for short, non-actionable conversational turns."""
+        return lowered_text in {
+            "hi",
+            "hello",
+            "hey",
+            "thanks",
+            "thank you",
+            "ok",
+            "okay",
+            "yes",
+            "no",
+            "how are you",
+            "how are you?",
+        }
+
+    def _is_ack_message(self, lowered_text: str) -> bool:
+        """True for acknowledgements that should not trigger tools."""
+        return lowered_text in {
+            "merci",
+            "thanks",
+            "thank you",
+            "ok merci",
+            "ok thanks",
+            "super",
+            "parfait",
+            "top",
+        }
+
+    def _is_action_intent(self, text: str) -> bool:
+        """Broad detector for requests that likely require taking actions."""
+        lowered = (text or "").strip().lower()
+        if not lowered:
+            return False
+        if self._is_trivial_chat_message(lowered) or self._is_ack_message(lowered):
+            return False
+        for pattern in self.TOOL_INTENT_PATTERNS:
+            if re.search(pattern, lowered, re.IGNORECASE):
+                return True
+        return bool(self.URL_PATTERN.search(lowered))
+
+    def _should_promote_tools_for_parsed_calls(
+        self,
+        user_message: str,
+        tool_calls: list[ToolCall],
+    ) -> bool:
+        """Decide whether to re-run with tools enabled after parser detected tool calls."""
+        if not tool_calls:
+            return False
+
+        lowered = (user_message or "").strip().lower()
+        if not lowered or self._is_trivial_chat_message(lowered):
+            return False
+
+        # Only promote when parsed calls are to known tools (or aliases).
+        for tc in tool_calls:
+            mapped = self._tool_aliases.get(tc.name, tc.name)
+            if self.tools.get(mapped) is None:
+                return False
+
+        # Require at least one action cue in the user's message.
+        action_cues = (
+            "list", "liste", "show", "read", "lire", "open", "find", "trouve",
+            "search", "recherche", "look up", "run", "execute", "exécuter",
+            "workspace", "espace de travail", "file", "folder", "dossier", "directory",
+            "web", "contenu", "content",
+            "url", "http://", "https://", "install", "create", "edit", "write",
+        )
+        return any(cue in lowered for cue in action_cues)
+
+    def _dedupe_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolCall]:
+        """Remove duplicate tool calls while preserving original order."""
+        out: list[ToolCall] = []
+        seen: set[str] = set()
+        for tc in tool_calls:
+            try:
+                key = f"{tc.name}:{json.dumps(tc.arguments or {}, sort_keys=True, default=str)}"
+            except Exception:
+                key = f"{tc.name}:{str(tc.arguments)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(tc)
+        return out
+
+    def _strip_tool_call_markup(self, content: str) -> str:
+        """Remove tool-call markup blocks from plain text model responses."""
+        text = content or ""
+        text = re.sub(r"<tool_call>[\s\S]*?</tool_call>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        return text
 
     def _extract_explicit_urls(self, user_message: str) -> list[str]:
         """Extract normalized explicit URLs from user message."""

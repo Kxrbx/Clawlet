@@ -104,14 +104,71 @@ class OpenRouterProvider(BaseProvider):
             response.raise_for_status()
             
             data = response.json()
-            
-            # Check for tool_calls in response
-            message = data["choices"][0]["message"]
-            tool_calls_response = message.get("tool_calls")
-            
-            content = message.get("content") or ""
-            usage = data.get("usage", {})
-            finish_reason = data["choices"][0].get("finish_reason", "stop")
+
+            # OpenRouter can return non-standard payloads for some providers/models.
+            # Handle common alternatives and return clear errors for operator diagnosis.
+            if isinstance(data, dict) and "error" in data:
+                error_payload = data.get("error")
+                if isinstance(error_payload, dict):
+                    error_message = (
+                        error_payload.get("message")
+                        or error_payload.get("type")
+                        or str(error_payload)
+                    )
+                else:
+                    error_message = str(error_payload)
+                raise RuntimeError(f"OpenRouter API error payload: {error_message}")
+
+            choices = data.get("choices") if isinstance(data, dict) else None
+            choice0 = choices[0] if isinstance(choices, list) and choices else {}
+            message = choice0.get("message") if isinstance(choice0, dict) else {}
+            tool_calls_response = message.get("tool_calls") if isinstance(message, dict) else None
+
+            content = ""
+            if isinstance(message, dict):
+                msg_content = message.get("content")
+                if isinstance(msg_content, str):
+                    content = msg_content
+                elif isinstance(msg_content, list):
+                    # Some providers emit structured content blocks.
+                    text_parts: list[str] = []
+                    for item in msg_content:
+                        if isinstance(item, dict) and isinstance(item.get("text"), str):
+                            text_parts.append(item["text"])
+                    content = "".join(text_parts)
+
+            if not content and isinstance(choice0, dict):
+                # Legacy completion-compatible responses sometimes use `text`.
+                content = choice0.get("text") or ""
+
+            if not content and isinstance(data, dict):
+                # Compatibility with response-style payloads.
+                output = data.get("output")
+                if isinstance(output, list):
+                    text_parts: list[str] = []
+                    for item in output:
+                        if not isinstance(item, dict):
+                            continue
+                        for c in item.get("content", []) if isinstance(item.get("content"), list) else []:
+                            if isinstance(c, dict) and isinstance(c.get("text"), str):
+                                text_parts.append(c["text"])
+                    content = "".join(text_parts)
+
+            usage = data.get("usage", {}) if isinstance(data, dict) else {}
+            finish_reason = (
+                choice0.get("finish_reason", "stop")
+                if isinstance(choice0, dict)
+                else "stop"
+            )
+
+            if not content and not tool_calls_response:
+                keys = list(data.keys()) if isinstance(data, dict) else [type(data).__name__]
+                body_preview = mask_secrets(response.text)
+                if len(body_preview) > 500:
+                    body_preview = body_preview[:500] + "... [truncated]"
+                raise RuntimeError(
+                    f"OpenRouter response missing parseable content. keys={keys}, body={body_preview}"
+                )
             
             logger.info(f"OpenRouter response: {len(content)} chars, {usage.get('total_tokens', 0)} tokens")
             

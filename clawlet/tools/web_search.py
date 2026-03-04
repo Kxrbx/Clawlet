@@ -31,6 +31,9 @@ class WebSearchTool(BaseTool):
     """
     
     API_URL = "https://api.search.brave.com/res/v1/web/search"
+    MIN_RESULTS = 1
+    MAX_RESULTS = 20
+    MAX_RETRIES = 2
     
     def __init__(
         self,
@@ -63,12 +66,6 @@ class WebSearchTool(BaseTool):
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Async context manager exit - cleanup resources."""
         await self.close()
-    
-    async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client:
-            await self._client.aclose()
-            self._client = None
     
     @property
     def name(self) -> str:
@@ -114,91 +111,116 @@ class WebSearchTool(BaseTool):
                 output="",
                 error="Brave Search API key not configured. Set WEB_SEARCH_API_KEY or BRAVE_SEARCH_API_KEY environment variable, or configure in config.yaml."
             )
-        
-        count = count or self.max_results
-        
+
+        query = (query or "").strip()
+        if not query:
+            return ToolResult(success=False, output="", error="Search query cannot be empty")
+
+        resolved_count = count if count is not None else self.max_results
         try:
-            # Initialize client if needed
-            if self._client is None:
-                self._client = httpx.AsyncClient(timeout=self.timeout)
-            
-            # Make request
-            response = await self._client.get(
-                self.API_URL,
-                headers={
-                    "Accept": "application/json",
-                    "Accept-Encoding": "gzip",
-                    "X-Subscription-Token": self.api_key,
-                },
-                params={
-                    "q": query,
-                    "count": count,
-                }
-            )
-            
-            if response.status_code == 401:
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error="Invalid API key for Brave Search"
+            resolved_count = int(resolved_count)
+        except (TypeError, ValueError):
+            resolved_count = self.max_results
+        resolved_count = max(self.MIN_RESULTS, min(self.MAX_RESULTS, resolved_count))
+
+        # Initialize client if needed
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+
+        # Retry transient network failures once (useful for intermittent DNS/connect hiccups)
+        last_network_error: Optional[Exception] = None
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                response = await self._client.get(
+                    self.API_URL,
+                    headers={
+                        "Accept": "application/json",
+                        "Accept-Encoding": "gzip",
+                        "X-Subscription-Token": self.api_key,
+                    },
+                    params={
+                        "q": query,
+                        "count": resolved_count,
+                    },
                 )
-            
-            if response.status_code == 429:
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error="Brave Search rate limit exceeded"
-                )
-            
-            response.raise_for_status()
-            
-            # Parse results
-            data = response.json()
-            results = self._parse_results(data)
-            
-            if not results:
+
+                if response.status_code == 401:
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error="Invalid API key for Brave Search",
+                    )
+
+                if response.status_code == 429:
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error="Brave Search rate limit exceeded",
+                    )
+
+                if response.status_code >= 400:
+                    preview = (response.text or "").strip().replace("\n", " ")
+                    if len(preview) > 240:
+                        preview = preview[:240] + "... [truncated]"
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"Brave Search HTTP {response.status_code}: {preview}",
+                    )
+
+                data = response.json()
+                results = self._parse_results(data)
+
+                if not results:
+                    return ToolResult(
+                        success=True,
+                        output="No results found.",
+                        data={"query": query, "results": []},
+                    )
+
+                output_lines = [f"## Search: {query}\n"]
+                for i, result in enumerate(results, 1):
+                    output_lines.append(f"**{i}. {result.title}**")
+                    output_lines.append(f"   {result.url}")
+                    output_lines.append(f"   {result.description}\n")
+
                 return ToolResult(
                     success=True,
-                    output="No results found.",
-                    data={"query": query, "results": []}
+                    output="\n".join(output_lines),
+                    data={
+                        "query": query,
+                        "results": [
+                            {
+                                "title": r.title,
+                                "url": r.url,
+                                "description": r.description,
+                            }
+                            for r in results
+                        ],
+                    },
                 )
-            
-            # Format output
-            output_lines = [f"## Search: {query}\n"]
-            for i, result in enumerate(results, 1):
-                output_lines.append(f"**{i}. {result.title}**")
-                output_lines.append(f"   {result.url}")
-                output_lines.append(f"   {result.description}\n")
-            
-            return ToolResult(
-                success=True,
-                output="\n".join(output_lines),
-                data={
-                    "query": query,
-                    "results": [
-                        {
-                            "title": r.title,
-                            "url": r.url,
-                            "description": r.description,
-                        }
-                        for r in results
-                    ]
-                }
-            )
-            
-        except httpx.TimeoutException:
+            except httpx.TimeoutException as e:
+                last_network_error = e
+                logger.warning(f"Web search timeout (attempt {attempt}/{self.MAX_RETRIES})")
+            except httpx.RequestError as e:
+                last_network_error = e
+                logger.warning(f"Web search request error (attempt {attempt}/{self.MAX_RETRIES}): {e}")
+
+            if attempt < self.MAX_RETRIES:
+                await asyncio.sleep(0.4 * attempt)
+
+        if last_network_error is not None:
             return ToolResult(
                 success=False,
                 output="",
-                error="Search request timed out"
+                error=f"Search failed due to network error: {last_network_error}",
             )
-        except Exception as e:
-            logger.error(f"Web search error: {e}")
-            return ToolResult(
-                success=False,
-                output="",
-                error=f"Search failed: {str(e)}"
-            )
+
+        return ToolResult(
+            success=False,
+            output="",
+            error="Search failed for an unknown reason",
+        )
     
     def _parse_results(self, data: dict) -> list[SearchResult]:
         """Parse Brave Search API response."""
@@ -223,7 +245,7 @@ class WebSearchTool(BaseTool):
         return results
     
     async def close(self) -> None:
-        """Close HTTP client."""
+        """Close the HTTP client."""
         if self._client:
             await self._client.aclose()
             self._client = None
