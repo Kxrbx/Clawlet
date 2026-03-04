@@ -23,7 +23,7 @@ anthropic>=0.18.0
 httpx>=0.25.0
 
 # Channels
-python-telegram-bot>=20.0
+python-telegram-bot>=21.11.1,<22
 discord.py>=2.3.0
 slack_bolt>=1.18.0
 twilio>=8.0.0
@@ -34,6 +34,3 @@ croniter>=1.4.0
 # Storage
 aiosqlite>=0.19.0
 asyncpg>=0.29.0
-
-# Web Search
-brave-search>=0.1.0

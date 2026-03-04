@@ -77,7 +77,7 @@ class ToolCallParser:
             logger.debug("No tool call indicators found in response, skipping regex matching")
             return []
         
-        tool_calls = []
+        tool_calls: list[ParsedToolCall] = []
         
         # Try most common formats first (JSON blocks and XML) for better hit rate
         json_calls = self._parse_json_blocks(content)
@@ -91,6 +91,7 @@ class ToolCallParser:
         tool_calls.extend(xml_calls)
         tool_calls.extend(simple_calls)
         tool_calls.extend(mcp_calls)
+        tool_calls = self._dedupe(tool_calls)
         
         if tool_calls:
             logger.info(f"Extracted {len(tool_calls)} tool call(s)")
@@ -109,10 +110,26 @@ class ToolCallParser:
             True if any indicator is found, False otherwise
         """
         # Use simple string search for performance (faster than regex)
+        lowered = content.lower()
         for indicator in self.TOOL_CALL_INDICATORS:
-            if indicator in content:
+            if indicator in lowered:
                 return True
         return False
+
+    def _dedupe(self, tool_calls: list[ParsedToolCall]) -> list[ParsedToolCall]:
+        """Remove duplicate parsed calls across overlapping parser formats."""
+        out: list[ParsedToolCall] = []
+        seen: set[str] = set()
+        for call in tool_calls:
+            try:
+                key = f"{call.name}:{json.dumps(call.arguments or {}, sort_keys=True, default=str)}"
+            except Exception:
+                key = f"{call.name}:{str(call.arguments)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(call)
+        return out
     
     def _parse_json_blocks(self, content: str) -> list[ParsedToolCall]:
         """Parse JSON blocks from content.

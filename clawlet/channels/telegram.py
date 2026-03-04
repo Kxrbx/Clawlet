@@ -6,6 +6,7 @@ import asyncio
 import re
 from typing import Optional
 from collections import defaultdict
+from importlib.metadata import PackageNotFoundError, version
 
 from loguru import logger
 from telegram import Update
@@ -53,7 +54,8 @@ def convert_markdown_to_html(text: str) -> str:
     
     # Italic (*...* or _..._) -> <i>...</i> (being careful not to match already bold)
     text = re.sub(r'(?<![*_])\*([^*]+)\*(?![*_])', r'<i>\1</i>', text)
-    text = re.sub(r'(?<![*_])_([^_]+)_(?![*_])', r'<i>\1</i>', text)
+    # Avoid turning snake_case or escaped tags into italics (e.g., tool_call).
+    text = re.sub(r'(?<![\w*_])_([^_\n]+)_(?![\w*_])', r'<i>\1</i>', text)
     
     # Links [text](url) -> <a href="url">text</a>
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
@@ -128,6 +130,16 @@ class TelegramChannel(BaseChannel):
             
             logger.info("Telegram channel started successfully")
         except Exception as e:
+            if isinstance(e, AttributeError) and "_Updater__polling_cleanup_cb" in str(e):
+                try:
+                    ptb_version = version("python-telegram-bot")
+                except PackageNotFoundError:
+                    ptb_version = "unknown"
+                logger.error(
+                    "Telegram startup failed due to an incompatible python-telegram-bot build "
+                    f"(detected version={ptb_version}). "
+                    "Reinstall with: pip install -U 'python-telegram-bot>=21.11.1,<22'"
+                )
             logger.error(f"DEBUG: Exception during Telegram start: {type(e).__name__}: {e}")
             # Don't re-raise - let the caller decide what to do
             # But set _running to False to prevent issues
