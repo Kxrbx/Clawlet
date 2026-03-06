@@ -59,17 +59,19 @@ def test_agent_loop_processes_message(agent_loop, temp_workspace, event_loop):
     event_loop.run_until_complete(asyncio.sleep(0.5))
     
     # Verify storage (DB)
-    import aiosqlite
+    import sqlite3
     db_path = temp_workspace / "clawlet.db"
     assert db_path.exists()
-    
-    async def check_db():
-        async with aiosqlite.connect(db_path) as db:
-            cursor = await db.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (agent_loop._session_id,))
-            count = (await cursor.fetchone())[0]
-            return count
-    
-    count = event_loop.run_until_complete(check_db())
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (agent_loop._session_id,),
+        )
+        count = int(cursor.fetchone()[0])
+    finally:
+        conn.close()
     assert count >= 2  # user and assistant messages stored
     
     # Verify MEMORY.md was written (by checking file exists and contains something)
@@ -458,6 +460,30 @@ def test_does_not_schedule_autonomous_followup_when_response_is_question(agent_l
     assert response is not None
     assert "Would you like me to proceed?" in response.content
     assert agent_loop.bus.inbound_size == 0
+
+
+def test_suppresses_trivial_heartbeat_ack(agent_loop):
+    from clawlet.bus.queue import OutboundMessage
+
+    response = OutboundMessage(
+        channel="test",
+        chat_id="hb-1",
+        content="HEARTBEAT_OK",
+        metadata={"heartbeat": True, "ack_max_chars": 24},
+    )
+    assert agent_loop._should_suppress_outbound(response) is True
+
+
+def test_does_not_suppress_non_trivial_heartbeat_message(agent_loop):
+    from clawlet.bus.queue import OutboundMessage
+
+    response = OutboundMessage(
+        channel="test",
+        chat_id="hb-2",
+        content="I checked updates and queued a follow-up on the release gate failures.",
+        metadata={"heartbeat": True, "ack_max_chars": 24},
+    )
+    assert agent_loop._should_suppress_outbound(response) is False
 
 
 def test_process_message_writes_runtime_events(agent_loop, temp_workspace, event_loop):

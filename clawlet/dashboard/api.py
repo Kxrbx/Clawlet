@@ -8,6 +8,7 @@ import asyncio
 import os
 import subprocess
 import secrets
+import json
 from pathlib import Path
 from collections import deque
 
@@ -18,10 +19,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List
 import uvicorn
+import yaml
 
 from loguru import logger
 
 from clawlet import Config, load_config
+from clawlet.config import HeartbeatSettings, SchedulerSettings
 from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
 from clawlet.providers.models_cache import get_models_cache
@@ -163,7 +166,9 @@ def get_dashboard_token() -> str:
     """Get or generate dashboard API token."""
     global DASHBOARD_TOKEN
     if DASHBOARD_TOKEN is None:
-        token_env = os.environ.get("CLawlet_DASHBOARD_TOKEN")
+        token_env = os.environ.get("CLAWLET_DASHBOARD_TOKEN") or os.environ.get(
+            "CLawlet_DASHBOARD_TOKEN"
+        )
         if token_env:
             DASHBOARD_TOKEN = token_env
         else:
@@ -171,7 +176,8 @@ def get_dashboard_token() -> str:
             # In production, this should be persisted in config
             DASHBOARD_TOKEN = secrets.token_urlsafe(32)
             logger.warning(
-                f"Generated random dashboard token (set CLawlet_DASHBOARD_TOKEN to persist): {DASHBOARD_TOKEN}"
+                "Generated random dashboard token "
+                f"(set CLAWLET_DASHBOARD_TOKEN to persist): {DASHBOARD_TOKEN}"
             )
     return DASHBOARD_TOKEN
 
@@ -576,6 +582,86 @@ async def get_console_output(token: str = Depends(verify_api_token)):
 async def get_metrics(token: str = Depends(verify_api_token)):
     """Prometheus-style metrics endpoint."""
     return Response(content=format_prometheus(), media_type="text/plain")
+
+
+def _read_automation_status(workspace: Path) -> dict:
+    """Collect heartbeat/scheduler status from config and persisted run logs."""
+    config_path = workspace / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    heartbeat_cfg = HeartbeatSettings(**(raw.get("heartbeat") or {}))
+    scheduler_raw = raw.get("scheduler") or {}
+    if not scheduler_raw and "tasks" in raw:
+        scheduler_raw = {"tasks": raw.get("tasks") or {}}
+    scheduler_cfg = SchedulerSettings(**scheduler_raw)
+
+    runs_dir = Path(scheduler_cfg.runs_dir).expanduser()
+    run_files = list(runs_dir.glob("*.jsonl")) if runs_dir.exists() else []
+    total_runs = 0
+    failed_runs = 0
+    last_completed_at = None
+
+    for run_file in run_files:
+        try:
+            with open(run_file, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    total_runs += 1
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(entry.get("status")) == "failed":
+                        failed_runs += 1
+                    completed = entry.get("completed_at")
+                    if completed and (last_completed_at is None or str(completed) > str(last_completed_at)):
+                        last_completed_at = completed
+        except Exception:
+            continue
+
+    tasks = scheduler_cfg.tasks or {}
+    enabled_tasks = sum(1 for t in tasks.values() if t.enabled)
+
+    return {
+        "workspace": str(workspace),
+        "heartbeat": {
+            "enabled": heartbeat_cfg.enabled,
+            "interval_minutes": heartbeat_cfg.interval_minutes,
+            "target": heartbeat_cfg.target,
+            "quiet_hours_start": heartbeat_cfg.quiet_hours_start,
+            "quiet_hours_end": heartbeat_cfg.quiet_hours_end,
+        },
+        "scheduler": {
+            "enabled": scheduler_cfg.enabled,
+            "timezone": scheduler_cfg.timezone,
+            "total_tasks": len(tasks),
+            "enabled_tasks": enabled_tasks,
+            "jobs_file": scheduler_cfg.jobs_file,
+            "runs_dir": scheduler_cfg.runs_dir,
+            "run_files": len(run_files),
+            "total_runs": total_runs,
+            "failed_runs": failed_runs,
+            "last_completed_at": last_completed_at,
+        },
+    }
+
+
+@app.get("/automation/status")
+async def get_automation_status(token: str = Depends(verify_api_token)):
+    """Get heartbeat/scheduler operational status for dashboard operators."""
+    workspace = Path.home() / ".clawlet"
+    try:
+        return _read_automation_status(workspace)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load automation status: {e}")
 
 
 @app.get("/")

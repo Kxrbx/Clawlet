@@ -28,6 +28,8 @@ from clawlet.heartbeat.cron_scheduler import (
     parse_priority,
     create_task_from_config,
 )
+from clawlet.heartbeat.runner import HeartbeatRunner, LastRoute
+from clawlet.heartbeat.proactive_queue import ProactiveQueueWorker
 
 __all__ = [
     # Legacy heartbeat scheduler
@@ -47,4 +49,7 @@ __all__ = [
     "parse_interval",
     "parse_priority",
     "create_task_from_config",
+    "HeartbeatRunner",
+    "LastRoute",
+    "ProactiveQueueWorker",
 ]

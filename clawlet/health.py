@@ -4,9 +4,13 @@ Health check system for monitoring agent status.
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from enum import Enum
+import json
+from pathlib import Path
+
+import yaml
 
 from loguru import logger
 
@@ -101,7 +105,7 @@ class HealthChecker:
         
         return {
             "status": overall.value,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "checks": [r.to_dict() for r in results],
         }
     
@@ -114,7 +118,7 @@ class HealthChecker:
                 message="No provider configured",
             )
         
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         
         try:
             # Try a minimal completion
@@ -127,7 +131,7 @@ class HealthChecker:
                 timeout=5.0,
             )
             
-            latency = (datetime.utcnow() - start).total_seconds() * 1000
+            latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
             
             return HealthCheckResult(
                 name="provider",
@@ -159,7 +163,7 @@ class HealthChecker:
                 message="No storage configured (using in-memory)",
             )
         
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         
         try:
             # Try a simple read operation
@@ -170,7 +174,7 @@ class HealthChecker:
                 # Fallback - try to read something
                 pass
             
-            latency = (datetime.utcnow() - start).total_seconds() * 1000
+            latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
             
             backend_type = type(self.storage).__name__
             
@@ -269,14 +273,72 @@ async def quick_health_check() -> dict:
     
     Returns basic system status.
     """
+    checks = [
+        {
+            "name": "system",
+            "status": "healthy",
+            "message": "System operational",
+        }
+    ]
+    overall = "healthy"
+
+    workspace = Path.home() / ".clawlet"
+    config_path = workspace / "config.yaml"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            scheduler = raw.get("scheduler") or {}
+            heartbeat = raw.get("heartbeat") or {}
+            tasks = (scheduler.get("tasks") or {}) if isinstance(scheduler, dict) else {}
+
+            runs_dir = Path(str(scheduler.get("runs_dir") or "~/.clawlet/cron/runs")).expanduser()
+            failed_recent = 0
+            total_recent = 0
+            if runs_dir.exists():
+                for run_file in runs_dir.glob("*.jsonl"):
+                    with open(run_file, "r", encoding="utf-8") as f:
+                        lines = [ln.strip() for ln in f if ln.strip()]
+                    for line in lines[-10:]:
+                        total_recent += 1
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if str(entry.get("status")) == "failed":
+                            failed_recent += 1
+
+            queue_backlog = 0
+            queue_path = Path(str(heartbeat.get("proactive_queue_path") or "tasks/QUEUE.md"))
+            if not queue_path.is_absolute():
+                queue_path = workspace / queue_path
+            if queue_path.exists():
+                text = queue_path.read_text(encoding="utf-8")
+                queue_backlog = sum(1 for ln in text.splitlines() if "- [ ]" in ln)
+
+            status = "healthy"
+            msg = f"tasks={len(tasks)} backlog={queue_backlog} failed_recent={failed_recent}/{total_recent}"
+            if failed_recent >= 3:
+                status = "degraded"
+                msg = f"Repeated scheduler failures detected: {msg}"
+            elif queue_backlog >= 20:
+                status = "degraded"
+                msg = f"Proactive backlog growth detected: {msg}"
+            checks.append({"name": "automation", "status": status, "message": msg})
+            if status != "healthy":
+                overall = "degraded"
+        except Exception as e:
+            checks.append(
+                {
+                    "name": "automation",
+                    "status": "degraded",
+                    "message": f"Automation health check error: {e}",
+                }
+            )
+            overall = "degraded"
+
     return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "checks": [
-            {
-                "name": "system",
-                "status": "healthy",
-                "message": "System operational",
-            }
-        ]
+        "status": overall,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
     }

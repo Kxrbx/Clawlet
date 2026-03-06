@@ -1,8 +1,6 @@
-"""
-Storage backend interfaces and SQLite implementation.
-"""
+"""Storage backend interfaces and SQLite implementation."""
 
-import aiosqlite
+import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -61,17 +59,16 @@ class SQLiteStorage(StorageBackend):
     
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._db: Optional[aiosqlite.Connection] = None
+        self._db: Optional[sqlite3.Connection] = None
         
     async def initialize(self) -> None:
         """Initialize the database."""
         # Ensure directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        self._db = await aiosqlite.connect(self.db_path, timeout=30.0)
-        
-        # Create tables
-        await self._db.execute("""
+
+        self._db = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        self._db.execute(
+            """
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -79,65 +76,77 @@ class SQLiteStorage(StorageBackend):
                 content TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_session 
+            """
+        )
+        self._db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_messages_session
             ON messages(session_id, created_at DESC)
-        """)
-        
-        await self._db.commit()
+            """
+        )
+        self._db.commit()
         logger.info(f"SQLite storage initialized at {self.db_path}")
     
     async def store_message(self, session_id: str, role: str, content: str) -> int:
         """Store a message."""
-        cursor = await self._db.execute(
+        if self._db is None:
+            raise RuntimeError("Database not initialized")
+
+        cursor = self._db.execute(
             "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-            (session_id, role, content)
+            (session_id, role, content),
         )
-        await self._db.commit()
-        return cursor.lastrowid
+        self._db.commit()
+        return int(cursor.lastrowid)
     
     async def get_messages(self, session_id: str, limit: int = 100) -> List[Message]:
         """Get messages for a session in chronological order."""
-        cursor = await self._db.execute(
+        if self._db is None:
+            raise RuntimeError("Database not initialized")
+
+        cursor = self._db.execute(
             """
-            SELECT id, session_id, role, content, created_at 
-            FROM messages 
-            WHERE session_id = ? 
-            ORDER BY created_at ASC, id ASC 
+            SELECT id, session_id, role, content, created_at
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY created_at ASC, id ASC
             LIMIT ?
             """,
-            (session_id, limit)
+            (session_id, limit),
         )
-        
-        rows = await cursor.fetchall()
-        
-        messages = []
-        for row in rows:  # Already in chronological order
-            messages.append(Message(
-                id=row[0],
-                session_id=row[1],
-                role=row[2],
-                content=row[3],
-                created_at=datetime.fromisoformat(row[4])
-            ))
-        
+        rows = cursor.fetchall()
+
+        messages: list[Message] = []
+        for row in rows:
+            messages.append(
+                Message(
+                    id=row[0],
+                    session_id=row[1],
+                    role=row[2],
+                    content=row[3],
+                    created_at=datetime.fromisoformat(row[4]),
+                )
+            )
         return messages
     
     async def clear_messages(self, session_id: str) -> int:
         """Clear all messages for a session."""
-        cursor = await self._db.execute(
+        if self._db is None:
+            raise RuntimeError("Database not initialized")
+
+        cursor = self._db.execute(
             "DELETE FROM messages WHERE session_id = ?",
-            (session_id,)
+            (session_id,),
         )
-        await self._db.commit()
-        return cursor.rowcount
+        self._db.commit()
+        return int(cursor.rowcount)
     
     async def close(self) -> None:
         """Close the database connection."""
         if self._db:
-            await self._db.close()
+            db = self._db
+            self._db = None
+            db.close()
             logger.info("SQLite storage closed")
     
     def is_initialized(self) -> bool:
@@ -149,6 +158,6 @@ class SQLiteStorage(StorageBackend):
         if not self._db:
             raise RuntimeError("Database not initialized")
         try:
-            await self._db.execute("SELECT 1")
+            self._db.execute("SELECT 1")
         except Exception as e:
             raise RuntimeError(f"DB health check failed: {e}")

@@ -4,7 +4,7 @@ Models cache service with daily updates.
 import json
 import asyncio
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 import httpx
 from loguru import logger
@@ -70,7 +70,7 @@ class ModelsCache:
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
         
         cache_data = {
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
             "models": models
         }
         
@@ -88,7 +88,9 @@ class ModelsCache:
         
         try:
             updated = datetime.fromisoformat(updated_at)
-            return datetime.utcnow() - updated > CACHE_DURATION
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            return datetime.now(timezone.utc) - updated > CACHE_DURATION
         except ValueError:
             return True
     
