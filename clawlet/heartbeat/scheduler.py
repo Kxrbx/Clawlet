@@ -4,7 +4,7 @@ Heartbeat scheduler for periodic tasks.
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Any
 from enum import Enum
 import json
@@ -126,7 +126,7 @@ class HeartbeatScheduler:
     
     async def _check_and_run_tasks(self) -> None:
         """Check for pending tasks and run them."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Sort by priority (high first)
         pending = [
@@ -169,7 +169,7 @@ class HeartbeatScheduler:
     
     def get_status(self) -> dict:
         """Get scheduler status."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         tasks_status = []
         for task in self._tasks.values():
@@ -225,7 +225,10 @@ class HeartbeatScheduler:
             for name, task_state in state.get("tasks", {}).items():
                 if name in self._tasks:
                     if task_state.get("last_run"):
-                        self._tasks[name].last_run = datetime.fromisoformat(task_state["last_run"])
+                        parsed = datetime.fromisoformat(task_state["last_run"])
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        self._tasks[name].last_run = parsed
                     self._tasks[name].last_result = task_state.get("last_result")
             
             logger.debug(f"Loaded heartbeat state from {path}")

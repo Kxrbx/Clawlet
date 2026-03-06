@@ -171,6 +171,9 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     from clawlet.agent.loop import AgentLoop
     from clawlet.bus.queue import MessageBus
     from clawlet.config import load_config
+    from clawlet.heartbeat.proactive_queue import ProactiveQueueWorker
+    from clawlet.heartbeat import Scheduler, create_task_from_config
+    from clawlet.heartbeat.runner import HeartbeatRunner
 
     identity_loader = IdentityLoader(workspace)
     identity = identity_loader.load_all()
@@ -196,6 +199,61 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         storage_config=config.storage,
         runtime_config=config.runtime,
     )
+
+    heartbeat_runner = None
+    heartbeat_task = None
+    proactive_worker = None
+    scheduler = None
+    scheduler_task = None
+    sched_cfg = config.scheduler
+    if getattr(sched_cfg, "enabled", False):
+        scheduler = Scheduler(
+            timezone=sched_cfg.timezone,
+            max_concurrent=sched_cfg.max_concurrent,
+            check_interval=float(sched_cfg.check_interval),
+            state_file=sched_cfg.state_file,
+            jobs_file=sched_cfg.jobs_file,
+            runs_dir=sched_cfg.runs_dir,
+            message_bus=bus,
+            tool_registry=tools,
+            skill_registry=None,
+        )
+        for task_id, task_cfg in sched_cfg.tasks.items():
+            scheduler.add_task(create_task_from_config(task_id, task_cfg))
+        scheduler_task = asyncio.create_task(scheduler.start())
+        logger.info("Scheduler initialized")
+
+    hb_cfg = config.heartbeat
+    if getattr(hb_cfg, "proactive_enabled", False):
+        proactive_worker = ProactiveQueueWorker(
+            bus=bus,
+            workspace=workspace,
+            queue_path=hb_cfg.proactive_queue_path,
+            handoff_dir=hb_cfg.proactive_handoff_dir,
+            max_turns_per_hour=hb_cfg.proactive_max_turns_per_hour,
+            max_tool_calls_per_cycle=hb_cfg.proactive_max_tool_calls_per_cycle,
+        )
+
+    async def _heartbeat_tick_hook(now):
+        if scheduler is not None:
+            await scheduler.on_heartbeat_tick(now)
+        if proactive_worker is not None:
+            await proactive_worker.on_heartbeat_tick(now)
+
+    if getattr(hb_cfg, "enabled", False):
+        heartbeat_runner = HeartbeatRunner(
+            bus=bus,
+            interval_minutes=hb_cfg.interval_minutes,
+            quiet_hours_start=hb_cfg.quiet_hours_start,
+            quiet_hours_end=hb_cfg.quiet_hours_end,
+            target=hb_cfg.target,
+            ack_max_chars=hb_cfg.ack_max_chars,
+            route_provider=agent.get_last_route,
+            heartbeat_context=identity.build_heartbeat_context(),
+            on_tick=_heartbeat_tick_hook,
+        )
+        heartbeat_task = asyncio.create_task(heartbeat_runner.start())
+        logger.info("Heartbeat runner initialized")
 
     runtime_channel = None
     if channel == "telegram":
@@ -227,14 +285,46 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_agent(agent, runtime_channel, s)))
+        loop.add_signal_handler(
+            sig,
+            lambda s=sig: asyncio.create_task(
+                shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_task, s)
+            ),
+        )
 
-    await agent.run()
+    try:
+        await agent.run()
+    finally:
+        if scheduler is not None:
+            await scheduler.stop()
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            try:
+                await scheduler_task
+            except asyncio.CancelledError:
+                pass
+        if heartbeat_runner is not None:
+            heartbeat_runner.stop()
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
 
-async def shutdown_agent(agent, runtime_channel, signum):
+async def shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_task, signum):
     """Shutdown agent gracefully on signal."""
     logger.info(f"Received signal {signum}, shutting down...")
+
+    if heartbeat_runner is not None:
+        heartbeat_runner.stop()
+    if heartbeat_task is not None:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
 
     if runtime_channel is not None:
         try:

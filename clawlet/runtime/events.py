@@ -20,6 +20,16 @@ EVENT_PROVIDER_FAILED = "ProviderFailed"
 EVENT_STORAGE_FAILED = "StorageFailed"
 EVENT_CHANNEL_FAILED = "ChannelFailed"
 EVENT_RUN_COMPLETED = "RunCompleted"
+EVENT_SCHEDULED_RUN_STARTED = "ScheduledRunStarted"
+EVENT_SCHEDULED_RUN_COMPLETED = "ScheduledRunCompleted"
+EVENT_SCHEDULED_RUN_FAILED = "ScheduledRunFailed"
+
+# Scheduled-run payload keys (contract).
+SCHED_PAYLOAD_JOB_ID = "job_id"
+SCHED_PAYLOAD_RUN_ID = "scheduled_run_id"
+SCHED_PAYLOAD_SOURCE = "source"
+SCHED_PAYLOAD_SESSION_TARGET = "session_target"
+SCHED_PAYLOAD_WAKE_MODE = "wake_mode"
 
 
 @dataclass(slots=True)

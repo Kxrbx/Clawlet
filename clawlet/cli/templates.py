@@ -109,6 +109,15 @@ _Heartbeats help your agent stay proactive._
 """
 
 
+def get_queue_template() -> str:
+    return """# QUEUE.md - Proactive Task Queue
+
+- [ ] [P1] Review pending alerts and triage critical blockers.
+- [ ] [P2] Improve one small reliability issue in the current workspace.
+- [ ] [P3] Clean up stale notes and summarize progress.
+"""
+
+
 def get_config_template() -> str:
     return """# Clawlet Configuration
 
@@ -173,9 +182,44 @@ agent:
 
 # Heartbeat Settings
 heartbeat:
+  enabled: false
   interval_minutes: 120
   quiet_hours_start: 2  # 2am UTC
   quiet_hours_end: 9    # 9am UTC
+  target: "last"        # "last" or "main"
+  ack_max_chars: 24
+  send_reasoning: false
+  proactive_enabled: false
+  proactive_queue_path: "tasks/QUEUE.md"
+  proactive_handoff_dir: "memory/proactive"
+  proactive_max_turns_per_hour: 4
+  proactive_max_tool_calls_per_cycle: 3
+
+# Scheduler Settings (cron/interval jobs)
+scheduler:
+  enabled: false
+  timezone: "UTC"
+  max_concurrent: 3
+  check_interval: 60
+  state_file: "~/.clawlet/scheduler_state.json"
+  jobs_file: "~/.clawlet/cron/jobs.json"
+  runs_dir: "~/.clawlet/cron/runs"
+  tasks:
+    daily_summary:
+      name: "Daily Summary"
+      action: "agent"
+      cron: "0 18 * * *"
+      timezone: "UTC"
+      session_target: "main"
+      wake_mode: "now"
+      delivery_mode: "announce"
+      prompt: "Generate a concise summary of today's activity."
+      priority: "normal"
+      retry:
+        max_attempts: 3
+        delay_seconds: 60
+        backoff_multiplier: 2.0
+        max_delay_seconds: 3600
 
 # Runtime v2 Settings
 runtime:

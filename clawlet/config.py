@@ -341,9 +341,154 @@ class AgentSettings(BaseModel):
 
 class HeartbeatSettings(BaseModel):
     """Heartbeat settings."""
+    enabled: bool = False
+    every: Optional[str] = None  # legacy/upstream-style cadence, e.g. "2h"
+    active_hours: Optional[str] = None  # legacy/upstream-style hours, e.g. "9-18"
     interval_minutes: int = Field(default=120, ge=10, le=1440)
     quiet_hours_start: int = Field(default=2, ge=0, le=23)
     quiet_hours_end: int = Field(default=9, ge=0, le=23)
+    target: Literal["last", "main"] = "last"
+    ack_max_chars: int = Field(default=24, ge=1, le=500)
+    send_reasoning: bool = False
+    proactive_enabled: bool = False
+    proactive_queue_path: str = "tasks/QUEUE.md"
+    proactive_handoff_dir: str = "memory/proactive"
+    proactive_max_turns_per_hour: int = Field(default=4, ge=1, le=60)
+    proactive_max_tool_calls_per_cycle: int = Field(default=3, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def normalize_legacy_heartbeat_fields(self):
+        """Normalize legacy heartbeat fields with compatibility warnings."""
+        if self.every:
+            try:
+                from clawlet.heartbeat.cron_scheduler import parse_interval
+
+                td = parse_interval(str(self.every))
+                minutes = max(10, int(td.total_seconds() // 60))
+                if minutes != self.interval_minutes:
+                    self.interval_minutes = minutes
+                    logger.warning(
+                        "heartbeat.every is deprecated; normalized to heartbeat.interval_minutes"
+                    )
+            except Exception:
+                logger.warning(
+                    f"heartbeat.every='{self.every}' could not be parsed; keeping interval_minutes={self.interval_minutes}"
+                )
+        if self.active_hours and "-" in str(self.active_hours):
+            try:
+                start_raw, end_raw = str(self.active_hours).split("-", 1)
+                start = int(start_raw.strip()) % 24
+                end = int(end_raw.strip()) % 24
+                self.quiet_hours_start = end
+                self.quiet_hours_end = start
+                logger.warning(
+                    "heartbeat.active_hours is deprecated; normalized to quiet_hours_start/quiet_hours_end"
+                )
+            except Exception:
+                logger.warning(
+                    f"heartbeat.active_hours='{self.active_hours}' could not be parsed; keeping quiet hours unchanged"
+                )
+        return self
+
+
+class SchedulerRetrySettings(BaseModel):
+    """Retry policy for scheduled tasks."""
+
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    delay_seconds: float = Field(default=60.0, ge=0.0, le=86400.0)
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    max_delay_seconds: float = Field(default=3600.0, ge=0.0, le=86400.0)
+
+
+class SchedulerFailureAlertSettings(BaseModel):
+    """Failure alert policy for scheduled tasks."""
+
+    enabled: bool = False
+    after: int = Field(default=3, ge=1, le=100)
+    cooldown_seconds: int = Field(default=3600, ge=0, le=604800)
+    mode: Literal["announce", "webhook"] = "announce"
+    channel: str = "scheduler"
+    to: str = "main"
+
+
+class SchedulerTaskConfig(BaseModel):
+    """Configuration for one scheduled task."""
+
+    name: str
+    action: Literal["agent", "tool", "webhook", "health_check", "skill", "callback"] = "agent"
+    enabled: bool = True
+
+    # Routing and execution semantics (upstream-aligned contract).
+    agent_id: Optional[str] = None
+    session_key: Optional[str] = None
+    session_target: Literal["main", "isolated"] = "main"
+    wake_mode: Literal["now", "next_heartbeat"] = "now"
+    delivery_mode: Literal["announce", "none", "webhook"] = "none"
+    delivery_channel: Optional[str] = None
+    best_effort_delivery: bool = False
+    delete_after_run: bool = False
+
+    # Schedule expression (exactly one may be set).
+    cron: Optional[str] = None
+    interval: Optional[str] = None  # e.g. "15m", "2h"
+    one_time: Optional[str] = None  # ISO-8601
+    timezone: str = "UTC"
+
+    # Action parameters
+    prompt: Optional[str] = None
+    tool: Optional[str] = None
+    webhook_url: Optional[str] = None
+    webhook_method: str = "POST"
+    skill: Optional[str] = None
+    checks: list[str] = Field(default_factory=list)
+    params: dict = Field(default_factory=dict)
+
+    # Scheduling controls
+    priority: Literal["low", "normal", "high", "critical"] = "normal"
+    depends_on: list[str] = Field(default_factory=list)
+    notify_on_success: bool = False
+    notify_on_failure: bool = True
+    failure_alert: SchedulerFailureAlertSettings = Field(default_factory=SchedulerFailureAlertSettings)
+    tags: list[str] = Field(default_factory=list)
+    retry: SchedulerRetrySettings = Field(default_factory=SchedulerRetrySettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wake_mode_aliases(cls, data):
+        """Accept upstream wake-mode spelling and normalize internally."""
+        if not isinstance(data, dict):
+            return data
+        wake_mode = data.get("wake_mode")
+        if isinstance(wake_mode, str) and wake_mode.strip().lower() == "next-heartbeat":
+            data["wake_mode"] = "next_heartbeat"
+        return data
+
+    @model_validator(mode="after")
+    def validate_schedule_mode(self):
+        """Require at most one schedule mode."""
+        schedule_modes = sum([
+            self.cron is not None,
+            self.interval is not None,
+            self.one_time is not None,
+        ])
+        if schedule_modes > 1:
+            raise ValueError(
+                f"Task '{self.name}' can only set one of: cron, interval, one_time"
+            )
+        return self
+
+
+class SchedulerSettings(BaseModel):
+    """Top-level scheduler settings."""
+
+    enabled: bool = False
+    timezone: str = "UTC"
+    max_concurrent: int = Field(default=3, ge=1, le=64)
+    check_interval: int = Field(default=60, ge=1, le=3600)
+    state_file: str = "~/.clawlet/scheduler_state.json"
+    jobs_file: str = "~/.clawlet/cron/jobs.json"
+    runs_dir: str = "~/.clawlet/cron/runs"
+    tasks: dict[str, SchedulerTaskConfig] = Field(default_factory=dict)
 
 
 class RateLimitSettings(BaseModel):
@@ -466,6 +611,7 @@ class Config(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
+    scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
@@ -492,6 +638,12 @@ class Config(BaseModel):
             if 'discord' not in data['channels'] or not data['channels'].get('discord'):
                 data['channels']['discord'] = data['discord']
             del data['discord']
+
+        # Legacy scheduling shape support:
+        # - top-level `tasks` -> `scheduler.tasks`
+        if 'tasks' in data and 'scheduler' not in data:
+            data['scheduler'] = {"tasks": data['tasks']}
+            del data['tasks']
         
         super().__init__(**data)
     

@@ -35,6 +35,14 @@ from clawlet.runtime import (
     EVENT_PROVIDER_FAILED,
     EVENT_RUN_COMPLETED,
     EVENT_RUN_STARTED,
+    EVENT_SCHEDULED_RUN_COMPLETED,
+    EVENT_SCHEDULED_RUN_FAILED,
+    EVENT_SCHEDULED_RUN_STARTED,
+    SCHED_PAYLOAD_JOB_ID,
+    SCHED_PAYLOAD_RUN_ID,
+    SCHED_PAYLOAD_SESSION_TARGET,
+    SCHED_PAYLOAD_SOURCE,
+    SCHED_PAYLOAD_WAKE_MODE,
     EVENT_STORAGE_FAILED,
     DeterministicToolRuntime,
     RecoveryManager,
@@ -250,6 +258,8 @@ class AgentLoop:
         self._current_chat_id = ""
         self._current_user_id = ""
         self._current_user_name = ""
+        self._current_source = ""
+        self._last_route: dict[str, str] = {}
         self._conversations: dict[str, ConversationState] = {}
         self._pending_confirmations: dict[str, dict] = {}
         
@@ -501,6 +511,12 @@ class AgentLoop:
         seed = f"{self.workspace.resolve()}::{channel}::{chat_id}"
         return hashlib.md5(seed.encode()).hexdigest()[:12]
 
+    def get_last_route(self) -> Optional[dict[str, str]]:
+        """Return best-effort last active route for heartbeat target='last'."""
+        if not self._last_route.get("channel") or not self._last_route.get("chat_id"):
+            return None
+        return dict(self._last_route)
+
     async def _get_conversation_state(self, channel: str, chat_id: str) -> ConversationState:
         """Get or create conversation state for an inbound channel/chat."""
         key = f"{channel}:{chat_id}"
@@ -698,6 +714,10 @@ class AgentLoop:
         channel = msg.channel
         chat_id = msg.chat_id
         metadata = msg.metadata or {}
+        source = str(metadata.get("source", "") or "")
+        is_heartbeat = bool(metadata.get("heartbeat")) or source == "heartbeat"
+        heartbeat_ack_max_chars = int(metadata.get("ack_max_chars", 24) or 24)
+        scheduled_payload = self._scheduled_payload_from_metadata(metadata, source, is_heartbeat)
         is_internal_autonomous = bool(metadata.get("internal_autonomous_followup"))
         autonomous_depth = int(metadata.get("autonomous_followup_depth", 0))
         convo = await self._get_conversation_state(channel, chat_id)
@@ -708,6 +728,13 @@ class AgentLoop:
         self._current_chat_id = chat_id
         self._current_user_id = str(msg.user_id or "")
         self._current_user_name = str(msg.user_name or "")
+        self._current_source = source
+        self._last_route = {
+            "channel": channel,
+            "chat_id": chat_id,
+            "user_id": self._current_user_id,
+            "user_name": self._current_user_name,
+        }
         self._current_run_id = self._next_run_id(convo.session_id)
         self._save_checkpoint(stage="run_started", iteration=0, notes="Inbound message accepted")
         self._emit_runtime_event(
@@ -720,9 +747,17 @@ class AgentLoop:
                 "engine_resolved": self._runtime_engine,
                 "recovery_resume_from": metadata.get("recovery_run_id", ""),
                 "recovery_resume": bool(metadata.get("recovery_resume")),
+                "source": source,
+                "heartbeat": is_heartbeat,
                 "message_preview": user_message[:200],
             },
         )
+        if scheduled_payload is not None:
+            self._emit_runtime_event(
+                EVENT_SCHEDULED_RUN_STARTED,
+                session_id=convo.session_id,
+                payload=scheduled_payload,
+            )
         
         # Get metrics instance
         metrics = get_metrics()
@@ -747,8 +782,27 @@ class AgentLoop:
                 session_id=convo.session_id,
                 payload={"iterations": 0, "is_error": False, "response_preview": approval_response[:200]},
             )
+            if scheduled_payload is not None:
+                self._emit_runtime_event(
+                    EVENT_SCHEDULED_RUN_COMPLETED,
+                    session_id=convo.session_id,
+                    payload={**scheduled_payload, "is_error": False, "response_preview": approval_response[:200]},
+                )
             self._complete_checkpoint()
-            return OutboundMessage(channel=channel, chat_id=chat_id, content=approval_response)
+            return OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=approval_response,
+                metadata={
+                    "source": source,
+                    "heartbeat": is_heartbeat,
+                    "ack_max_chars": heartbeat_ack_max_chars,
+                    SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
+                    SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
+                    SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
+                    SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
+                },
+            )
         
         # Add to history. Internal autonomous prompts are system context, not user content.
         if is_internal_autonomous:
@@ -767,11 +821,26 @@ class AgentLoop:
                 session_id=convo.session_id,
                 payload={"iterations": 0, "is_error": False, "response_preview": direct_install_response[:200]},
             )
+            if scheduled_payload is not None:
+                self._emit_runtime_event(
+                    EVENT_SCHEDULED_RUN_COMPLETED,
+                    session_id=convo.session_id,
+                    payload={**scheduled_payload, "is_error": False, "response_preview": direct_install_response[:200]},
+                )
             self._complete_checkpoint()
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
                 content=direct_install_response,
+                metadata={
+                    "source": source,
+                    "heartbeat": is_heartbeat,
+                    "ack_max_chars": heartbeat_ack_max_chars,
+                    SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
+                    SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
+                    SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
+                    SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
+                },
             )
         
         # Trim history periodically
@@ -864,7 +933,7 @@ class AgentLoop:
                     no_progress_count = 0
                 last_signature = signature
 
-                if no_progress_count >= self.NO_PROGRESS_LIMIT:
+                if no_progress_count >= self.NO_PROGRESS_LIMIT and not tool_calls:
                     logger.warning("Stopping loop due to repeated no-progress model responses")
                     final_response = "I am stuck repeating the same step. Please refine your request."
                     is_error = True
@@ -1064,6 +1133,17 @@ class AgentLoop:
                 "response_preview": final_response[:200],
             },
         )
+        if scheduled_payload is not None:
+            self._emit_runtime_event(
+                EVENT_SCHEDULED_RUN_FAILED if is_error else EVENT_SCHEDULED_RUN_COMPLETED,
+                session_id=convo.session_id,
+                payload={
+                    **scheduled_payload,
+                    "iterations": iteration,
+                    "is_error": is_error,
+                    "response_preview": final_response[:200],
+                },
+            )
         if is_error:
             self._save_checkpoint(stage="interrupted", iteration=iteration, notes=final_response[:400])
         else:
@@ -1072,7 +1152,35 @@ class AgentLoop:
             channel=channel,
             chat_id=chat_id,
             content=final_response,
+            metadata={
+                "source": source,
+                "heartbeat": is_heartbeat,
+                "ack_max_chars": heartbeat_ack_max_chars,
+                SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
+                SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
+                SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
+                SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
+            },
         )
+
+    def _scheduled_payload_from_metadata(
+        self,
+        metadata: dict,
+        source: str,
+        is_heartbeat: bool,
+    ) -> Optional[dict[str, str]]:
+        """Build scheduled-run payload from inbound metadata when applicable."""
+        if source not in {"heartbeat", "scheduler"} and not is_heartbeat:
+            return None
+
+        payload = {
+            SCHED_PAYLOAD_JOB_ID: str(metadata.get(SCHED_PAYLOAD_JOB_ID) or ("heartbeat" if is_heartbeat else "scheduler")),
+            SCHED_PAYLOAD_RUN_ID: str(metadata.get(SCHED_PAYLOAD_RUN_ID) or f"sched-{uuid4().hex[:12]}"),
+            SCHED_PAYLOAD_SOURCE: str(metadata.get(SCHED_PAYLOAD_SOURCE) or source or "scheduler"),
+            SCHED_PAYLOAD_SESSION_TARGET: str(metadata.get(SCHED_PAYLOAD_SESSION_TARGET) or "main"),
+            SCHED_PAYLOAD_WAKE_MODE: str(metadata.get(SCHED_PAYLOAD_WAKE_MODE) or ("next_heartbeat" if is_heartbeat else "now")),
+        }
+        return payload
 
     async def _maybe_handle_direct_skill_install(
         self,
@@ -1184,10 +1292,15 @@ class AgentLoop:
             return False
 
         lowered = text.lower()
+        normalized = lowered.rstrip("!?. ").strip()
         if self._is_trivial_chat_message(lowered):
+            return False
+        if normalized and self._is_trivial_chat_message(normalized):
             return False
 
         if self._is_ack_message(lowered):
+            return False
+        if normalized and self._is_ack_message(normalized):
             return False
 
         return True
@@ -1597,6 +1710,10 @@ class AgentLoop:
         out: list[tuple[ToolCall, ToolResult]] = []
         for mode, chunk in self._plan_tool_execution_groups(tool_calls):
             if mode == "parallel":
+                self._tool_stats["parallel_batches"] = int(self._tool_stats.get("parallel_batches", 0)) + 1
+                self._tool_stats["parallel_batch_tools"] = int(self._tool_stats.get("parallel_batch_tools", 0)) + len(
+                    chunk
+                )
                 out.extend(await self._execute_tool_batch_parallel(chunk))
                 continue
             self._tool_stats["serial_batches"] = int(self._tool_stats.get("serial_batches", 0)) + 1
@@ -1619,10 +1736,6 @@ class AgentLoop:
         logger.info(
             f"Executing {len(tool_calls)} read-only tool calls in parallel batch "
             f"(max_parallel={limit})"
-        )
-        self._tool_stats["parallel_batches"] = int(self._tool_stats.get("parallel_batches", 0)) + 1
-        self._tool_stats["parallel_batch_tools"] = int(self._tool_stats.get("parallel_batch_tools", 0)) + len(
-            tool_calls
         )
         results = await asyncio.gather(*[_run(tc) for tc in tool_calls])
         return list(zip(tool_calls, results))
@@ -1778,6 +1891,13 @@ class AgentLoop:
 
     async def _publish_outbound_with_retry(self, response: "OutboundMessage") -> bool:
         """Publish outbound messages with bounded retries and structured failure telemetry."""
+        if self._should_suppress_outbound(response):
+            logger.info(
+                f"Suppressed low-value heartbeat outbound for {response.channel}/{response.chat_id}"
+            )
+            get_metrics().inc_heartbeat_acks_suppressed()
+            return True
+
         retries = max(0, int(self.runtime_config.outbound_publish_retries))
         backoff = max(0.0, float(self.runtime_config.outbound_publish_backoff_seconds))
         attempts = retries + 1
@@ -1805,6 +1925,24 @@ class AgentLoop:
                     return False
                 if backoff > 0:
                     await asyncio.sleep(backoff * attempt)
+        return False
+
+    def _should_suppress_outbound(self, response: "OutboundMessage") -> bool:
+        """Suppress trivial heartbeat acknowledgements."""
+        metadata = getattr(response, "metadata", {}) or {}
+        if not bool(metadata.get("heartbeat")):
+            return False
+
+        text = (getattr(response, "content", "") or "").strip()
+        if not text:
+            return True
+        if text == "HEARTBEAT_OK":
+            return True
+
+        ack_max_chars = int(metadata.get("ack_max_chars", 24) or 24)
+        # Short single-line heartbeat acknowledgements are low signal.
+        if len(text) <= ack_max_chars and "\n" not in text:
+            return True
         return False
     
     def clear_history(self) -> None:

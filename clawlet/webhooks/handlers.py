@@ -10,7 +10,7 @@ import hmac
 import json
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, Any, Awaitable, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -303,7 +303,7 @@ class StripeHandler(WebhookHandler):
         # Check timestamp to prevent replay attacks
         try:
             event_time = int(timestamp)
-            current_time = int(datetime.utcnow().timestamp())
+            current_time = int(datetime.now(timezone.utc).timestamp())
             if abs(current_time - event_time) > self.SIGNATURE_TOLERANCE:
                 logger.warning("Stripe webhook timestamp outside tolerance")
                 return False

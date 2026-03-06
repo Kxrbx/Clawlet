@@ -260,7 +260,7 @@ def reexecute_run(
             )
             continue
 
-        if not allow_write and name not in READ_ONLY_TOOLS:
+        if not allow_write and mode != "read_only":
             report.skipped += 1
             report.details.append(
                 ReexecutionDetail(

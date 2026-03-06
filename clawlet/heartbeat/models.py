@@ -27,6 +27,25 @@ class TaskAction(Enum):
     CALLBACK = "callback"     # Execute a Python callback function
 
 
+class SessionTarget(Enum):
+    """Where scheduled work should execute."""
+    MAIN = "main"
+    ISOLATED = "isolated"
+
+
+class WakeMode(Enum):
+    """When a due job should be delivered to the agent."""
+    NOW = "now"
+    NEXT_HEARTBEAT = "next_heartbeat"
+
+
+class DeliveryMode(Enum):
+    """How to deliver scheduled job outcomes."""
+    ANNOUNCE = "announce"
+    NONE = "none"
+    WEBHOOK = "webhook"
+
+
 class TaskStatus(Enum):
     """Status of a scheduled task."""
     PENDING = "pending"

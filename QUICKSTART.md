@@ -241,6 +241,13 @@ clawlet dashboard
 | `clawlet health` | Run health checks |
 | `clawlet validate` | Validate config |
 | `clawlet config` | View configuration |
+| `clawlet cron list` | List scheduler jobs |
+| `clawlet cron add` | Add scheduler job |
+| `clawlet cron edit` | Edit scheduler job |
+| `clawlet cron pause/resume` | Pause/resume scheduler job |
+| `clawlet cron run-now` | Execute a scheduler job immediately |
+| `clawlet cron runs` | Inspect scheduler run history |
+| `clawlet migrate-heartbeat` | Normalize legacy heartbeat keys |
 | `clawlet --help` | Show all commands |
 
 ---
@@ -256,9 +263,51 @@ After setup, your workspace (`~/.clawlet/`) contains:
 ├── USER.md          # Your information
 ├── MEMORY.md        # Long-term memory
 ├── HEARTBEAT.md     # Periodic tasks
+├── tasks/
+│   └── QUEUE.md     # Proactive queue
 └── memory/          # Memory storage
     └── *.db         # SQLite database
 ```
+
+---
+
+## Automation Examples
+
+### Daily Summary Job
+
+```bash
+clawlet cron add daily_summary \
+  --name "Daily Summary" \
+  --action agent \
+  --cron "0 18 * * *" \
+  --prompt "Generate a concise daily summary." \
+  --delivery-mode announce
+```
+
+### Health Check Job
+
+```bash
+clawlet cron add api_health \
+  --name "API Health" \
+  --action health_check \
+  --interval "15m" \
+  --checks "provider,storage"
+```
+
+### Autonomous Improvement Cycle
+
+1. Enable proactive heartbeat in `config.yaml`:
+
+```yaml
+heartbeat:
+  enabled: true
+  proactive_enabled: true
+  proactive_queue_path: "tasks/QUEUE.md"
+```
+
+2. Add tasks to `~/.clawlet/tasks/QUEUE.md`.
+3. Start agent: `clawlet agent`.
+4. Monitor: `clawlet cron runs --all --limit 100`.
 
 ---
 

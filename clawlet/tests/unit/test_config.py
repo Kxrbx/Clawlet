@@ -7,13 +7,13 @@ import yaml
 import pytest
 
 from clawlet.config import (
-    Config, 
-    StorageConfig, 
-    SQLiteConfig, 
-    ProviderConfig, 
+    Config,
+    StorageConfig,
+    SQLiteConfig,
+    ProviderConfig,
     OpenRouterConfig,
     AgentSettings,
-    HeartbeatSettings
+    HeartbeatSettings,
 )
 from clawlet.plugins.conformance import check_plugin_conformance
 from clawlet.plugins.matrix import run_plugin_conformance_matrix
@@ -105,7 +105,12 @@ def test_config_default_values():
     assert cfg.provider.primary == "openrouter"
     assert cfg.storage.backend == "sqlite"
     assert cfg.agent.max_iterations == 10
+    assert cfg.heartbeat.enabled is False
     assert cfg.heartbeat.interval_minutes == 120
+    assert cfg.heartbeat.target == "last"
+    assert cfg.heartbeat.ack_max_chars == 24
+    assert cfg.heartbeat.proactive_enabled is False
+    assert cfg.heartbeat.proactive_queue_path == "tasks/QUEUE.md"
     assert cfg.runtime.engine == "hybrid_rust"
     assert cfg.runtime.enable_parallel_read_batches is True
     assert cfg.runtime.max_parallel_read_tools == 4
@@ -164,6 +169,173 @@ def test_runtime_max_parallel_read_tools_bounds():
         )
 
 
+def test_scheduler_task_schema_loads():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "config.yaml"
+        config_data = {
+            "provider": {
+                "primary": "openrouter",
+                "openrouter": {
+                    "api_key": "test-key-123",
+                    "model": "anthropic/claude-3.5-sonnet",
+                },
+            },
+            "scheduler": {
+                "enabled": True,
+                "timezone": "UTC",
+                "tasks": {
+                    "daily_summary": {
+                        "name": "Daily Summary",
+                        "action": "agent",
+                        "cron": "0 18 * * *",
+                        "session_target": "main",
+                        "wake_mode": "now",
+                        "delivery_mode": "announce",
+                        "prompt": "Summarize today's activity.",
+                    }
+                },
+            },
+        }
+        config_path.write_text(yaml.dump(config_data))
+
+        config = Config.from_yaml(config_path)
+        assert config.scheduler.enabled is True
+        assert "daily_summary" in config.scheduler.tasks
+        task = config.scheduler.tasks["daily_summary"]
+        assert task.name == "Daily Summary"
+        assert task.session_target == "main"
+        assert task.wake_mode == "now"
+        assert task.delivery_mode == "announce"
+
+
+def test_scheduler_task_wake_mode_accepts_upstream_alias():
+    provider = ProviderConfig()
+    storage = StorageConfig()
+    agent_settings = AgentSettings()
+    heartbeat_settings = HeartbeatSettings()
+
+    cfg = Config(
+        provider=provider,
+        storage=storage,
+        agent=agent_settings,
+        heartbeat=heartbeat_settings,
+        scheduler={
+            "tasks": {
+                "job": {
+                    "name": "Job",
+                    "action": "agent",
+                    "interval": "1h",
+                    "wake_mode": "next-heartbeat",
+                }
+            }
+        },
+    )
+    assert cfg.scheduler.tasks["job"].wake_mode == "next_heartbeat"
+
+
+def test_scheduler_task_supports_advanced_openclaw_fields():
+    provider = ProviderConfig()
+    storage = StorageConfig()
+    agent_settings = AgentSettings()
+    heartbeat_settings = HeartbeatSettings()
+
+    cfg = Config(
+        provider=provider,
+        storage=storage,
+        agent=agent_settings,
+        heartbeat=heartbeat_settings,
+        scheduler={
+            "tasks": {
+                "job": {
+                    "name": "Job",
+                    "action": "agent",
+                    "interval": "1h",
+                    "agent_id": "agent-a",
+                    "session_key": "session-a",
+                    "delete_after_run": True,
+                    "best_effort_delivery": True,
+                    "failure_alert": {
+                        "enabled": True,
+                        "after": 2,
+                        "cooldown_seconds": 60,
+                        "mode": "announce",
+                        "channel": "scheduler",
+                        "to": "main",
+                    },
+                }
+            }
+        },
+    )
+    task = cfg.scheduler.tasks["job"]
+    assert task.agent_id == "agent-a"
+    assert task.session_key == "session-a"
+    assert task.delete_after_run is True
+    assert task.best_effort_delivery is True
+    assert task.failure_alert.enabled is True
+    assert task.failure_alert.after == 2
+
+
+def test_scheduler_task_rejects_multiple_schedule_modes():
+    provider = ProviderConfig()
+    storage = StorageConfig()
+    agent_settings = AgentSettings()
+    heartbeat_settings = HeartbeatSettings()
+
+    with pytest.raises(ValueError, match="only set one of: cron, interval, one_time"):
+        Config(
+            provider=provider,
+            storage=storage,
+            agent=agent_settings,
+            heartbeat=heartbeat_settings,
+            scheduler={
+                "tasks": {
+                    "bad_task": {
+                        "name": "Bad Task",
+                        "action": "agent",
+                        "cron": "0 9 * * *",
+                        "interval": "1h",
+                    }
+                }
+            },
+        )
+
+
+def test_heartbeat_legacy_every_and_active_hours_are_normalized():
+    provider = ProviderConfig(primary="openrouter", openrouter=OpenRouterConfig(api_key="k", model="m"))
+    storage = StorageConfig()
+    agent_settings = AgentSettings()
+    heartbeat_settings = HeartbeatSettings(every="90m", active_hours="8-20")
+
+    cfg = Config(provider=provider, storage=storage, agent=agent_settings, heartbeat=heartbeat_settings)
+    assert cfg.heartbeat.interval_minutes == 90
+    assert cfg.heartbeat.quiet_hours_start == 20
+    assert cfg.heartbeat.quiet_hours_end == 8
+
+
+def test_legacy_top_level_tasks_are_normalized_to_scheduler():
+    provider = ProviderConfig()
+    storage = StorageConfig()
+    agent_settings = AgentSettings()
+    heartbeat_settings = HeartbeatSettings()
+
+    config = Config(
+        provider=provider,
+        storage=storage,
+        agent=agent_settings,
+        heartbeat=heartbeat_settings,
+        tasks={
+            "legacy_task": {
+                "name": "Legacy Task",
+                "action": "agent",
+                "cron": "0 12 * * *",
+            }
+        },
+    )
+
+    assert "legacy_task" in config.scheduler.tasks
+    assert config.scheduler.tasks["legacy_task"].name == "Legacy Task"
+
+
 class _GoodPlugin(PluginTool):
     def __init__(self):
         super().__init__(ToolSpec(name="good_plugin", description="ok plugin"))
@@ -203,21 +375,21 @@ def test_plugin_matrix_aggregates_results():
         bad.mkdir(parents=True, exist_ok=True)
 
         (good / "plugin.py").write_text(
-            "from clawlet.plugins import PluginTool, ToolInput, ToolOutput, ToolSpec\\n"
-            "class GoodTool(PluginTool):\\n"
-            "    def __init__(self):\\n"
-            "        super().__init__(ToolSpec(name='good_tool', description='good'))\\n"
-            "    async def execute_with_context(self, tool_input: ToolInput, context) -> ToolOutput:\\n"
-            "        return ToolOutput(output='ok')\\n"
-            "TOOLS=[GoodTool()]\\n",
+            "from clawlet.plugins import PluginTool, ToolInput, ToolOutput, ToolSpec\n"
+            "class GoodTool(PluginTool):\n"
+            "    def __init__(self):\n"
+            "        super().__init__(ToolSpec(name='good_tool', description='good'))\n"
+            "    async def execute_with_context(self, tool_input: ToolInput, context) -> ToolOutput:\n"
+            "        return ToolOutput(output='ok')\n"
+            "TOOLS=[GoodTool()]\n",
             encoding="utf-8",
         )
         (bad / "plugin.py").write_text(
-            "from clawlet.plugins import PluginTool, ToolSpec\\n"
-            "class BadTool(PluginTool):\\n"
-            "    def __init__(self):\\n"
-            "        super().__init__(ToolSpec(name='bad_tool', description='bad', sdk_version='1.0.0'))\\n"
-            "TOOLS=[BadTool()]\\n",
+            "from clawlet.plugins import PluginTool, ToolSpec\n"
+            "class BadTool(PluginTool):\n"
+            "    def __init__(self):\n"
+            "        super().__init__(ToolSpec(name='bad_tool', description='bad', sdk_version='1.0.0'))\n"
+            "TOOLS=[BadTool()]\n",
             encoding="utf-8",
         )
 
