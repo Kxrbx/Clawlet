@@ -56,3 +56,17 @@ def test_memory_save_and_load(temp_workspace):
     assert memory_file.exists()
     content = memory_file.read_text()
     assert "persist_key" in content or "Persisted value" in content
+
+
+def test_runtime_registry_can_include_memory_tools(temp_workspace):
+    from clawlet.agent.memory import MemoryManager
+    from clawlet.tools import create_default_tool_registry
+
+    memory = MemoryManager(temp_workspace)
+    registry = create_default_tool_registry(allowed_dir=str(temp_workspace), memory_manager=memory)
+    names = {tool.name for tool in registry.all_tools()}
+
+    assert "remember" in names
+    assert "recall" in names
+    assert "forget" in names
+    assert "get_context" in names

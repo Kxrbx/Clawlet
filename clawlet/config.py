@@ -257,6 +257,11 @@ class TelegramConfig(BaseModel):
     """Telegram channel configuration."""
     enabled: bool = False
     token: str = ""
+    stream_mode: Literal["off", "progress", "verbose_debug"] = "progress"
+    stream_update_interval_seconds: float = Field(default=1.5, ge=0.2, le=30.0)
+    disable_web_page_preview: bool = True
+    use_reply_keyboard: bool = True
+    register_commands: bool = True
     
     @field_validator('token')
     @classmethod
@@ -624,20 +629,22 @@ class Config(BaseModel):
     def __init__(self, **data):
         # Handle root-level telegram/discord fields by moving them to channels dict
         # This makes the config adaptive to both formats
-        if 'channels' not in data:
-            data['channels'] = {}
+        channels_data = dict(data.get('channels') or {})
         
         # If telegram is at root level, move it to channels
         if 'telegram' in data:
-            if 'telegram' not in data['channels'] or not data['channels'].get('telegram'):
-                data['channels']['telegram'] = data['telegram']
+            if 'telegram' not in channels_data or not channels_data.get('telegram'):
+                channels_data['telegram'] = data['telegram']
             del data['telegram']
         
         # If discord is at root level, move it to channels
         if 'discord' in data:
-            if 'discord' not in data['channels'] or not data['channels'].get('discord'):
-                data['channels']['discord'] = data['discord']
+            if 'discord' not in channels_data or not channels_data.get('discord'):
+                channels_data['discord'] = data['discord']
             del data['discord']
+        
+        if channels_data:
+            data['channels'] = channels_data
 
         # Legacy scheduling shape support:
         # - top-level `tasks` -> `scheduler.tasks`
