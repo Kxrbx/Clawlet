@@ -93,7 +93,7 @@ def get_heartbeat_template() -> str:
 This file defines tasks your agent performs periodically.
 
 ## Check Interval
-Every 2 hours
+Every 30 minutes
 
 ## Tasks
 - [ ] Check for important updates
@@ -101,7 +101,7 @@ Every 2 hours
 - [ ] Update memory if needed
 
 ## Quiet Hours
-2am - 9am UTC (no heartbeats during this time)
+Disabled
 
 ---
 
@@ -173,8 +173,8 @@ storage:
 
 # Agent Settings
 agent:
-  max_iterations: 20
-  max_tool_calls_per_message: 6
+  max_iterations: 50
+  max_tool_calls_per_message: 20
   context_window: 20
   temperature: 0.7
   mode: safe
@@ -182,10 +182,10 @@ agent:
 
 # Heartbeat Settings
 heartbeat:
-  enabled: false
-  interval_minutes: 120
-  quiet_hours_start: 2  # 2am UTC
-  quiet_hours_end: 9    # 9am UTC
+  enabled: true
+  interval_minutes: 30
+  quiet_hours_start: 0  # disabled when start == end
+  quiet_hours_end: 0    # disabled when start == end
   target: "last"        # "last" or "main"
   ack_max_chars: 24
   send_reasoning: false

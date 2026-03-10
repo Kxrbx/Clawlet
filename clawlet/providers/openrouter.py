@@ -57,6 +57,58 @@ class OpenRouterProvider(BaseProvider):
     
     def get_default_model(self) -> str:
         return self.default_model
+
+    def _extract_content(self, data: dict, choice0: dict, message: dict) -> str:
+        """Extract assistant text from common OpenRouter/OpenAI-compatible payload shapes."""
+        content = ""
+
+        if isinstance(message, dict):
+            msg_content = message.get("content")
+            if isinstance(msg_content, str):
+                content = msg_content
+            elif isinstance(msg_content, list):
+                # Some providers emit structured content blocks.
+                text_parts: list[str] = []
+                for item in msg_content:
+                    if not isinstance(item, dict):
+                        continue
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        text_parts.append(text)
+                        continue
+                    # OpenAI response-style blocks may use nested text objects.
+                    if item.get("type") == "output_text":
+                        nested_text = item.get("text")
+                        if isinstance(nested_text, str):
+                            text_parts.append(nested_text)
+                content = "".join(text_parts)
+
+        if not content and isinstance(choice0, dict):
+            # Legacy completion-compatible responses sometimes use `text`.
+            maybe_text = choice0.get("text")
+            if isinstance(maybe_text, str):
+                content = maybe_text
+
+        if not content and isinstance(data, dict):
+            # Compatibility with response-style payloads.
+            output = data.get("output")
+            if isinstance(output, list):
+                text_parts: list[str] = []
+                for item in output:
+                    if not isinstance(item, dict):
+                        continue
+                    output_content = item.get("content")
+                    if not isinstance(output_content, list):
+                        continue
+                    for content_item in output_content:
+                        if not isinstance(content_item, dict):
+                            continue
+                        text = content_item.get("text")
+                        if isinstance(text, str):
+                            text_parts.append(text)
+                content = "".join(text_parts)
+
+        return content.strip()
     
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -124,35 +176,11 @@ class OpenRouterProvider(BaseProvider):
             message = choice0.get("message") if isinstance(choice0, dict) else {}
             tool_calls_response = message.get("tool_calls") if isinstance(message, dict) else None
 
-            content = ""
-            if isinstance(message, dict):
-                msg_content = message.get("content")
-                if isinstance(msg_content, str):
-                    content = msg_content
-                elif isinstance(msg_content, list):
-                    # Some providers emit structured content blocks.
-                    text_parts: list[str] = []
-                    for item in msg_content:
-                        if isinstance(item, dict) and isinstance(item.get("text"), str):
-                            text_parts.append(item["text"])
-                    content = "".join(text_parts)
-
-            if not content and isinstance(choice0, dict):
-                # Legacy completion-compatible responses sometimes use `text`.
-                content = choice0.get("text") or ""
-
-            if not content and isinstance(data, dict):
-                # Compatibility with response-style payloads.
-                output = data.get("output")
-                if isinstance(output, list):
-                    text_parts: list[str] = []
-                    for item in output:
-                        if not isinstance(item, dict):
-                            continue
-                        for c in item.get("content", []) if isinstance(item.get("content"), list) else []:
-                            if isinstance(c, dict) and isinstance(c.get("text"), str):
-                                text_parts.append(c["text"])
-                    content = "".join(text_parts)
+            content = self._extract_content(
+                data if isinstance(data, dict) else {},
+                choice0 if isinstance(choice0, dict) else {},
+                message if isinstance(message, dict) else {},
+            )
 
             usage = data.get("usage", {}) if isinstance(data, dict) else {}
             finish_reason = (
@@ -161,7 +189,8 @@ class OpenRouterProvider(BaseProvider):
                 else "stop"
             )
 
-            if not content and not tool_calls_response:
+            has_message = isinstance(message, dict)
+            if not content and not tool_calls_response and not has_message:
                 keys = list(data.keys()) if isinstance(data, dict) else [type(data).__name__]
                 body_preview = mask_secrets(response.text)
                 if len(body_preview) > 500:

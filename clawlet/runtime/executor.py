@@ -136,20 +136,25 @@ class DeterministicToolRuntime:
             )
         else:
             failure = classify_error_text(last_result.error)
+            failure_payload = {
+                "tool_call_id": envelope.tool_call_id,
+                "tool_name": envelope.tool_name,
+                "lane": lane,
+                "engine": f"{self.engine}:remote" if use_remote else self.engine,
+                "metadata": asdict(metadata),
+                "error": last_result.error,
+                **to_payload(failure),
+            }
+            if last_result.output:
+                failure_payload["output"] = last_result.output
+            if last_result.data is not None:
+                failure_payload["data"] = last_result.data
             self.event_store.append(
                 RuntimeEvent(
                     event_type=EVENT_TOOL_FAILED,
                     run_id=envelope.run_id,
                     session_id=envelope.session_id,
-                    payload={
-                        "tool_call_id": envelope.tool_call_id,
-                        "tool_name": envelope.tool_name,
-                        "lane": lane,
-                        "engine": f"{self.engine}:remote" if use_remote else self.engine,
-                        "metadata": asdict(metadata),
-                        "error": last_result.error,
-                        **to_payload(failure),
-                    },
+                    payload=failure_payload,
                 )
             )
 

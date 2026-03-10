@@ -303,8 +303,8 @@ class StorageConfig(BaseModel):
 
 class AgentSettings(BaseModel):
     """Agent settings."""
-    max_iterations: int = Field(default=10, ge=1, le=50)
-    max_tool_calls_per_message: int = Field(default=6, ge=1, le=50)
+    max_iterations: int = Field(default=50, ge=1, le=50)
+    max_tool_calls_per_message: int = Field(default=20, ge=1, le=50)
     context_window: int = Field(default=20, ge=5, le=100)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_history: int = Field(default=100, ge=10, le=1000)
@@ -341,12 +341,12 @@ class AgentSettings(BaseModel):
 
 class HeartbeatSettings(BaseModel):
     """Heartbeat settings."""
-    enabled: bool = False
+    enabled: bool = True
     every: Optional[str] = None  # legacy/upstream-style cadence, e.g. "2h"
     active_hours: Optional[str] = None  # legacy/upstream-style hours, e.g. "9-18"
-    interval_minutes: int = Field(default=120, ge=10, le=1440)
-    quiet_hours_start: int = Field(default=2, ge=0, le=23)
-    quiet_hours_end: int = Field(default=9, ge=0, le=23)
+    interval_minutes: int = Field(default=30, ge=10, le=1440)
+    quiet_hours_start: int = Field(default=0, ge=0, le=23)
+    quiet_hours_end: int = Field(default=0, ge=0, le=23)
     target: Literal["last", "main"] = "last"
     ack_max_chars: int = Field(default=24, ge=1, le=500)
     send_reasoning: bool = False

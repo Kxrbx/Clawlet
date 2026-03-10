@@ -114,10 +114,9 @@ class AgentLoop:
     # History limits
     MAX_HISTORY = 100  # Maximum messages to keep
     CONTEXT_WINDOW = 20  # Messages to include in LLM context
-    CONTEXT_CHAR_BUDGET = 12000  # Approximate character budget for prompt context
     MAX_TOOL_OUTPUT_CHARS = 4000
     NO_PROGRESS_LIMIT = 3
-    MAX_TOOL_CALLS_PER_MESSAGE = 6
+    MAX_TOOL_CALLS_PER_MESSAGE = 20
     MAX_AUTONOMOUS_FOLLOWUP_DEPTH = 1
     TOOL_ALIASES = {
         "list_files": "list_dir",
@@ -180,12 +179,40 @@ class AgentLoop:
     ]
     AUTONOMOUS_COMMITMENT_PATTERN = re.compile(
         r"\b(i will|i'll|i am going to|i'm going to|let me)\b.*\b"
-        r"(install|search|check|look|find|run|execute|create|update|send|handle|do)\b",
+        r"(install|search|check|look|find|fetch|download|read|open|run|execute|create|update|send|handle|do)\b",
         re.IGNORECASE,
     )
     AUTONOMOUS_BLOCKING_PATTERN = re.compile(
         r"\b(would you like|do you want|can you confirm|please confirm|which one|"
         r"i need|i can't|cannot|unable|if you want)\b",
+        re.IGNORECASE,
+    )
+    AUTONOMOUS_EXECUTION_NUDGE = (
+        "Autonomous execution mode: do not promise future action. "
+        "Either use tools now to perform the task, or reply with a concrete blocker explaining why "
+        "the action could not be executed automatically."
+    )
+    COMMITMENT_FOLLOWTHROUGH_NUDGE = (
+        "Do not narrate future action. "
+        "If you said you would do something, perform the next concrete step now using tools when needed. "
+        "Only reply to the user after you have either completed the action or hit a concrete blocker."
+    )
+    POST_TOOL_FINALIZATION_NUDGE = (
+        "You have already used tools in this turn. "
+        "Do not send intermediate status updates or describe next steps. "
+        "Either provide the final answer grounded in the tool results you already have, "
+        "or explain the concrete blocker that prevents completion."
+    )
+    CONTINUATION_PATTERN = re.compile(
+        r"\b(let me|i'll|i will|i am going to|i'm going to|then)\b|"
+        r"\bcontent was truncated\b|"
+        r"\bfetch the full\b|"
+        r"\bdownload the\b|"
+        r"\bread the full\b",
+        re.IGNORECASE,
+    )
+    FINAL_RESPONSE_CONTINUATION_SPLIT = re.compile(
+        r"\b(now i need to|next i need to|next i'll|next i will|let me)\b",
         re.IGNORECASE,
     )
     URL_PATTERN = re.compile(r"https?://[^\s)>\]\"']+", re.IGNORECASE)
@@ -198,7 +225,7 @@ class AgentLoop:
         provider: BaseProvider,
         tools: Optional[ToolRegistry] = None,
         model: Optional[str] = None,
-        max_iterations: int = 10,
+        max_iterations: int = 50,
         max_tool_calls_per_message: Optional[int] = None,
         storage_config: Optional[StorageConfig] = None,
         runtime_config: Optional[RuntimeSettings] = None,
@@ -855,7 +882,10 @@ class AgentLoop:
         enable_tools = self._should_enable_tools(user_message)
         tool_gate_promoted = False
         action_nudge_used = False
+        commitment_followthrough_used = False
+        post_tool_finalization_used = False
         tool_calls_used = 0
+        executed_tool_signatures: set[str] = set()
         explicit_urls = self._extract_explicit_urls(user_message)
         explicit_github_url = self._extract_github_url(user_message)
         install_skill_intent = self._is_skill_install_intent(user_message)
@@ -918,6 +948,31 @@ class AgentLoop:
                     explicit_urls=explicit_urls,
                     tool_calls_used=tool_calls_used,
                 )
+                repeated_tool_calls: list[ToolCall] = []
+                novel_tool_calls: list[ToolCall] = []
+                for tc in tool_calls:
+                    signature = self._tool_call_signature(tc)
+                    if signature in executed_tool_signatures:
+                        repeated_tool_calls.append(tc)
+                        continue
+                    novel_tool_calls.append(tc)
+                if repeated_tool_calls:
+                    logger.warning(
+                        "Skipping repeated tool call(s) in same turn: "
+                        f"{[t.name for t in repeated_tool_calls]}"
+                    )
+                    if not novel_tool_calls:
+                        convo.history.append(
+                            Message(
+                                role="system",
+                                content=(
+                                    "You already executed that exact tool call in this turn. "
+                                    "Reuse previous tool outputs from conversation history and do not repeat identical calls."
+                                ),
+                            )
+                        )
+                        continue
+                tool_calls = novel_tool_calls
 
                 # Detect repeated no-progress loop signatures.
                 signature = json.dumps(
@@ -1007,6 +1062,8 @@ class AgentLoop:
                             logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{mapped_tool_name}'")
                         tc.name = mapped_tool_name
                         mapped_calls.append(tc)
+                    for tc in mapped_calls:
+                        executed_tool_signatures.add(self._tool_call_signature(tc))
 
                     # Confirmation checks remain serial and explicit before any execution.
                     for tc in mapped_calls:
@@ -1066,10 +1123,99 @@ class AgentLoop:
                     )
                     continue
 
+                if (
+                    not tool_calls
+                    and enable_tools
+                    and self._looks_like_incomplete_followthrough(response_content, tool_calls_used)
+                ):
+                    if not commitment_followthrough_used:
+                        logger.info(
+                            "Model returned mid-task narration without action; forcing same-turn follow-through"
+                        )
+                        commitment_followthrough_used = True
+                        convo.history.append(
+                            Message(
+                                role="system",
+                                content=self.COMMITMENT_FOLLOWTHROUGH_NUDGE,
+                            )
+                        )
+                        continue
+
+                    if is_internal_autonomous:
+                        logger.warning(
+                            "Internal autonomous follow-up still returned mid-task narration after forced follow-through"
+                        )
+                        final_response = (
+                            "I could not complete the promised action automatically because no executable step was taken. "
+                            "Please retry the request or ask me to perform one concrete action."
+                        )
+                        is_error = True
+                        break
+
+                    logger.warning(
+                        "Model still returned mid-task narration after forced follow-through; refusing to send partial status"
+                    )
+                    final_response = (
+                        "I did not execute the promised action. Please retry with one concrete action, "
+                        "or I can try again with a more specific next step."
+                    )
+                    is_error = True
+                    break
+
+                if (
+                    not tool_calls
+                    and enable_tools
+                    and tool_calls_used > 0
+                    and not post_tool_finalization_used
+                    and not self._looks_like_blocker_response(response_content)
+                ):
+                    logger.info(
+                        "Suppressing post-tool intermediate narration; forcing one finalization pass"
+                    )
+                    post_tool_finalization_used = True
+                    convo.history.append(
+                        Message(
+                            role="system",
+                            content=self.POST_TOOL_FINALIZATION_NUDGE,
+                        )
+                    )
+                    continue
+
+                if (
+                    is_internal_autonomous
+                    and enable_tools
+                    and not tool_calls
+                    and self.AUTONOMOUS_COMMITMENT_PATTERN.search(response_content or "")
+                ):
+                    if not action_nudge_used:
+                        logger.info(
+                            "Internal autonomous follow-up returned another commitment without tool calls; "
+                            "nudging model to execute now or report blocker"
+                        )
+                        action_nudge_used = True
+                        convo.history.append(
+                            Message(
+                                role="system",
+                                content=self.AUTONOMOUS_EXECUTION_NUDGE,
+                            )
+                        )
+                        continue
+
+                    logger.warning(
+                        "Internal autonomous follow-up still returned a commitment with no tool calls after nudge"
+                    )
+                    final_response = (
+                        "I could not complete the promised action automatically because no executable step was taken. "
+                        "Please retry the request or ask me to perform one concrete action."
+                    )
+                    is_error = True
+                    break
+
                 # No tool calls - this is the final response
-                convo.history.append(Message(role="assistant", content=response_content))
-                self._queue_persist(convo.session_id, "assistant", response_content)
-                final_response = response_content
+                final_text = self._sanitize_final_response(response_content, tool_calls_used)
+                convo.history.append(Message(role="assistant", content=final_text or response_content))
+                self._queue_persist(convo.session_id, "assistant", final_text or response_content)
+                final_response = final_text or response_content
                 break
                 
             except Exception as e:
@@ -1080,8 +1226,32 @@ class AgentLoop:
                 break
         
         if final_response is None:
-            final_response = "I reached my maximum number of iterations. Please try again."
-            is_error = True
+            if tool_calls_used > 0:
+                logger.info("Iteration cap reached after tool use; attempting one finalization-only pass")
+                try:
+                    convo.history.append(
+                        Message(
+                            role="system",
+                            content=(
+                                "This is the final response pass for this turn. "
+                                "Do not call more tools. Summarize what was completed and any concrete blocker that remains."
+                            ),
+                        )
+                    )
+                    messages = self._build_messages(convo.history, query_hint=user_message)
+                    response = await self._call_provider_with_retry(messages, enable_tools=False)
+                    response_content = self._sanitize_final_response(response.content or "", tool_calls_used).strip()
+                    if response_content:
+                        convo.history.append(Message(role="assistant", content=response_content))
+                        self._queue_persist(convo.session_id, "assistant", response_content)
+                        final_response = response_content
+                        is_error = self._looks_like_blocker_response(response_content)
+                except Exception as e:
+                    logger.error(f"Error in finalization-only pass: {e}")
+
+            if final_response is None:
+                final_response = "I reached my maximum number of iterations. Please try again."
+                is_error = True
 
         if self._should_schedule_autonomous_followup(
             assistant_response=final_response,
@@ -1397,6 +1567,25 @@ class AgentLoop:
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
         return text
 
+    def _sanitize_final_response(self, content: str, tool_calls_used: int) -> str:
+        """Sanitize final user-facing text when no further tool execution should happen."""
+        cleaned = self._strip_tool_call_markup(content or "")
+        if not cleaned:
+            return ""
+
+        has_pending_language = bool(self.FINAL_RESPONSE_CONTINUATION_SPLIT.search(cleaned))
+        if has_pending_language or self._looks_like_incomplete_followthrough(cleaned, tool_calls_used):
+            head = self.FINAL_RESPONSE_CONTINUATION_SPLIT.split(cleaned, maxsplit=1)[0].strip()
+            if head:
+                return (
+                    "Partial progress:\n\n"
+                    f"{head}\n\n"
+                    "I did not execute the remaining step in this turn."
+                )
+            return "I made partial progress, but I did not execute the remaining step in this turn."
+
+        return cleaned
+
     def _extract_explicit_urls(self, user_message: str) -> list[str]:
         """Extract normalized explicit URLs from user message."""
         urls: list[str] = []
@@ -1508,15 +1697,57 @@ class AgentLoop:
         return normalized
 
     def _render_tool_result(self, result: ToolResult) -> str:
-        """Render bounded tool output for history/context safety."""
+        """Render tool output for conversation history."""
         raw = result.output if result.success else f"Error: {result.error}"
-        if len(raw) <= self.MAX_TOOL_OUTPUT_CHARS:
-            return raw
+        return raw
 
-        head = raw[: self.MAX_TOOL_OUTPUT_CHARS // 2]
-        tail = raw[-self.MAX_TOOL_OUTPUT_CHARS // 2 :]
-        omitted = len(raw) - len(head) - len(tail)
-        return f"{head}\n\n...[truncated {omitted} chars]...\n\n{tail}"
+    def _tool_call_signature(self, tool_call: ToolCall) -> str:
+        """Stable signature for duplicate-call suppression within a single turn."""
+        try:
+            args = json.dumps(tool_call.arguments or {}, sort_keys=True, default=str)
+        except Exception:
+            args = str(tool_call.arguments)
+        return f"{tool_call.name}:{args}"
+
+    def _looks_like_incomplete_followthrough(self, text: str, tool_calls_used: int) -> bool:
+        """Detect mid-task narration that should stay inside the current turn."""
+        text = (text or "").strip()
+        if not text:
+            return False
+        if "?" in text or self.AUTONOMOUS_BLOCKING_PATTERN.search(text):
+            return False
+        if self.AUTONOMOUS_COMMITMENT_PATTERN.search(text):
+            return True
+        if tool_calls_used <= 0:
+            return False
+        return bool(self.CONTINUATION_PATTERN.search(text))
+
+    def _looks_like_blocker_response(self, text: str) -> bool:
+        """Heuristic for responses that are acceptable stop points after tools."""
+        text = (text or "").strip()
+        if not text:
+            return False
+        if "?" in text:
+            return True
+        if self.AUTONOMOUS_BLOCKING_PATTERN.search(text):
+            return True
+        lowered = text.lower()
+        blocker_markers = (
+            "could not",
+            "can't",
+            "cannot",
+            "unable",
+            "failed",
+            "error",
+            "blocked",
+            "requires",
+            "need your",
+            "manual step",
+            "manual action",
+            "claim step",
+            "verification",
+        )
+        return any(marker in lowered for marker in blocker_markers)
     
     def _extract_tool_calls(self, content: str) -> list[ToolCall]:
         """Extract tool calls from LLM response content."""
@@ -1773,13 +2004,10 @@ class AgentLoop:
         if history and history[0].role == "system" and history[0].metadata.get("summary") is True:
             messages.append(history[0].to_dict())
 
-        # Add recent history (limited by CONTEXT_WINDOW)
+        # Add recent history (limited by CONTEXT_WINDOW only). Do not drop large
+        # tool/document messages here; that can discard the exact instructions the
+        # model needs to finish the task.
         recent = history[-self.CONTEXT_WINDOW:]
-        while recent:
-            content_size = sum(len((m.content or "")) for m in recent)
-            if content_size <= self.CONTEXT_CHAR_BUDGET:
-                break
-            recent = recent[1:]
         
         for msg in recent:
             msg_dict = msg.to_dict()

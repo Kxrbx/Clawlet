@@ -16,6 +16,15 @@ def test_extract_tool_calls_parses_raw_json(agent_loop):
     assert calls[0].arguments == {"path": "."}
 
 
+def test_tool_call_signature_is_stable_for_duplicate_suppression(agent_loop):
+    from clawlet.agent.loop import ToolCall
+
+    first = ToolCall(id="1", name="fetch_url", arguments={"url": "https://example.com", "max_chars": 100})
+    second = ToolCall(id="2", name="fetch_url", arguments={"max_chars": 100, "url": "https://example.com"})
+
+    assert agent_loop._tool_call_signature(first) == agent_loop._tool_call_signature(second)
+
+
 def test_validate_tool_params_rejects_unknown_when_additional_properties_false():
     from clawlet.tools.registry import validate_tool_params
 
@@ -94,6 +103,20 @@ def test_list_dir_defaults_to_workspace_root(temp_workspace, event_loop):
     assert "sample.txt (file)" in result.output
 
 
+def test_list_dir_expands_home_directory_paths(temp_workspace, event_loop, monkeypatch):
+    """list_dir should treat ~/ as the user's home before security checks."""
+    from clawlet.tools.files import ListDirTool
+
+    monkeypatch.setenv("HOME", str(temp_workspace))
+    (temp_workspace / "sample.txt").write_text("ok", encoding="utf-8")
+
+    tool = ListDirTool(allowed_dir=temp_workspace)
+    result = event_loop.run_until_complete(tool.execute("~/"))
+
+    assert result.success is True
+    assert "sample.txt (file)" in result.output
+
+
 def test_agent_loop_isolates_histories_between_chats(agent_loop, event_loop):
     """Each chat should maintain an independent history/session."""
     from clawlet.bus.queue import InboundMessage
@@ -114,21 +137,20 @@ def test_agent_loop_isolates_histories_between_chats(agent_loop, event_loop):
     assert not any("Hello from B" in m.content for m in state_a.history)
 
 
-def test_build_messages_applies_context_character_budget(agent_loop):
-    """Message builder should prune oldest entries when char budget is exceeded."""
+def test_build_messages_keeps_large_recent_tool_output(agent_loop):
+    """Large tool outputs should remain in the next prompt instead of being dropped."""
     agent_loop.CONTEXT_WINDOW = 10
-    agent_loop.CONTEXT_CHAR_BUDGET = 60
     history = [
-        Message(role="user", content="x" * 25),
-        Message(role="assistant", content="y" * 25),
-        Message(role="user", content="z" * 25),
+        Message(role="user", content="Read this document and follow the instructions."),
+        Message(role="tool", content="A" * 15050, metadata={"tool_name": "fetch_url", "tool_call_id": "tc1"}),
+        Message(role="assistant", content="I am reviewing the instructions."),
     ]
     messages = agent_loop._build_messages(history)
 
     non_system = [m for m in messages if m.get("role") != "system"]
-    assert len(non_system) == 2
-    assert non_system[0]["content"] == "y" * 25
-    assert non_system[1]["content"] == "z" * 25
+    assert len(non_system) == 3
+    assert non_system[1]["role"] == "tool"
+    assert non_system[1]["content"] == "A" * 15050
 
 
 def test_build_messages_includes_repository_context(agent_loop, temp_workspace):
@@ -428,10 +450,10 @@ def test_process_message_stops_on_tool_call_budget(event_loop):
         event_loop.run_until_complete(agent.close())
 
 
-def test_schedules_autonomous_followup_on_commitment(agent_loop, event_loop):
+def test_commitment_without_action_does_not_send_empty_promise(agent_loop, event_loop):
     from clawlet.bus.queue import InboundMessage
 
-    # Force provider to return a commitment with no tool calls.
+    # Force provider to return commitments with no tool calls.
     agent_loop.provider.responses = ["I will install that now and report back."]
     agent_loop.provider.index = 0
 
@@ -439,13 +461,9 @@ def test_schedules_autonomous_followup_on_commitment(agent_loop, event_loop):
     response = event_loop.run_until_complete(agent_loop._process_message(msg))
 
     assert response is not None
-    assert "I will install that now" in response.content
-    assert agent_loop.bus.inbound_size >= 1
-
-    queued = event_loop.run_until_complete(agent_loop.bus.consume_inbound())
-    assert queued.metadata.get("internal_autonomous_followup") is True
-    assert queued.metadata.get("autonomous_followup_depth") == 1
-    assert "Autonomous follow-up" in queued.content
+    assert "I will install that now" not in response.content
+    assert "did not execute the promised action" in response.content
+    assert agent_loop.bus.inbound_size == 0
 
 
 def test_does_not_schedule_autonomous_followup_when_response_is_question(agent_loop, event_loop):
@@ -459,6 +477,334 @@ def test_does_not_schedule_autonomous_followup_when_response_is_question(agent_l
 
     assert response is not None
     assert "Would you like me to proceed?" in response.content
+    assert agent_loop.bus.inbound_size == 0
+
+
+def test_commitment_without_action_forces_same_turn_followthrough(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+
+    agent_loop.provider.responses = [
+        "I'll do that now.",
+        "Done. I could not complete installation because the remote endpoint requires a manual claim step.",
+    ]
+    agent_loop.provider.index = 0
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(InboundMessage(channel="test", chat_id="followthrough-1", content="Install Moltbook"))
+    )
+
+    assert response is not None
+    assert response.content.startswith("Done.")
+    assert agent_loop.bus.inbound_size == 0
+
+
+def test_post_tool_let_me_fetch_is_treated_as_followthrough_not_final_answer(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    from clawlet.providers.base import LLMResponse
+
+    class SequencedProvider:
+        def __init__(self):
+            self.index = 0
+
+        @property
+        def name(self) -> str:
+            return "sequenced"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, *args, **kwargs):
+            self.index += 1
+            if self.index == 1:
+                return LLMResponse(
+                    content="I'll fetch the URL to read the instructions for joining Moltbook.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "tc1",
+                            "type": "function",
+                            "function": {
+                                "name": "fetch_url",
+                                "arguments": "{\"url\":\"https://www.moltbook.com/skill.md\"}",
+                            },
+                        }
+                    ],
+                )
+            if self.index == 2:
+                return LLMResponse(
+                    content="The content was truncated. Let me fetch the full document to see all the instructions.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="stop",
+                )
+            return LLMResponse(
+                content="Done. I fetched what I could and the next blocker is that registration requires a real API call.",
+                model="dummy-model",
+                usage={},
+                finish_reason="stop",
+            )
+
+        async def stream(self, *args, **kwargs):
+            yield ""
+
+        async def close(self):
+            pass
+
+    async def fake_execute_tool(tc, approved=False):
+        from clawlet.tools.registry import ToolResult
+
+        return ToolResult(
+            success=True,
+            output="URL: https://www.moltbook.com/skill.md\nStatus: 200\nNote: content truncated to 12000 characters",
+        )
+
+    agent_loop.provider = SequencedProvider()
+    agent_loop._execute_tool = fake_execute_tool  # type: ignore[assignment]
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(
+            InboundMessage(
+                channel="test",
+                chat_id="followthrough-2",
+                content="Read https://www.moltbook.com/skill.md and follow the instructions to join Moltbook",
+            )
+        )
+    )
+
+    assert response is not None
+    assert response.content.startswith("Done.")
+    assert "Let me fetch the full document" not in response.content
+
+
+def test_post_tool_intermediate_status_gets_finalization_pass(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    from clawlet.providers.base import LLMResponse
+
+    class SequencedProvider:
+        def __init__(self):
+            self.index = 0
+
+        @property
+        def name(self) -> str:
+            return "sequenced"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, *args, **kwargs):
+            self.index += 1
+            if self.index == 1:
+                return LLMResponse(
+                    content="I'll inspect the file first.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "tc1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"path\":\"README.md\"}",
+                            },
+                        }
+                    ],
+                )
+            if self.index == 2:
+                return LLMResponse(
+                    content="I found the relevant section. Next I'll summarize the fix.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="stop",
+                )
+            return LLMResponse(
+                content="The fix is to update the README example to use the current command.",
+                model="dummy-model",
+                usage={},
+                finish_reason="stop",
+            )
+
+        async def stream(self, *args, **kwargs):
+            yield ""
+
+        async def close(self):
+            pass
+
+    async def fake_execute_tool(tc, approved=False):
+        from clawlet.tools.registry import ToolResult
+
+        return ToolResult(success=True, output="README content")
+
+    agent_loop.provider = SequencedProvider()
+    agent_loop._execute_tool = fake_execute_tool  # type: ignore[assignment]
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(
+            InboundMessage(channel="test", chat_id="finalization-1", content="Check README and fix the issue")
+        )
+    )
+
+    assert response is not None
+    assert response.content == "The fix is to update the README example to use the current command."
+    assert "Next I'll summarize" not in response.content
+
+
+def test_iteration_cap_after_tool_use_gets_one_finalization_only_pass(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    from clawlet.providers.base import LLMResponse
+
+    class SequencedProvider:
+        def __init__(self):
+            self.index = 0
+
+        @property
+        def name(self) -> str:
+            return "sequenced"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, *args, **kwargs):
+            self.index += 1
+            if self.index == 1:
+                return LLMResponse(
+                    content="I'll inspect the document.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "tc1",
+                            "type": "function",
+                            "function": {
+                                "name": "fetch_url",
+                                "arguments": "{\"url\":\"https://example.com/doc.md\"}",
+                            },
+                        }
+                    ],
+                )
+            return LLMResponse(
+                content="I fetched the document and completed the requested step.",
+                model="dummy-model",
+                usage={},
+                finish_reason="stop",
+            )
+
+        async def stream(self, *args, **kwargs):
+            yield ""
+
+        async def close(self):
+            pass
+
+    async def fake_execute_tool(tc, approved=False):
+        from clawlet.tools.registry import ToolResult
+
+        return ToolResult(success=True, output="full document content")
+
+    agent_loop.provider = SequencedProvider()
+    agent_loop._execute_tool = fake_execute_tool  # type: ignore[assignment]
+    agent_loop.max_iterations = 1
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(
+            InboundMessage(channel="test", chat_id="iteration-finalize-1", content="Read the doc and do the task")
+        )
+    )
+
+    assert response is not None
+    assert response.content == "I fetched the document and completed the requested step."
+
+
+def test_finalization_only_pass_strips_tool_markup_and_incomplete_promise(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    from clawlet.providers.base import LLMResponse
+
+    class SequencedProvider:
+        def __init__(self):
+            self.index = 0
+
+        @property
+        def name(self) -> str:
+            return "sequenced"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, *args, **kwargs):
+            self.index += 1
+            if self.index == 1:
+                return LLMResponse(
+                    content="I'll inspect the heartbeat file.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="stop",
+                    tool_calls=[
+                        {
+                            "id": "tc1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"path\":\"HEARTBEAT.md\"}",
+                            },
+                        }
+                    ],
+                )
+            return LLMResponse(
+                content=(
+                    "Great! I've completed the setup.\n\n"
+                    "Now I need to update HEARTBEAT.md.<tool_call>\n"
+                    "<function=edit_file><parameter=path>HEARTBEAT.md</parameter></function>\n"
+                    "</tool_call>"
+                ),
+                model="dummy-model",
+                usage={},
+                finish_reason="stop",
+            )
+
+        async def stream(self, *args, **kwargs):
+            yield ""
+
+        async def close(self):
+            pass
+
+    async def fake_execute_tool(tc, approved=False):
+        from clawlet.tools.registry import ToolResult
+
+        return ToolResult(success=True, output="heartbeat contents")
+
+    agent_loop.provider = SequencedProvider()
+    agent_loop._execute_tool = fake_execute_tool  # type: ignore[assignment]
+    agent_loop.max_iterations = 1
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(
+            InboundMessage(channel="test", chat_id="iteration-finalize-2", content="Finish the setup")
+        )
+    )
+
+    assert response is not None
+    assert "<tool_call>" not in response.content
+    assert "I did not execute the remaining step in this turn." in response.content
+    assert response.content.startswith("Partial progress:")
+
+
+def test_internal_autonomous_followup_cannot_end_with_second_empty_promise(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+
+    agent_loop.provider.responses = [
+        "I will install that now and report back.",
+        "I will install it right away.",
+        "I will handle it now.",
+    ]
+    agent_loop.provider.index = 0
+
+    initial = event_loop.run_until_complete(
+        agent_loop._process_message(InboundMessage(channel="test", chat_id="auto-3", content="Install skilltree"))
+    )
+    assert initial is not None
+    assert "did not execute the promised action" in initial.content
     assert agent_loop.bus.inbound_size == 0
 
 
@@ -672,6 +1018,54 @@ def test_read_file_uses_rust_bridge_when_available(temp_workspace, event_loop, m
     assert result.data["engine"] == "rust"
 
 
+def test_render_tool_result_does_not_truncate(agent_loop):
+    from clawlet.tools.registry import ToolResult
+
+    raw = "x" * 10000
+    rendered = agent_loop._render_tool_result(ToolResult(success=True, output=raw))
+    assert rendered == raw
+
+
+def test_fetch_url_returns_full_content_when_max_chars_omitted(event_loop):
+    from clawlet.tools.fetch_url import FetchUrlTool
+
+    class MockResponse:
+        status_code = 200
+        headers = {"content-type": "text/plain"}
+        text = "A" * 15050
+        url = "https://example.com/doc.md"
+
+    class MockClient:
+        async def get(self, url: str):
+            return MockResponse()
+
+    tool = FetchUrlTool()
+    tool._client = MockClient()  # type: ignore[assignment]
+    result = event_loop.run_until_complete(tool.execute("https://example.com/doc.md"))
+
+    assert result.success is True
+    assert "Note: content truncated" not in result.output
+    assert "A" * 15050 in result.output
+
+
+def test_shell_tool_executes_redirection_and_chaining_in_dangerous_mode(temp_workspace, event_loop):
+    from clawlet.tools.shell import ShellTool
+
+    tool = ShellTool(
+        workspace=temp_workspace,
+        allowed_commands=["printf"],
+        allow_dangerous=True,
+        use_rust_core=False,
+    )
+    result = event_loop.run_until_complete(
+        tool.execute('printf "alpha" > first.txt && printf "beta" > second.txt')
+    )
+
+    assert result.success is True
+    assert (temp_workspace / "first.txt").read_text(encoding="utf-8") == "alpha"
+    assert (temp_workspace / "second.txt").read_text(encoding="utf-8") == "beta"
+
+
 def test_replay_run_detects_valid_event_flow(temp_workspace):
     from clawlet.runtime import RuntimeEvent, RuntimeEventStore, replay_run
 
@@ -834,6 +1228,52 @@ def test_tool_failed_event_includes_failure_taxonomy(temp_workspace, event_loop)
     payload = failed[-1].payload
     assert payload.get("failure_code") == "network_error"
     assert payload.get("retryable") is True
+
+
+def test_tool_failed_event_preserves_output_and_data(temp_workspace, event_loop):
+    from clawlet.runtime import DeterministicToolRuntime, RuntimeEventStore, RuntimePolicyEngine, ToolCallEnvelope
+    from clawlet.tools.registry import BaseTool, ToolRegistry, ToolResult
+
+    class VerboseFailingTool(BaseTool):
+        @property
+        def name(self) -> str:
+            return "verbose_failing_tool"
+
+        @property
+        def description(self) -> str:
+            return "Fails with detailed output"
+
+        async def execute(self, **kwargs) -> ToolResult:
+            return ToolResult(
+                success=False,
+                output="[stderr]\ncurl: (3) URL rejected: Malformed input to a URL function",
+                error="Exit code: 3",
+                data={"stderr": "curl: (3) URL rejected: Malformed input to a URL function", "returncode": 3},
+            )
+
+    registry = ToolRegistry()
+    registry.register(VerboseFailingTool())
+    store = RuntimeEventStore(temp_workspace / ".runtime" / "events.jsonl")
+    policy = RuntimePolicyEngine(allowed_modes=("read_only", "workspace_write", "elevated"))
+    runtime = DeterministicToolRuntime(registry=registry, event_store=store, policy=policy)
+
+    envelope = ToolCallEnvelope(
+        run_id="verbose-failure-run",
+        session_id="s1",
+        tool_call_id="tc1",
+        tool_name="verbose_failing_tool",
+        arguments={},
+        execution_mode="workspace_write",
+    )
+    result, _ = event_loop.run_until_complete(runtime.execute(envelope))
+    assert result.success is False
+
+    events = store.iter_events(run_id="verbose-failure-run")
+    failed = [e for e in events if e.event_type == "ToolFailed"]
+    assert failed
+    payload = failed[-1].payload
+    assert "curl: (3)" in payload.get("output", "")
+    assert payload.get("data", {}).get("returncode") == 3
 
 
 def test_provider_failure_classification_for_429():

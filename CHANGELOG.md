@@ -2,6 +2,24 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.3.1] - 2026-03-10
+
+### Defaults
+
+- **Heartbeat Enabled By Default**: New configs and workspaces now start with heartbeat enabled automatically.
+- **30-Minute Heartbeat Cadence**: Default heartbeat interval changed from 120 minutes to 30 minutes.
+- **Quiet Hours Disabled By Default**: Default quiet-hours window is now disabled by setting `quiet_hours_start == quiet_hours_end == 0`.
+- **Higher Agent Runtime Ceilings**: Default `max_iterations` increased to 50 and default `max_tool_calls_per_message` increased to 20.
+
+### Fixes
+
+- **Post-Tool Finalization Reliability**: Added a final answer-only pass when the loop reaches its iteration cap after successful tool work, preventing generic max-iteration failures after partial completion.
+- **Shell Execution In Full Exec Mode**: Commands using redirection/chaining in dangerous shell mode now execute through a shell interpreter instead of being mis-parsed into broken argv calls.
+- **Tool Result Context Preservation**: Removed truncation paths that dropped large fetched documents from follow-up model context.
+- **Final Response Sanitization**: Prevented raw tool-call markup and unfinished “now I need to...” continuation text from leaking into user-visible final replies.
+- **Failed Tool Diagnostics**: Preserved failed tool output and structured error data in runtime events to improve recovery and debugging.
+- **Home Path Expansion In File Tools**: File tools now expand `~` before path resolution.
+
 ## [0.3.0] - 2026-03-03
 
 ### Code Quality
@@ -280,4 +298,3 @@ All notable changes to Clawlet will be documented in this file.
 - API documentation
 - Security notes
 - Comparison with OpenClaw/nanobot
-

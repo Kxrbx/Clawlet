@@ -104,9 +104,12 @@ def test_config_default_values():
     
     assert cfg.provider.primary == "openrouter"
     assert cfg.storage.backend == "sqlite"
-    assert cfg.agent.max_iterations == 10
-    assert cfg.heartbeat.enabled is False
-    assert cfg.heartbeat.interval_minutes == 120
+    assert cfg.agent.max_iterations == 50
+    assert cfg.agent.max_tool_calls_per_message == 20
+    assert cfg.heartbeat.enabled is True
+    assert cfg.heartbeat.interval_minutes == 30
+    assert cfg.heartbeat.quiet_hours_start == 0
+    assert cfg.heartbeat.quiet_hours_end == 0
     assert cfg.heartbeat.target == "last"
     assert cfg.heartbeat.ack_max_chars == 24
     assert cfg.heartbeat.proactive_enabled is False
