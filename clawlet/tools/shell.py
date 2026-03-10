@@ -49,6 +49,20 @@ DANGEROUS_PATTERNS = [
     r'\bchown\s+.*:',       # chown user:
 ]
 
+CONTROL_OPERATORS = {"&&", "||", ";", "|"}
+REDIRECTION_OPERATORS = {
+    ">",
+    ">>",
+    "<",
+    "<<",
+    "1>",
+    "1>>",
+    "2>",
+    "2>>",
+    "&>",
+    "&>>",
+}
+
 
 class ShellTool(BaseTool):
     """
@@ -163,9 +177,13 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
         timeout = timeout or self.timeout
         
         try:
-            # Parse command safely
+            # Parse command safely. In dangerous/full-exec mode, commands may include
+            # shell metacharacters like redirects and chaining operators; those need a
+            # shell interpreter instead of argv execution.
             args = shlex.split(command)
-            base_cmd = args[0]
+            base_cmd = self._extract_base_command(args)
+            if base_cmd is None:
+                return ToolResult(success=False, output="", error="Empty command")
             
             # Find the full path to the command
             cmd_path = shutil.which(base_cmd)
@@ -176,8 +194,11 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                     error=f"Command not found: {base_cmd}"
                 )
 
-            # Hybrid fast-path: execute via Rust core when available.
-            if self.use_rust_core:
+            use_shell = self.allow_dangerous and self._needs_shell_interpreter(args)
+
+            # Hybrid fast-path: execute via Rust core when available and shell syntax
+            # is not required.
+            if self.use_rust_core and not use_shell:
                 rust_result = rust_execute_command_argv(
                     [cmd_path, *args[1:]],
                     str(self.workspace),
@@ -204,14 +225,24 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                         },
                     )
             
-            # Run command WITHOUT shell (safe execution)
-            process = await asyncio.create_subprocess_exec(
-                cmd_path,
-                *args[1:],
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.workspace),
-            )
+            if use_shell:
+                process = await asyncio.create_subprocess_exec(
+                    "/bin/bash",
+                    "-lc",
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(self.workspace),
+                )
+            else:
+                # Run command WITHOUT shell (safe execution)
+                process = await asyncio.create_subprocess_exec(
+                    cmd_path,
+                    *args[1:],
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(self.workspace),
+                )
             
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -297,18 +328,58 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
             args = shlex.split(command)
         except ValueError as e:
             return False, f"Invalid command syntax: {e}"
-        
+
         if not args:
             return False, "Empty command"
-        
-        base_cmd = args[0]
-        
-        # Check if base command is in whitelist
-        if base_cmd not in self.allowed_commands:
-            allowed_list = ", ".join(sorted(self.allowed_commands)[:10])
-            return False, f"Command '{base_cmd}' not allowed. Allowed: {allowed_list}..."
+
+        for base_cmd in self._extract_segment_commands(args):
+            if base_cmd not in self.allowed_commands:
+                allowed_list = ", ".join(sorted(self.allowed_commands)[:10])
+                return False, f"Command '{base_cmd}' not allowed. Allowed: {allowed_list}..."
         
         return True, ""
+
+    def _needs_shell_interpreter(self, args: list[str]) -> bool:
+        return any(token in CONTROL_OPERATORS or token in REDIRECTION_OPERATORS for token in args)
+
+    def _extract_base_command(self, args: list[str]) -> Optional[str]:
+        commands = self._extract_segment_commands(args)
+        return commands[0] if commands else None
+
+    def _extract_segment_commands(self, args: list[str]) -> list[str]:
+        commands: list[str] = []
+        current: list[str] = []
+        skip_next_redirection_target = False
+
+        for token in args:
+            if skip_next_redirection_target:
+                skip_next_redirection_target = False
+                continue
+
+            if token in CONTROL_OPERATORS:
+                base = self._first_executable_token(current)
+                if base:
+                    commands.append(base)
+                current = []
+                continue
+
+            if token in REDIRECTION_OPERATORS:
+                skip_next_redirection_target = True
+                continue
+
+            current.append(token)
+
+        base = self._first_executable_token(current)
+        if base:
+            commands.append(base)
+        return commands
+
+    def _first_executable_token(self, tokens: list[str]) -> Optional[str]:
+        for token in tokens:
+            if token in REDIRECTION_OPERATORS:
+                continue
+            return token
+        return None
     
     def add_allowed(self, *commands: str) -> None:
         """Add commands to allowed list."""

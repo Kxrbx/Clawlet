@@ -11,7 +11,7 @@
 
 *Build AI agents that know who they are*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [v0.3.0](#-v030---2026-03-03)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [v0.3.1](#-v031---2026-03-10)
 
 </div>
 
@@ -111,6 +111,13 @@ This 7-step wizard guides you through:
 clawlet init
 # Edit ~/.clawlet/config.yaml with your settings
 ```
+
+Default runtime behavior after init/onboard:
+- Heartbeat enabled by default
+- Heartbeat cadence set to every 30 minutes
+- Quiet hours disabled by default
+- `max_iterations: 50`
+- `max_tool_calls_per_message: 20`
 
 ### Start Your Agent
 
@@ -262,6 +269,24 @@ Get your API key at [brave.com/search/api](https://brave.com/search/api/).
 └── memory/
     └── clawlet.db       # SQLite database
 ```
+
+## Default Agent Settings
+
+New workspaces now start with these defaults in `config.yaml`:
+
+```yaml
+agent:
+  max_iterations: 50
+  max_tool_calls_per_message: 20
+
+heartbeat:
+  enabled: true
+  interval_minutes: 30
+  quiet_hours_start: 0
+  quiet_hours_end: 0
+```
+
+When `quiet_hours_start == quiet_hours_end`, quiet hours are effectively disabled.
 
 ---
 
@@ -415,14 +440,14 @@ Contributions welcome!
 
 ---
 
-## 📝 v0.3.0 - 2026-03-03
+## 📝 v0.3.1 - 2026-03-10
 
 ### Latest Updates
-- **Code Quality**: Removed DEBUG logging statements from production code
-- **API Rate Limiting**: Added configurable rate limiting to dashboard API (100 req/min default)
-- **Configurable Rate Limits**: `max_entries` now configurable via `RateLimitSettings`
-- **Error Handling**: Enhanced subprocess error handling with cross-platform fallbacks
-- **Version Consistency**: All version references synchronized to v0.3.0
+- **Heartbeat Defaults**: Heartbeat is now enabled by default, runs every 30 minutes, and quiet hours are disabled by default
+- **Runtime Headroom**: `max_iterations` now defaults to 50 and `max_tool_calls_per_message` to 20
+- **Follow-Through Reliability**: Improved post-tool finalization so the agent is less likely to stop after partial progress
+- **Shell Execution Fix**: Full-exec shell commands with redirects/chaining now execute correctly
+- **Version Consistency**: Project version references synchronized to v0.3.1
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.

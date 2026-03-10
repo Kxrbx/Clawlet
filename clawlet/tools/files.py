@@ -14,6 +14,11 @@ from clawlet.runtime.rust_bridge import (
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
+def _normalize_user_path(path: str) -> Path:
+    """Expand user-home markers before security resolution."""
+    return Path(path).expanduser()
+
+
 def _secure_resolve(
     file_path: Path,
     allowed_dir: Optional[Path],
@@ -104,7 +109,7 @@ class ReadFileTool(BaseTool):
     async def execute(self, path: str, **kwargs) -> ToolResult:
         """Read a file."""
         try:
-            file_path = Path(path)
+            file_path = _normalize_user_path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
             resolved_path, error = _secure_resolve(file_path, self.allowed_dir)
@@ -174,7 +179,7 @@ class WriteFileTool(BaseTool):
         try:
             from loguru import logger
             
-            file_path = Path(path)
+            file_path = _normalize_user_path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
             resolved_path, error = _secure_resolve(file_path, self.allowed_dir, must_exist=False)
@@ -255,7 +260,7 @@ class EditFileTool(BaseTool):
             from loguru import logger
             engine_used = "python"
             
-            file_path = Path(path)
+            file_path = _normalize_user_path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
             resolved_path, error = _secure_resolve(file_path, self.allowed_dir)
@@ -341,7 +346,7 @@ class ListDirTool(BaseTool):
         """List directory contents."""
         try:
             engine_used = "python"
-            dir_path = Path(path)
+            dir_path = _normalize_user_path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
             resolved_path, error = _secure_resolve(dir_path, self.allowed_dir)

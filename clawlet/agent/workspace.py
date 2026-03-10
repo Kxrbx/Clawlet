@@ -222,7 +222,7 @@ class Workspace:
         # Create a minimal config that can inherit from parent
         config_data = {
             "agent": {
-                "max_iterations": 10,
+                "max_iterations": 50,
                 "context_window": 20,
                 "temperature": 0.7,
                 "max_history": 100,
@@ -401,9 +401,9 @@ class Workspace:
             provider=provider,
             tools=tools,
             model=model,
-            max_iterations=self.config.agent.max_iterations if self.config else 10,
+            max_iterations=self.config.agent.max_iterations if self.config else 50,
             max_tool_calls_per_message=(
-                self.config.agent.max_tool_calls_per_message if self.config else 6
+                self.config.agent.max_tool_calls_per_message if self.config else 20
             ),
             runtime_config=self.config.runtime if self.config else None,
         )

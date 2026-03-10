@@ -21,7 +21,6 @@ class FetchUrlTool(BaseTool):
     """Tool to fetch and extract readable content from a URL."""
 
     USER_AGENT = "Clawlet/1.0 (+https://github.com/Kxrbx/Clawlet)"
-    MAX_CHARS_HARD_LIMIT = 50000
 
     def __init__(self, timeout: float = 15.0):
         self.timeout = timeout
@@ -49,7 +48,7 @@ class FetchUrlTool(BaseTool):
                 },
                 "max_chars": {
                     "type": "integer",
-                    "description": "Maximum characters to return (default: 12000, max: 50000)",
+                    "description": "Optional maximum characters to return. If omitted, return the full extracted content.",
                 },
             },
             "required": ["url"],
@@ -67,8 +66,7 @@ class FetchUrlTool(BaseTool):
                 headers={"User-Agent": self.USER_AGENT},
             )
 
-        limit = 12000 if max_chars is None else max_chars
-        limit = max(1000, min(int(limit), self.MAX_CHARS_HARD_LIMIT))
+        limit = None if max_chars is None else max(1000, int(max_chars))
 
         try:
             response = await self._client.get(url)
@@ -98,8 +96,9 @@ class FetchUrlTool(BaseTool):
         if not extracted_text:
             extracted_text = body_text.strip()
 
-        was_truncated = len(extracted_text) > limit
-        extracted_text = extracted_text[:limit]
+        was_truncated = limit is not None and len(extracted_text) > limit
+        if limit is not None:
+            extracted_text = extracted_text[:limit]
 
         lines = [
             f"URL: {str(response.url)}",
@@ -158,4 +157,3 @@ class FetchUrlTool(BaseTool):
             return text.strip(), title
 
         return raw.strip(), title
-
