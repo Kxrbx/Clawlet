@@ -14,6 +14,7 @@ from clawlet.config import (
     OpenRouterConfig,
     AgentSettings,
     HeartbeatSettings,
+    TelegramConfig,
 )
 from clawlet.plugins.conformance import check_plugin_conformance
 from clawlet.plugins.matrix import run_plugin_conformance_matrix
@@ -114,6 +115,13 @@ def test_config_default_values():
     assert cfg.heartbeat.ack_max_chars == 24
     assert cfg.heartbeat.proactive_enabled is False
     assert cfg.heartbeat.proactive_queue_path == "tasks/QUEUE.md"
+    telegram_cfg = cfg.channels["telegram"]
+    assert isinstance(telegram_cfg, TelegramConfig)
+    assert telegram_cfg.stream_mode == "progress"
+    assert telegram_cfg.stream_update_interval_seconds == 1.5
+    assert telegram_cfg.disable_web_page_preview is True
+    assert telegram_cfg.use_reply_keyboard is True
+    assert telegram_cfg.register_commands is True
     assert cfg.runtime.engine == "hybrid_rust"
     assert cfg.runtime.enable_parallel_read_batches is True
     assert cfg.runtime.max_parallel_read_tools == 4

@@ -169,6 +169,22 @@ def test_build_messages_includes_repository_context(agent_loop, temp_workspace):
     assert any("context_target.py" in m.get("content", "") for m in system_messages)
 
 
+def test_build_messages_includes_separate_memory_context(agent_loop):
+    agent_loop.memory.remember(
+        "favorite_color",
+        "User prefers green accents in interfaces",
+        category="preferences",
+        importance=9,
+    )
+
+    history = [Message(role="user", content="What design direction should I use?")]
+    messages = agent_loop._build_messages(history)
+    system_messages = [m for m in messages if m.get("role") == "system"]
+
+    assert any("## Relevant Memories" in m.get("content", "") for m in system_messages)
+    assert any("favorite_color" in m.get("content", "") for m in system_messages)
+
+
 def test_should_enable_tools_is_false_for_simple_chat(agent_loop):
     assert agent_loop._should_enable_tools("Hello") is False
     assert agent_loop._should_enable_tools("Thanks!") is False
@@ -189,6 +205,418 @@ def test_requires_confirmation_for_policy_controlled_mode(agent_loop):
 
     reason = agent_loop._requires_confirmation(tool_call)
     assert "Policy requires approval" in reason
+
+
+def test_confirmation_response_includes_telegram_buttons(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    from clawlet.providers.base import LLMResponse
+
+    class ConfirmingProvider:
+        @property
+        def name(self) -> str:
+            return "confirming"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, *args, **kwargs):
+            return LLMResponse(
+                content="I need approval before editing the file.",
+                model="dummy-model",
+                usage={},
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "id": "tc-confirm",
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": "{\"path\":\"notes.txt\",\"content\":\"hello\"}",
+                        },
+                    }
+                ],
+            )
+
+        async def stream(self, *args, **kwargs):
+            yield ""
+
+        async def close(self):
+            pass
+
+    agent_loop.provider = ConfirmingProvider()
+    agent_loop._runtime_policy.require_approval_for.add("workspace_write")
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(
+            InboundMessage(channel="telegram", chat_id="approval-chat", content="Write notes.txt")
+        )
+    )
+
+    assert response is not None
+    assert "confirm" in response.content.lower()
+    assert response.metadata["telegram_pending_approval"]["tool_name"] == "write_file"
+    assert response.metadata["telegram_buttons"][0][0]["text"] == "Approve"
+
+
+def test_progress_updates_are_published_for_telegram_runs(agent_loop, event_loop):
+    from clawlet.bus.queue import InboundMessage
+    from clawlet.providers.base import LLMResponse
+    from clawlet.tools.registry import ToolResult
+
+    class ProgressProvider:
+        def __init__(self):
+            self.index = 0
+
+        @property
+        def name(self) -> str:
+            return "progress"
+
+        def get_default_model(self) -> str:
+            return "dummy-model"
+
+        async def complete(self, *args, **kwargs):
+            self.index += 1
+            if self.index == 1:
+                return LLMResponse(
+                    content="Reading the file first.",
+                    model="dummy-model",
+                    usage={},
+                    finish_reason="tool_calls",
+                    tool_calls=[
+                        {
+                            "id": "tc-progress",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"path\":\"README.md\"}",
+                            },
+                        }
+                    ],
+                )
+            return LLMResponse(content="Done.", model="dummy-model", usage={}, finish_reason="stop")
+
+        async def stream(self, *args, **kwargs):
+            yield ""
+
+        async def close(self):
+            pass
+
+    async def fake_execute_tool(tc, approved=False):
+        return ToolResult(success=True, output="read ok")
+
+    agent_loop.provider = ProgressProvider()
+    agent_loop._execute_tool = fake_execute_tool  # type: ignore[assignment]
+
+    response = event_loop.run_until_complete(
+        agent_loop._process_message(
+            InboundMessage(channel="telegram", chat_id="progress-chat", content="Read README.md")
+        )
+    )
+
+    assert response is not None
+    progress_messages = []
+    while agent_loop.bus.outbound_size:
+        outbound = event_loop.run_until_complete(agent_loop.bus.consume_outbound())
+        if (outbound.metadata or {}).get("progress"):
+            progress_messages.append(outbound)
+
+    assert progress_messages
+    assert any(msg.metadata.get("progress_event") == "provider_started" for msg in progress_messages)
+    assert any(msg.metadata.get("progress_event") == "tool_requested" for msg in progress_messages)
+
+
+class _FakeSentMessage:
+    def __init__(self, message_id: int):
+        self.message_id = message_id
+
+
+class _FakeTelegramBot:
+    def __init__(self):
+        self.sent_messages = []
+        self.edited_messages = []
+        self.chat_actions = []
+        self.commands = []
+        self.menu_button_calls = 0
+
+    async def send_message(self, **kwargs):
+        self.sent_messages.append(kwargs)
+        return _FakeSentMessage(len(self.sent_messages))
+
+    async def edit_message_text(self, **kwargs):
+        self.edited_messages.append(kwargs)
+
+    async def send_chat_action(self, **kwargs):
+        self.chat_actions.append(kwargs)
+
+    async def set_my_commands(self, commands):
+        self.commands = commands
+
+    async def set_chat_menu_button(self, **kwargs):
+        self.menu_button_calls += 1
+
+
+class _FakeTelegramApp:
+    def __init__(self):
+        self.bot = _FakeTelegramBot()
+
+
+class _FakeCallbackQuery:
+    def __init__(self, data: str, chat_id: str):
+        from types import SimpleNamespace
+
+        self.data = data
+        self.message = SimpleNamespace(chat=SimpleNamespace(id=int(chat_id)))
+        self.answered = False
+        self.edits = []
+
+    async def answer(self, *args, **kwargs):
+        self.answered = True
+
+    async def edit_message_text(self, **kwargs):
+        self.edits.append(kwargs)
+
+
+def test_telegram_channel_streams_progress_then_finalizes(agent_loop, event_loop):
+    from clawlet.bus.queue import OutboundMessage
+    from clawlet.channels.telegram import TelegramChannel
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={
+            "token": "test-token",
+            "stream_mode": "progress",
+            "stream_update_interval_seconds": 0.0,
+            "disable_web_page_preview": True,
+        },
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+
+    event_loop.run_until_complete(
+        channel.send(
+            OutboundMessage(
+                channel="telegram",
+                chat_id="123",
+                content="Thinking about the next step.",
+                metadata={"progress": True, "progress_event": "provider_started"},
+            )
+        )
+    )
+    event_loop.run_until_complete(
+        channel.send(
+            OutboundMessage(
+                channel="telegram",
+                chat_id="123",
+                content="Final answer.",
+                metadata={},
+            )
+        )
+    )
+
+    assert len(channel.app.bot.sent_messages) == 1
+    assert channel.app.bot.edited_messages
+    assert channel._ensure_chat_state("123")["active_stream_message_id"] is None
+
+
+def test_telegram_callback_updates_stream_mode_and_persists(agent_loop, event_loop):
+    from types import SimpleNamespace
+
+    from clawlet.channels.telegram import TelegramChannel
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={"token": "test-token", "stream_mode": "progress", "stream_update_interval_seconds": 0.0},
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+    update = SimpleNamespace(
+        callback_query=_FakeCallbackQuery("settings:stream_mode:verbose_debug", "123"),
+        effective_user=SimpleNamespace(id=77, first_name="Tester"),
+    )
+
+    event_loop.run_until_complete(channel._handle_callback_query(update, None))
+
+    assert channel._ensure_chat_state("123")["stream_mode"] == "verbose_debug"
+    persisted = Path(channel._ui_state_path).read_text(encoding="utf-8")
+    assert "verbose_debug" in persisted
+
+
+def test_telegram_approval_callback_publishes_confirm_message(agent_loop, event_loop):
+    from types import SimpleNamespace
+
+    from clawlet.channels.telegram import TelegramChannel
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={"token": "test-token", "stream_mode": "progress", "stream_update_interval_seconds": 0.0},
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+    channel._remember_pending_approval(
+        "123",
+        {
+            "token": "654321",
+            "tool_name": "write_file",
+            "reason": "Policy requires approval",
+            "details": "Tool: write_file",
+        },
+    )
+    update = SimpleNamespace(
+        callback_query=_FakeCallbackQuery("approval:approve:654321", "123"),
+        effective_user=SimpleNamespace(id=77, first_name="Tester"),
+    )
+
+    event_loop.run_until_complete(channel._handle_callback_query(update, None))
+    inbound = event_loop.run_until_complete(channel.bus.consume_inbound())
+    event_loop.run_until_complete(channel._stop_typing("123"))
+
+    assert inbound.content == "confirm 654321"
+    assert inbound.metadata["approval_token"] == "654321"
+
+
+def test_telegram_text_menu_status_button_is_handled_locally(agent_loop, event_loop):
+    from types import SimpleNamespace
+
+    from clawlet.channels.telegram import TelegramChannel
+
+    class ReplyRecorder:
+        def __init__(self):
+            self.calls = []
+            self.text = "Status"
+
+        async def reply_text(self, text, **kwargs):
+            self.calls.append({"text": text, "kwargs": kwargs})
+
+    message = ReplyRecorder()
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=123),
+        effective_user=SimpleNamespace(id=77, first_name="Tester", username="tester"),
+        message=message,
+    )
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={"token": "test-token", "stream_mode": "progress"},
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+
+    event_loop.run_until_complete(channel._handle_message(update, None))
+
+    assert message.calls
+    assert "Telegram status" in message.calls[0]["text"]
+    assert agent_loop.bus.inbound_size == 0
+
+
+def test_telegram_text_menu_heartbeat_button_shows_disabled_quiet_hours(agent_loop, event_loop):
+    from types import SimpleNamespace
+
+    from clawlet.channels.telegram import TelegramChannel
+
+    class ReplyRecorder:
+        def __init__(self):
+            self.calls = []
+            self.text = "Heartbeat"
+
+        async def reply_text(self, text, **kwargs):
+            self.calls.append({"text": text, "kwargs": kwargs})
+
+    message = ReplyRecorder()
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=123),
+        effective_user=SimpleNamespace(id=77, first_name="Tester", username="tester"),
+        message=message,
+    )
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={
+            "token": "test-token",
+            "stream_mode": "progress",
+            "heartbeat": {
+                "enabled": True,
+                "interval_minutes": 30,
+                "quiet_hours_start": 0,
+                "quiet_hours_end": 0,
+                "target": "last",
+                "ack_max_chars": 24,
+                "proactive_enabled": False,
+            },
+        },
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+
+    event_loop.run_until_complete(channel._handle_message(update, None))
+
+    assert message.calls
+    assert "Heartbeat status" in message.calls[0]["text"]
+    assert "Quiet hours: <code>disabled</code>" in message.calls[0]["text"]
+    assert agent_loop.bus.inbound_size == 0
+
+
+def test_telegram_channel_does_not_trust_model_html_by_default(agent_loop, event_loop):
+    from clawlet.bus.queue import OutboundMessage
+    from clawlet.channels.telegram import TelegramChannel
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={"token": "test-token", "stream_mode": "progress"},
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+
+    event_loop.run_until_complete(
+        channel.send(
+            OutboundMessage(
+                channel="telegram",
+                chat_id="123",
+                content="<b>model text</b>",
+                metadata={},
+            )
+        )
+    )
+
+    assert channel.app.bot.sent_messages
+    assert channel.app.bot.sent_messages[0]["text"] == "&lt;b&gt;model text&lt;/b&gt;"
+
+
+def test_telegram_verbose_debug_progress_keeps_code_format(agent_loop, event_loop):
+    from clawlet.bus.queue import OutboundMessage
+    from clawlet.channels.telegram import TelegramChannel
+
+    channel = TelegramChannel(
+        bus=agent_loop.bus,
+        config={"token": "test-token", "stream_mode": "verbose_debug", "stream_update_interval_seconds": 0.0},
+        agent=agent_loop,
+    )
+    channel.app = _FakeTelegramApp()
+    channel._running = True
+    channel._ensure_chat_state("123")["stream_mode"] = "verbose_debug"
+
+    event_loop.run_until_complete(
+        channel.send(
+            OutboundMessage(
+                channel="telegram",
+                chat_id="123",
+                content="Running `read_file`.",
+                metadata={
+                    "progress": True,
+                    "progress_event": "tool_started",
+                    "progress_detail": "read_file",
+                },
+            )
+        )
+    )
+
+    assert channel.app.bot.sent_messages
+    assert "<code>" in channel.app.bot.sent_messages[0]["text"]
 
 
 def test_parallel_batch_eligible_for_read_only_calls(agent_loop):
@@ -370,6 +798,30 @@ def test_call_provider_without_tools_omits_tool_payload(event_loop):
         event_loop.run_until_complete(agent.close())
 
 
+def test_identity_loader_excludes_autogen_memory_section_from_identity(event_loop):
+    from clawlet.agent.identity import IdentityLoader
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        (workspace / "SOUL.md").write_text("# SOUL\n## Name\nTestAgent", encoding="utf-8")
+        (workspace / "USER.md").write_text("# USER\n## Name\nHuman", encoding="utf-8")
+        (workspace / "MEMORY.md").write_text(
+            "# MEMORY\nManual identity note\n\n"
+            "<!-- CLAWLET_MEMORY_AUTOGEN_START -->\n"
+            "## Auto-Saved Memories\n"
+            "- **fact1**: Episodic memory\n"
+            "<!-- CLAWLET_MEMORY_AUTOGEN_END -->\n",
+            encoding="utf-8",
+        )
+        (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT\n- noop", encoding="utf-8")
+
+        identity = IdentityLoader(workspace).load_all()
+
+        assert "Manual identity note" in identity.memory
+        assert "Episodic memory" not in identity.memory
+
+
 def test_process_message_stops_on_tool_call_budget(event_loop):
     from clawlet.agent.loop import AgentLoop
     from clawlet.agent.identity import IdentityLoader
@@ -380,6 +832,9 @@ def test_process_message_stops_on_tool_call_budget(event_loop):
     import tempfile
 
     class LoopingToolProvider(BaseProvider):
+        def __init__(self):
+            self.calls = 0
+
         @property
         def name(self) -> str:
             return "looping"
@@ -388,6 +843,7 @@ def test_process_message_stops_on_tool_call_budget(event_loop):
             return "dummy-model"
 
         async def complete(self, messages, model=None, temperature=0.7, max_tokens=4096, **kwargs):
+            self.calls += 1
             return LLMResponse(
                 content="Working...",
                 model=model or "dummy-model",
@@ -395,9 +851,9 @@ def test_process_message_stops_on_tool_call_budget(event_loop):
                 finish_reason="tool_calls",
                 tool_calls=[
                     {
-                        "id": "call_1",
+                        "id": f"call_{self.calls}",
                         "type": "function",
-                        "function": {"name": "dummy_tool", "arguments": "{}"},
+                        "function": {"name": "dummy_tool", "arguments": f'{{"step": {self.calls}}}'},
                     }
                 ],
             )
@@ -438,6 +894,7 @@ def test_process_message_stops_on_tool_call_budget(event_loop):
             provider=LoopingToolProvider(),
             tools=tools,
             model="dummy-model",
+            max_tool_calls_per_message=3,
             storage_config=StorageConfig(backend="sqlite", sqlite=SQLiteConfig(path=str(workspace / "clawlet.db"))),
         )
         event_loop.run_until_complete(agent._initialize_storage())

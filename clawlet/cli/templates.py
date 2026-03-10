@@ -146,6 +146,11 @@ channels:
   telegram:
     enabled: false
     token: "YOUR_TELEGRAM_BOT_TOKEN"
+    stream_mode: "progress"
+    stream_update_interval_seconds: 1.5
+    disable_web_page_preview: true
+    use_reply_keyboard: true
+    register_commands: true
   
   discord:
     enabled: false

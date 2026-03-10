@@ -86,5 +86,43 @@ def test_memory_manager_stats():
         assert stats["working_count"] == 0
 
 
+def test_memory_manager_preserves_manual_memory_md_content(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory_file = workspace / "MEMORY.md"
+    memory_file.write_text(
+        "# MEMORY.md - Long-Term Memory\n\n## Key Information\n- Keep this note\n",
+        encoding="utf-8",
+    )
+
+    mem = MemoryManager(workspace)
+    mem.remember("fact1", "Remembered fact", category="conversation", importance=8)
+    mem.save_long_term()
+
+    content = memory_file.read_text(encoding="utf-8")
+    assert "Keep this note" in content
+    assert "CLAWLET_MEMORY_AUTOGEN_START" in content
+    assert "fact1" in content
+
+
+def test_memory_manager_get_identity_memory_excludes_autogen_section(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory_file = workspace / "MEMORY.md"
+    memory_file.write_text(
+        "# MEMORY.md - Long-Term Memory\n\n## Key Information\n- Keep this note\n\n"
+        "<!-- CLAWLET_MEMORY_AUTOGEN_START -->\n"
+        "## Auto-Saved Memories\n"
+        "- **fact1**: Remembered fact\n"
+        "<!-- CLAWLET_MEMORY_AUTOGEN_END -->\n",
+        encoding="utf-8",
+    )
+
+    mem = MemoryManager(workspace)
+
+    assert "Keep this note" in mem.get_identity_memory()
+    assert "Remembered fact" not in mem.get_identity_memory()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

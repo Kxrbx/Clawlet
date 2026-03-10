@@ -6,8 +6,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Any
 from pathlib import Path
+import re
 
 from loguru import logger
+
+
+AUTOGEN_START = "<!-- CLAWLET_MEMORY_AUTOGEN_START -->"
+AUTOGEN_END = "<!-- CLAWLET_MEMORY_AUTOGEN_END -->"
 
 
 @dataclass
@@ -57,6 +62,7 @@ class MemoryManager:
         self._short_term: list[MemoryEntry] = []
         self._long_term: dict[str, MemoryEntry] = {}
         self._working: dict[str, Any] = {}
+        self._base_memory_content: str = ""
         
         # Load long-term memories from MEMORY.md
         self._load_long_term()
@@ -71,17 +77,50 @@ class MemoryManager:
             return
         
         try:
-            content = memory_file.read_text()
-            # Parse MEMORY.md into structured memories
-            # For now, store the whole content as a single memory
+            content = memory_file.read_text(encoding="utf-8")
+            base_content, generated_content = self._split_memory_sections(content)
+            self._base_memory_content = base_content.strip()
             self._long_term["__file__"] = MemoryEntry(
                 key="__file__",
                 value=content,
                 category="system",
                 importance=10,
             )
+            self._load_structured_entries(generated_content or content)
         except Exception as e:
             logger.warning(f"Failed to load MEMORY.md: {e}")
+
+    def _split_memory_sections(self, content: str) -> tuple[str, str]:
+        """Split manual MEMORY.md content from the auto-generated section."""
+        if AUTOGEN_START not in content or AUTOGEN_END not in content:
+            return content, ""
+        prefix, remainder = content.split(AUTOGEN_START, 1)
+        generated, _suffix = remainder.split(AUTOGEN_END, 1)
+        return prefix.rstrip(), generated.strip()
+
+    def _load_structured_entries(self, content: str) -> None:
+        """Parse generated markdown entries back into structured long-term memories."""
+        current_category = "general"
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("## "):
+                current_category = line[3:].strip().lower()
+                continue
+            m = re.match(r"- \*\*(.+?)\*\*: (.+)$", line)
+            if not m:
+                continue
+            key = m.group(1).strip()
+            value = m.group(2).strip()
+            if key == "__file__":
+                continue
+            self._long_term[key] = MemoryEntry(
+                key=key,
+                value=value,
+                category=current_category,
+                importance=8,
+            )
     
     def remember(self, key: str, value: str, category: str = "general", importance: int = 5) -> None:
         """
@@ -208,26 +247,31 @@ class MemoryManager:
             Formatted context string
         """
         # Combine and sort by importance
-        all_memories = self._short_term + list(self._long_term.values())
+        all_memories = [m for m in (self._short_term + list(self._long_term.values())) if m.key != "__file__"]
         all_memories.sort(key=lambda e: e.importance, reverse=True)
         top_memories = all_memories[:max_entries]
+        if not top_memories:
+            return ""
         
         # Build context
         lines = ["## Relevant Memories\n"]
         for entry in top_memories:
-            if entry.key == "__file__":
-                continue  # Skip raw file content
             lines.append(f"- [{entry.category}] {entry.key}: {entry.value[:100]}...")
         
         return "\n".join(lines)
+
+    def get_identity_memory(self) -> str:
+        """Return only the manual identity memory section, excluding auto-generated memories."""
+        return self._base_memory_content.strip()
     
     def save_long_term(self) -> None:
         """Save long-term memories to MEMORY.md."""
         memory_file = self.workspace / "MEMORY.md"
         
         try:
-            # Build content
-            lines = ["# Long-Term Memory\n"]
+            lines: list[str] = []
+            if self._base_memory_content:
+                lines.append(self._base_memory_content.rstrip())
             
             # Group by category
             categories: dict[str, list[MemoryEntry]] = {}
@@ -238,13 +282,25 @@ class MemoryManager:
                     categories[entry.category] = []
                 categories[entry.category].append(entry)
             
-            # Write each category
+            generated_lines = [AUTOGEN_START, "## Auto-Saved Memories"]
             for category, entries in sorted(categories.items()):
-                lines.append(f"\n## {category.title()}\n")
+                generated_lines.append(f"\n## {category.title()}")
                 for entry in sorted(entries, key=lambda e: e.importance, reverse=True):
-                    lines.append(f"- **{entry.key}**: {entry.value}\n")
-            
-            memory_file.write_text("\n".join(lines), encoding="utf-8")
+                    generated_lines.append(f"- **{entry.key}**: {entry.value}")
+            generated_lines.append(AUTOGEN_END)
+
+            if lines:
+                lines.append("")
+            lines.extend(generated_lines)
+
+            content = "\n".join(lines).rstrip() + "\n"
+            memory_file.write_text(content, encoding="utf-8")
+            self._long_term["__file__"] = MemoryEntry(
+                key="__file__",
+                value=content,
+                category="system",
+                importance=10,
+            )
         
         except Exception as e:
             logger.error(f"Failed to save memories: {e}")

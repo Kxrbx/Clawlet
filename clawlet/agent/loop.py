@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
 
 from clawlet.agent.identity import Identity
+from clawlet.agent.memory import MemoryManager
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult, validate_tool_params
 from clawlet.agent.memory import MemoryManager
@@ -224,6 +225,7 @@ class AgentLoop:
         identity: Identity,
         provider: BaseProvider,
         tools: Optional[ToolRegistry] = None,
+        memory_manager: Optional[MemoryManager] = None,
         model: Optional[str] = None,
         max_iterations: int = 50,
         max_tool_calls_per_message: Optional[int] = None,
@@ -254,7 +256,7 @@ class AgentLoop:
         
         
         # Initialize memory manager (long-term persistence to MEMORY.md)
-        self.memory = MemoryManager(workspace)
+        self.memory = memory_manager or MemoryManager(workspace)
         
         # Initialize storage backend (SQLite for message history)
         if storage_config is None:
@@ -544,6 +546,89 @@ class AgentLoop:
             return None
         return dict(self._last_route)
 
+    def get_runtime_status(self, channel: str, chat_id: str) -> dict:
+        """Expose lightweight per-chat runtime state for channel UX surfaces."""
+        key = f"{channel}:{chat_id}"
+        state = self._conversations.get(key)
+        pending = self._pending_confirmations.get(key) or {}
+        return {
+            "channel": channel,
+            "chat_id": chat_id,
+            "session_id": state.session_id if state else self._generate_session_id(channel, chat_id),
+            "history_messages": len(state.history) if state else 0,
+            "pending_confirmation": bool(pending),
+            "pending_confirmation_token": pending.get("token", ""),
+            "pending_confirmation_tool": getattr(pending.get("tool_call"), "name", ""),
+            "current_run_id": self._current_run_id if channel == self._current_channel and chat_id == self._current_chat_id else "",
+            "last_route": dict(self._last_route),
+        }
+
+    def peek_pending_confirmation(self, channel: str, chat_id: str) -> Optional[dict]:
+        """Return pending confirmation details for the given route if one exists."""
+        pending = self._pending_confirmations.get(f"{channel}:{chat_id}")
+        if not pending:
+            return None
+        tool_call = pending.get("tool_call")
+        return {
+            "token": pending.get("token", ""),
+            "tool_name": getattr(tool_call, "name", ""),
+            "arguments": dict(getattr(tool_call, "arguments", {}) or {}),
+        }
+
+    def _build_outbound_metadata(
+        self,
+        *,
+        source: str,
+        is_heartbeat: bool,
+        heartbeat_ack_max_chars: int,
+        scheduled_payload: Optional[dict],
+        extra: Optional[dict] = None,
+    ) -> dict:
+        metadata = {
+            "source": source,
+            "heartbeat": is_heartbeat,
+            "ack_max_chars": heartbeat_ack_max_chars,
+            SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
+            SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
+            SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
+            SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
+        }
+        if extra:
+            metadata.update(extra)
+        return metadata
+
+    async def _publish_progress_update(
+        self,
+        event_type: str,
+        text: str,
+        *,
+        detail: str = "",
+        final: bool = False,
+    ) -> None:
+        """Publish Telegram-friendly progress updates without exposing raw reasoning."""
+        if self._current_channel != "telegram" or not self._current_chat_id or not text.strip():
+            return
+        from clawlet.bus.queue import OutboundMessage
+
+        try:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=self._current_channel,
+                    chat_id=self._current_chat_id,
+                    content=text.strip(),
+                    metadata={
+                        "progress": True,
+                        "progress_event": event_type,
+                        "progress_detail": detail.strip(),
+                        "telegram_stream_key": self._current_run_id or self._session_id or "stream",
+                        "telegram_finalize_stream": final,
+                        "source": self._current_source,
+                    },
+                )
+            )
+        except Exception as e:
+            logger.debug(f"Could not publish progress update {event_type}: {e}")
+
     async def _get_conversation_state(self, channel: str, chat_id: str) -> ConversationState:
         """Get or create conversation state for an inbound channel/chat."""
         key = f"{channel}:{chat_id}"
@@ -820,15 +905,12 @@ class AgentLoop:
                 channel=channel,
                 chat_id=chat_id,
                 content=approval_response,
-                metadata={
-                    "source": source,
-                    "heartbeat": is_heartbeat,
-                    "ack_max_chars": heartbeat_ack_max_chars,
-                    SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
-                    SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
-                    SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
-                    SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
-                },
+                metadata=self._build_outbound_metadata(
+                    source=source,
+                    is_heartbeat=is_heartbeat,
+                    heartbeat_ack_max_chars=heartbeat_ack_max_chars,
+                    scheduled_payload=scheduled_payload,
+                ),
             )
         
         # Add to history. Internal autonomous prompts are system context, not user content.
@@ -859,15 +941,12 @@ class AgentLoop:
                 channel=channel,
                 chat_id=chat_id,
                 content=direct_install_response,
-                metadata={
-                    "source": source,
-                    "heartbeat": is_heartbeat,
-                    "ack_max_chars": heartbeat_ack_max_chars,
-                    SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
-                    SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
-                    SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
-                    SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
-                },
+                metadata=self._build_outbound_metadata(
+                    source=source,
+                    is_heartbeat=is_heartbeat,
+                    heartbeat_ack_max_chars=heartbeat_ack_max_chars,
+                    scheduled_payload=scheduled_payload,
+                ),
             )
         
         # Trim history periodically
@@ -885,11 +964,14 @@ class AgentLoop:
         commitment_followthrough_used = False
         post_tool_finalization_used = False
         tool_calls_used = 0
+        final_metadata_extra: dict = {}
         executed_tool_signatures: set[str] = set()
         explicit_urls = self._extract_explicit_urls(user_message)
         explicit_github_url = self._extract_github_url(user_message)
         install_skill_intent = self._is_skill_install_intent(user_message)
         action_intent = self._is_action_intent(user_message)
+
+        await self._publish_progress_update("started", "Starting work on your request.")
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -900,6 +982,7 @@ class AgentLoop:
             
             try:
                 # Call LLM provider with retry and circuit breaker
+                await self._publish_progress_update("provider_started", "Thinking about the next step.")
                 response: LLMResponse = await self._call_provider_with_retry(messages, enable_tools=enable_tools)
                 self._save_checkpoint(stage="provider_response", iteration=iteration, notes="Model response received")
                 
@@ -995,6 +1078,14 @@ class AgentLoop:
                     break
                 
                 if tool_calls:
+                    tool_names = ", ".join(tc.name for tc in tool_calls[:4])
+                    if len(tool_calls) > 4:
+                        tool_names += ", ..."
+                    await self._publish_progress_update(
+                        "tool_requested",
+                        f"Preparing {len(tool_calls)} tool call(s).",
+                        detail=tool_names,
+                    )
                     if not enable_tools:
                         if (
                             not tool_gate_promoted
@@ -1077,6 +1168,11 @@ class AgentLoop:
                             final_response = (
                                 f"{confirm_reason}: `{tc.name}`.\n"
                                 f"Reply with `confirm {token}` to continue or `cancel`."
+                            )
+                            final_metadata_extra = self._build_confirmation_outbound_metadata(
+                                token=token,
+                                tool_call=tc,
+                                reason=confirm_reason,
                             )
                             is_error = False
                             break
@@ -1172,6 +1268,7 @@ class AgentLoop:
                     logger.info(
                         "Suppressing post-tool intermediate narration; forcing one finalization pass"
                     )
+                    await self._publish_progress_update("finalizing", "Finalizing the response.")
                     post_tool_finalization_used = True
                     convo.history.append(
                         Message(
@@ -1229,6 +1326,7 @@ class AgentLoop:
             if tool_calls_used > 0:
                 logger.info("Iteration cap reached after tool use; attempting one finalization-only pass")
                 try:
+                    await self._publish_progress_update("finalizing", "Summarizing completed work and any blockers.")
                     convo.history.append(
                         Message(
                             role="system",
@@ -1322,15 +1420,13 @@ class AgentLoop:
             channel=channel,
             chat_id=chat_id,
             content=final_response,
-            metadata={
-                "source": source,
-                "heartbeat": is_heartbeat,
-                "ack_max_chars": heartbeat_ack_max_chars,
-                SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
-                SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
-                SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
-                SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
-            },
+            metadata=self._build_outbound_metadata(
+                source=source,
+                is_heartbeat=is_heartbeat,
+                heartbeat_ack_max_chars=heartbeat_ack_max_chars,
+                scheduled_payload=scheduled_payload,
+                extra=final_metadata_extra,
+            ),
         )
 
     def _scheduled_payload_from_metadata(
@@ -1798,6 +1894,11 @@ class AgentLoop:
             if now < self._tool_circuit_open_until[tool_name]:
                 # Circuit is open, skip execution
                 logger.warning(f"Circuit open for tool '{tool_name}'. Skipping execution.")
+                await self._publish_progress_update(
+                    "tool_failed",
+                    f"Skipped `{tool_name}` because it is temporarily unavailable.",
+                    detail="circuit open",
+                )
                 return ToolResult(
                     success=False,
                     output="",
@@ -1810,10 +1911,12 @@ class AgentLoop:
                 self._tool_failures[tool_name] = 0  # reset failures
         
         logger.info(f"Executing tool: {tool_name} with args: {tool_call.arguments}")
+        await self._publish_progress_update("tool_started", f"Running `{tool_name}`.", detail=tool_name)
 
         if self.tools.get(tool_name) is None:
             logger.warning(f"Rejected unknown tool call: {tool_name}")
             self._tool_stats["calls_rejected"] += 1
+            await self._publish_progress_update("tool_failed", f"Rejected unknown tool `{tool_name}`.", detail=tool_name)
             return ToolResult(success=False, output="", error=f"Unknown tool: {tool_name}")
 
         # Validate tool invocation before execution.
@@ -1832,6 +1935,11 @@ class AgentLoop:
         if not valid:
             logger.warning(f"Rejected tool call for '{tool_name}': {error_msg}")
             self._tool_stats["calls_rejected"] += 1
+            await self._publish_progress_update(
+                "tool_failed",
+                f"Rejected invalid call for `{tool_name}`.",
+                detail=error_msg,
+            )
             return ToolResult(success=False, output="", error=f"Invalid tool call: {error_msg}")
         args = dict(sanitized.get("params", raw_args))
         if execution_target == "remote" and getattr(self._tool_runtime, "remote_executor", None) is None:
@@ -1867,6 +1975,7 @@ class AgentLoop:
             if tool_name in self._tool_failures:
                 self._tool_failures[tool_name] = 0
             logger.info(f"Tool {tool_name} succeeded: {result.output[:100]}...")
+            await self._publish_progress_update("tool_completed", f"Completed `{tool_name}`.", detail=tool_name)
         else:
             self._tool_stats["calls_failed"] += 1
             # Increment failure count
@@ -1875,6 +1984,11 @@ class AgentLoop:
             # Increment tool error metric
             get_metrics().inc_tool_errors()
             logger.warning(f"Tool {tool_name} failed: {result.error} (failures: {failures})")
+            await self._publish_progress_update(
+                "tool_failed",
+                f"`{tool_name}` failed.",
+                detail=result.error or result.output[:200],
+            )
             
             if failures >= self._tool_failure_threshold:
                 # Trip circuit breaker
@@ -2000,6 +2114,13 @@ class AgentLoop:
                     messages.append({"role": "system", "content": repo_context})
             except Exception as e:
                 logger.debug(f"Context engine unavailable for this turn: {e}")
+
+        try:
+            memory_context = self.memory.get_context()
+            if memory_context:
+                messages.append({"role": "system", "content": memory_context})
+        except Exception as e:
+            logger.debug(f"Memory context unavailable for this turn: {e}")
         
         if history and history[0].role == "system" and history[0].metadata.get("summary") is True:
             messages.append(history[0].to_dict())
@@ -2040,6 +2161,35 @@ class AgentLoop:
             else:
                 del history[:-self.MAX_HISTORY]
             logger.debug(f"Trimmed history to {len(history)} messages")
+
+    def _format_tool_call_details(self, tool_call: ToolCall) -> str:
+        """Render a compact approval summary safe for user-facing channels."""
+        try:
+            args = json.dumps(tool_call.arguments or {}, indent=2, ensure_ascii=True, sort_keys=True)
+        except Exception:
+            args = str(tool_call.arguments or {})
+        return f"Tool: {tool_call.name}\nArguments:\n{args}"
+
+    def _build_confirmation_outbound_metadata(self, token: str, tool_call: ToolCall, reason: str) -> dict:
+        details = self._format_tool_call_details(tool_call)
+        return {
+            "telegram_buttons": [
+                [
+                    {"text": "Approve", "callback_data": f"approval:approve:{token}"},
+                    {"text": "Reject", "callback_data": f"approval:reject:{token}"},
+                ],
+                [
+                    {"text": "Show details", "callback_data": f"approval:details:{token}"},
+                ],
+            ],
+            "telegram_pending_approval": {
+                "token": token,
+                "tool_name": tool_call.name,
+                "reason": reason,
+                "arguments": dict(tool_call.arguments or {}),
+                "details": details,
+            },
+        }
 
     async def _maybe_handle_confirmation_reply(
         self,

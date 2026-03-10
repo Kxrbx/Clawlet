@@ -3,131 +3,132 @@ Telegram channel implementation.
 """
 
 import asyncio
+import json
 import re
-from typing import Optional
+import time
 from collections import defaultdict
+from html import escape
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from typing import Any, Optional
 
 from loguru import logger
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram.error import BadRequest, RetryAfter, TimedOut
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
+try:
+    from telegram import MenuButtonCommands
+except ImportError:  # pragma: no cover - depends on python-telegram-bot build
+    MenuButtonCommands = None
+
+from clawlet.bus.queue import InboundMessage, MessageBus, OutboundMessage
 from clawlet.channels.base import BaseChannel
 
 
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+TELEGRAM_SAFE_HTML_CHUNK = 3500
+STREAM_MODES = {"off", "progress", "verbose_debug"}
+TEXT_MENU_ACTIONS = {
+    "status": "status",
+    "settings": "settings",
+    "memory": "memory",
+    "heartbeat": "heartbeat",
+    "approve": "approve",
+    "cancel": "cancel",
+    "new conversation": "new",
+    "stop updates": "stop",
+}
+
+
 def convert_markdown_to_html(text: str) -> str:
-    """Convert common Markdown formatting to Telegram HTML.
-    
-    Supports:
-    - **bold** or __bold__ -> <b>bold</b>
-    - *italic* or _italic_ -> <i>italic</i>
-    - `inline code` -> <code>inline code</code>
-    - ```code block``` -> <pre>code block</pre>
-    - [text](url) -> <a href="url">text</a>
-    - # Heading -> <b>Heading</b>
-    - - list item -> • list item
-    - ~~strikethrough~~ -> <s>strikethrough</s>
-    
-    Also escapes HTML special characters to prevent injection.
-    """
+    """Convert a practical subset of Markdown into Telegram-safe HTML."""
     if not text:
         return text
-    
-    # First escape HTML special characters (but preserve our own tags later)
-    # We escape in a way that protects against HTML injection
-    text = text.replace('&', '&amp;')
-    text = text.replace('<', '&lt;')
-    text = text.replace('>', '&gt;')
-    
-    # Convert Markdown to HTML (order matters - more specific patterns first)
-    
-    # Code blocks (```...```) -> <pre>...</pre>
-    text = re.sub(r'```(\w*)\n?([\s\S]*?)```', r'<pre>\2</pre>', text)
-    
-    # Inline code (`...`) -> <code>...</code>
-    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
-    
-    # Bold (**...** or __...__) -> <b>...</b>
-    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'__([^_]+)__', r'<b>\1</b>', text)
-    
-    # Italic (*...* or _..._) -> <i>...</i> (being careful not to match already bold)
-    text = re.sub(r'(?<![*_])\*([^*]+)\*(?![*_])', r'<i>\1</i>', text)
-    # Avoid turning snake_case or escaped tags into italics (e.g., tool_call).
-    text = re.sub(r'(?<![\w*_])_([^_\n]+)_(?![\w*_])', r'<i>\1</i>', text)
-    
-    # Links [text](url) -> <a href="url">text</a>
-    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
-    
-    # Unordered lists: - item or * item -> • item
-    text = re.sub(r'^[\-\*]\s+', '• ', text, flags=re.MULTILINE)
-    
-    # Headers: # H1, ## H2, ### H3 -> <b>H1</b>, <b>H2</b>, <b>H3</b>
-    text = re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
-    
-    # Strikethrough ~~text~~ -> <s>text</s>
-    text = re.sub(r'~~([^~]+)~~', r'<s>\1</s>', text)
-    
+
+    text = text.replace("\r\n", "\n")
+    placeholders: list[str] = []
+
+    def _stash(tag: str, body: str) -> str:
+        placeholders.append(f"<{tag}>{escape(body)}</{tag}>")
+        return f"@@TG_PLACEHOLDER_{len(placeholders) - 1}@@"
+
+    text = re.sub(
+        r"```(?:\w+)?\n?([\s\S]*?)```",
+        lambda m: _stash("pre", m.group(1).rstrip("\n")),
+        text,
+    )
+    text = re.sub(r"`([^`]+)`", lambda m: _stash("code", m.group(1)), text)
+    text = escape(text)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"__([^_]+)__", r"<b>\1</b>", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
+    text = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"<i>\1</i>", text)
+    text = re.sub(r"~~([^~]+)~~", r"<s>\1</s>", text)
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
+    text = re.sub(r"^[\-\*]\s+", "• ", text, flags=re.MULTILINE)
+
+    for index, placeholder in enumerate(placeholders):
+        text = text.replace(f"@@TG_PLACEHOLDER_{index}@@", placeholder)
     return text
+
+
+def _prepare_html_text(text: str, *, trusted_html: bool = False) -> str:
+    """Render trusted HTML verbatim, otherwise convert Markdown-ish text safely."""
+    if trusted_html:
+        return text or ""
+    return convert_markdown_to_html(text or "")
 
 
 class TelegramChannel(BaseChannel):
     """Telegram channel using python-telegram-bot."""
-    
+
     def __init__(self, bus: MessageBus, config: dict, agent=None):
         super().__init__(bus, config, agent)
-        
-        # Strip whitespace from token to avoid URL errors
+
         self.token = (config.get("token") or "").strip()
         if not self.token:
             raise ValueError("Telegram token not configured")
-        
+
         self.app: Optional[Application] = None
         self._outbound_task: Optional[asyncio.Task] = None
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._typing_refcounts: defaultdict[str, int] = defaultdict(int)
-    
+        self._stream_mode_default = self._normalize_stream_mode(config.get("stream_mode"))
+        self._stream_update_interval = float(config.get("stream_update_interval_seconds", 1.5) or 1.5)
+        self._disable_web_page_preview = bool(config.get("disable_web_page_preview", True))
+        self._use_reply_keyboard = bool(config.get("use_reply_keyboard", True))
+        self._register_commands = bool(config.get("register_commands", True))
+        self._heartbeat_config = dict(config.get("heartbeat") or {})
+        self._ui_state_path = self._resolve_ui_state_path()
+        self._chat_state: dict[str, dict[str, Any]] = self._load_ui_state()
+
     @property
     def name(self) -> str:
         return "telegram"
-    
+
     async def start(self) -> None:
         """Start the Telegram bot."""
-        logger.info(f"Starting Telegram channel...")
-        
+        logger.info("Starting Telegram channel...")
         try:
-            # Create application
-            logger.debug("DEBUG: Creating Application builder...")
             self.app = Application.builder().token(self.token).build()
-            logger.debug("DEBUG: Application created, checking updater...")
-            
-            # Check if updater exists (debug)
-            if self.app.updater is None:
-                logger.warning("DEBUG: Application.updater is None - this may cause issues!")
-            else:
-                logger.debug("DEBUG: Updater exists, ready for polling")
-            
-            # Add handlers
-            self.app.add_handler(CommandHandler("start", self._handle_start))
-            self.app.add_handler(CommandHandler("new", self._handle_new))
-            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
-            
-            # Initialize and start
-            logger.debug("DEBUG: Initializing application...")
+            self._install_handlers()
             await self.app.initialize()
-            logger.debug("DEBUG: Starting application...")
             await self.app.start()
-            
-            # Start polling in background
-            logger.debug("DEBUG: Starting polling...")
+            if self._register_commands:
+                await self._register_telegram_commands()
             await self.app.updater.start_polling()
-            logger.debug("DEBUG: Polling started successfully")
-            
-            # Start outbound loop
+
             self._running = True
             self._outbound_task = asyncio.create_task(self._run_outbound_loop())
-            
             logger.info("Telegram channel started successfully")
         except Exception as e:
             if isinstance(e, AttributeError) and "_Updater__polling_cleanup_cb" in str(e):
@@ -137,156 +138,311 @@ class TelegramChannel(BaseChannel):
                     ptb_version = "unknown"
                 logger.error(
                     "Telegram startup failed due to an incompatible python-telegram-bot build "
-                    f"(detected version={ptb_version}). "
-                    "Reinstall with: pip install -U 'python-telegram-bot>=21.11.1,<22'"
+                    f"(detected version={ptb_version}). Reinstall with: "
+                    "pip install -U 'python-telegram-bot>=21.11.1,<22'"
                 )
-            logger.error(f"DEBUG: Exception during Telegram start: {type(e).__name__}: {e}")
-            # Don't re-raise - let the caller decide what to do
-            # But set _running to False to prevent issues
             self._running = False
             raise
-    
+
     async def stop(self) -> None:
         """Stop the Telegram bot."""
         logger.info("Stopping Telegram channel...")
-        
         self._running = False
-        
+
         if self._outbound_task:
             self._outbound_task.cancel()
             try:
                 await self._outbound_task
             except asyncio.CancelledError:
                 pass
-        
-        # Stop active typing loops
+
         for chat_id in list(self._typing_tasks.keys()):
             await self._stop_typing(chat_id)
-        
+
         if self.app:
             try:
-                # Check if updater exists and is running before stopping
                 if self.app.updater is not None:
-                    logger.debug("DEBUG: Stopping updater...")
-                    try:
-                        await self.app.updater.stop()
-                        logger.debug("DEBUG: Updater stopped successfully")
-                    except RuntimeError as e:
-                        if "not running" in str(e).lower():
-                            logger.warning(f"DEBUG: Updater was not running: {e}")
-                        else:
-                            raise
-                else:
-                    logger.warning("DEBUG: Updater is None, skipping stop")
-                
-                logger.debug("DEBUG: Stopping application...")
+                    await self.app.updater.stop()
                 await self.app.stop()
-                logger.debug("DEBUG: Application stopped")
-                
-                logger.debug("DEBUG: Shutting down application...")
                 await self.app.shutdown()
-                logger.debug("DEBUG: Application shutdown complete")
             except Exception as e:
-                logger.error(f"DEBUG: Error during Telegram stop: {type(e).__name__}: {e}")
-        
+                logger.error(f"Error during Telegram stop: {type(e).__name__}: {e}")
+
+        self._save_ui_state()
         logger.info("Telegram channel stopped")
-    
+
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message to Telegram with proper formatting."""
-        logger.info(f"Telegram send: to={msg.chat_id}, content={msg.content[:50]}...")
-        
-        # DEBUG: Log content for diagnosis
-        content_preview = msg.content[:200] if msg.content else "(empty)"
-        logger.debug(f"Telegram message content (raw): {content_preview}")
-        
+        """Send a message to Telegram with streaming, chunking, and button support."""
+        metadata = msg.metadata or {}
+        if not self.app:
+            logger.warning("Telegram app not initialized; dropping outbound message")
+            return
+
         try:
-            try:
-                chat_id = int(msg.chat_id)
-            except (ValueError, TypeError) as e:
-                logger.error(f"Invalid chat_id format: {msg.chat_id} - {e}")
+            chat_id = int(msg.chat_id)
+        except (TypeError, ValueError):
+            logger.error(f"Invalid chat_id format: {msg.chat_id}")
+            return
+
+        try:
+            if metadata.get("progress"):
+                await self._send_progress_message(chat_id, msg.content, metadata)
                 return
-            
-            # Try HTML parse_mode with converted Markdown
-            parse_mode = "HTML"
-            html_content = convert_markdown_to_html(msg.content)
-            logger.debug(f"Converted HTML content: {html_content[:100]}...")
-            
-            try:
-                await self.app.bot.send_message(
-                    chat_id=chat_id,
-                    text=html_content,
-                    parse_mode=parse_mode
-                )
-                logger.info(f"Sent Telegram message to {chat_id} (HTML format)")
-            except Exception as parse_error:
-                # Fall back to plain text if HTML parsing fails
-                logger.warning(f"HTML parsing failed, falling back to plain text: {parse_error}")
-                await self.app.bot.send_message(
-                    chat_id=chat_id,
-                    text=msg.content,
-                    parse_mode=None
-                )
-                logger.info(f"Sent Telegram message to {chat_id} (plain text)")
+
+            buttons = self._build_inline_keyboard(metadata.get("telegram_buttons"))
+            pending = metadata.get("telegram_pending_approval") or {}
+            if pending:
+                self._remember_pending_approval(str(chat_id), pending)
+
+            await self._send_final_message(chat_id, msg.content or "", metadata, buttons)
+        except RetryAfter as e:
+            logger.warning(f"Telegram rate-limited for {chat_id}, retrying after {e.retry_after}s")
+            await asyncio.sleep(float(e.retry_after))
+            await self.send(msg)
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
         finally:
-            await self._stop_typing(msg.chat_id)
-    
+            if not metadata.get("progress"):
+                await self._stop_typing(msg.chat_id)
+
+    def _install_handlers(self) -> None:
+        assert self.app is not None
+        self.app.add_handler(CommandHandler("start", self._handle_start))
+        self.app.add_handler(CommandHandler("help", self._handle_help))
+        self.app.add_handler(CommandHandler("status", self._handle_status))
+        self.app.add_handler(CommandHandler("settings", self._handle_settings))
+        self.app.add_handler(CommandHandler("memory", self._handle_memory))
+        self.app.add_handler(CommandHandler("heartbeat", self._handle_heartbeat))
+        self.app.add_handler(CommandHandler("approve", self._handle_approve))
+        self.app.add_handler(CommandHandler("cancel", self._handle_cancel))
+        self.app.add_handler(CommandHandler("stop", self._handle_stop))
+        self.app.add_handler(CommandHandler("new", self._handle_new))
+        self.app.add_handler(CallbackQueryHandler(self._handle_callback_query))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
+
+    async def _register_telegram_commands(self) -> None:
+        """Register Telegram command menu entries."""
+        assert self.app is not None
+        commands = [
+            BotCommand("start", "Show the main menu"),
+            BotCommand("help", "Show command and button help"),
+            BotCommand("status", "Show runtime status for this chat"),
+            BotCommand("settings", "Adjust Telegram streaming settings"),
+            BotCommand("memory", "Ask the agent about memory/context"),
+            BotCommand("heartbeat", "Ask for heartbeat status"),
+            BotCommand("approve", "Approve the pending action"),
+            BotCommand("cancel", "Cancel the pending action"),
+            BotCommand("stop", "Stop live progress updates"),
+            BotCommand("new", "Start a new conversation"),
+        ]
+        try:
+            await self.app.bot.set_my_commands(commands)
+            if MenuButtonCommands is not None:
+                await self.app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        except Exception as e:
+            logger.warning(f"Could not register Telegram commands/menu button: {e}")
+
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /start command."""
         chat_id = str(update.effective_chat.id)
         user_name = update.effective_user.first_name or "there"
-        
+        self._ensure_chat_state(chat_id)
         await update.message.reply_text(
-            f"👋 Hello {user_name}! I'm Clawlet, your AI assistant.\n\n"
-            f"Just send me a message and I'll help you out!"
+            self._render_welcome_text(user_name),
+            reply_markup=self._default_reply_keyboard() if self._use_reply_keyboard else None,
         )
-    
+        await update.message.reply_text(
+            self._render_help_card(),
+            parse_mode="HTML",
+            reply_markup=self._main_menu_markup(),
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text(
+            self._render_help_card(),
+            parse_mode="HTML",
+            reply_markup=self._main_menu_markup(),
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        await update.message.reply_text(
+            self._render_status_card(chat_id),
+            parse_mode="HTML",
+            reply_markup=self._main_menu_markup(),
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        await update.message.reply_text(
+            self._render_settings_card(chat_id),
+            parse_mode="HTML",
+            reply_markup=self._settings_menu_markup(chat_id),
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        await self._publish_agent_text(
+            chat_id=chat_id,
+            user_id=str(update.effective_user.id),
+            user_name=update.effective_user.first_name,
+            content="Summarize the current memory and relevant context for this conversation.",
+            metadata={"telegram_command": "memory"},
+        )
+
+    async def _handle_heartbeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        await update.message.reply_text(
+            self._render_heartbeat_card(chat_id),
+            parse_mode="HTML",
+            reply_markup=self._main_menu_markup(),
+            disable_web_page_preview=True,
+        )
+
+    async def _handle_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        args = list(context.args or [])
+        token = args[0] if args else self._latest_pending_token(chat_id)
+        if not token:
+            await update.message.reply_text("No pending action is waiting for approval in this chat.")
+            return
+        await self._publish_agent_text(
+            chat_id=chat_id,
+            user_id=str(update.effective_user.id),
+            user_name=update.effective_user.first_name,
+            content=f"confirm {token}",
+            metadata={"telegram_command": "approve", "approval_token": token},
+        )
+        await update.message.reply_text(f"Approval sent for token {token}.")
+
+    async def _handle_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        await self._publish_agent_text(
+            chat_id=chat_id,
+            user_id=str(update.effective_user.id),
+            user_name=update.effective_user.first_name,
+            content="cancel",
+            metadata={"telegram_command": "cancel"},
+        )
+        self._forget_pending_approval(chat_id)
+        await update.message.reply_text("Pending action cancelled.")
+
+    async def _handle_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        state = self._ensure_chat_state(chat_id)
+        state["active_stream_message_id"] = None
+        state["last_stream_text"] = ""
+        state["last_stream_update_ts"] = 0.0
+        self._save_ui_state()
+        await update.message.reply_text("Live progress updates stopped for this chat.")
+
     async def _handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /new command - start a new conversation and clear history."""
         chat_id = str(update.effective_chat.id)
         user_name = update.effective_user.first_name or "there"
-        
-        # Clear conversation history if agent is available
         if self.agent:
             success = await self.agent.clear_conversation(self.name, chat_id)
             if success:
                 await update.message.reply_text(
-                    f"✨ {user_name}, I've started a new conversation! "
-                    f"Previous chat history has been cleared."
+                    f"New conversation started for {user_name}.",
+                    reply_markup=self._main_menu_markup(),
                 )
-            else:
-                await update.message.reply_text(
-                    f"✨ {user_name}, I've started a new conversation! "
-                    f"(Note: Could not clear stored history)"
-                )
-        else:
-            # Agent not available, just respond
-            await update.message.reply_text(
-                f"✨ {user_name}, I've started a new conversation!"
+                return
+        await update.message.reply_text("New conversation started.", reply_markup=self._main_menu_markup())
+
+    async def _handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+
+        chat_id = str(query.message.chat.id)
+        data = (query.data or "").strip()
+
+        if data == "menu:main":
+            await self._edit_callback_message(query, self._render_help_card(), self._main_menu_markup())
+            return
+        if data == "menu:settings":
+            await self._edit_callback_message(query, self._render_settings_card(chat_id), self._settings_menu_markup(chat_id))
+            return
+        if data == "action:status":
+            await self._edit_callback_message(query, self._render_status_card(chat_id), self._main_menu_markup())
+            return
+        if data == "action:new":
+            if self.agent:
+                await self.agent.clear_conversation(self.name, chat_id)
+            await self._edit_callback_message(query, "Conversation reset for this chat.", self._main_menu_markup())
+            return
+        if data == "action:memory":
+            await self._publish_agent_text(
+                chat_id=chat_id,
+                user_id=str(update.effective_user.id),
+                user_name=update.effective_user.first_name,
+                content="Summarize the current memory and relevant context for this conversation.",
+                metadata={"telegram_callback": data},
             )
-    
+            return
+        if data == "action:heartbeat":
+            await self._edit_callback_message(query, self._render_heartbeat_card(chat_id), self._main_menu_markup())
+            return
+        if data.startswith("settings:stream_mode:"):
+            mode = self._normalize_stream_mode(data.rsplit(":", 1)[-1])
+            state = self._ensure_chat_state(chat_id)
+            state["stream_mode"] = mode
+            self._save_ui_state()
+            await self._edit_callback_message(query, self._render_settings_card(chat_id), self._settings_menu_markup(chat_id))
+            return
+        if data.startswith("approval:approve:"):
+            token = data.rsplit(":", 1)[-1]
+            await self._publish_agent_text(
+                chat_id=chat_id,
+                user_id=str(update.effective_user.id),
+                user_name=update.effective_user.first_name,
+                content=f"confirm {token}",
+                metadata={"telegram_callback": data, "approval_token": token},
+            )
+            self._forget_pending_approval(chat_id, token)
+            await self._edit_callback_message(query, "Approval sent. Waiting for the agent to continue.", None)
+            return
+        if data.startswith("approval:reject:"):
+            await self._publish_agent_text(
+                chat_id=chat_id,
+                user_id=str(update.effective_user.id),
+                user_name=update.effective_user.first_name,
+                content="cancel",
+                metadata={"telegram_callback": data},
+            )
+            self._forget_pending_approval(chat_id)
+            await self._edit_callback_message(query, "Pending action rejected.", None)
+            return
+        if data.startswith("approval:details:"):
+            token = data.rsplit(":", 1)[-1]
+            details = self._pending_approval_details(chat_id, token)
+            if details:
+                await query.answer(details[:180], show_alert=True)
+            else:
+                await query.answer("Approval details are no longer available.", show_alert=True)
+            return
+
+        await query.answer("Unsupported action.", show_alert=False)
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle incoming text message."""
         chat_id = str(update.effective_chat.id)
-        user_id = str(update.effective_user.id)
-        content = update.message.text
-        
-        logger.info(f"Received Telegram message from {chat_id}: {content[:50]}...")
-        
-        # Create inbound message
+        content = (update.message.text or "").strip()
+        if await self._maybe_handle_text_menu_action(update, content):
+            return
         msg = InboundMessage(
             channel=self.name,
             chat_id=chat_id,
             content=content,
-            user_id=user_id,
+            user_id=str(update.effective_user.id),
             metadata={
                 "user_name": update.effective_user.first_name,
                 "username": update.effective_user.username,
-            }
+            },
         )
-        
-        # Publish to bus
         await self._start_typing(chat_id)
         try:
             await self.bus.publish_inbound(msg)
@@ -294,15 +450,510 @@ class TelegramChannel(BaseChannel):
             await self._stop_typing(chat_id)
             raise
 
+    async def _maybe_handle_text_menu_action(self, update: Update, content: str) -> bool:
+        action = TEXT_MENU_ACTIONS.get(content.strip().lower())
+        if not action:
+            return False
+
+        synthetic_update = update
+        context = type("_Context", (), {"args": []})()
+        if action == "status":
+            await self._handle_status(synthetic_update, context)
+            return True
+        if action == "settings":
+            await self._handle_settings(synthetic_update, context)
+            return True
+        if action == "memory":
+            await self._handle_memory(synthetic_update, context)
+            return True
+        if action == "heartbeat":
+            await self._handle_heartbeat(synthetic_update, context)
+            return True
+        if action == "approve":
+            await self._handle_approve(synthetic_update, context)
+            return True
+        if action == "cancel":
+            await self._handle_cancel(synthetic_update, context)
+            return True
+        if action == "new":
+            await self._handle_new(synthetic_update, context)
+            return True
+        if action == "stop":
+            await self._handle_stop(synthetic_update, context)
+            return True
+        return False
+
+    async def _publish_agent_text(
+        self,
+        *,
+        chat_id: str,
+        user_id: str,
+        user_name: Optional[str],
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        await self._start_typing(chat_id)
+        try:
+            await self.bus.publish_inbound(
+                InboundMessage(
+                    channel=self.name,
+                    chat_id=chat_id,
+                    content=content,
+                    user_id=user_id,
+                    metadata={
+                        "user_name": user_name,
+                        **(metadata or {}),
+                    },
+                )
+            )
+        except Exception:
+            await self._stop_typing(chat_id)
+            raise
+
+    async def _send_progress_message(self, chat_id: int, content: str, metadata: dict) -> None:
+        state = self._ensure_chat_state(str(chat_id))
+        mode = state.get("stream_mode", self._stream_mode_default)
+        if mode == "off":
+            return
+
+        event_type = str(metadata.get("progress_event", "") or "")
+        detail = str(metadata.get("progress_detail", "") or "")
+        text = self._render_progress_text(mode, event_type, content, detail)
+        if not text or text == state.get("last_stream_text"):
+            return
+
+        now = time.time()
+        active_message_id = state.get("active_stream_message_id")
+        trusted_html = mode == "verbose_debug"
+        if active_message_id and now - float(state.get("last_stream_update_ts", 0.0) or 0.0) < self._stream_update_interval:
+            if event_type not in {"tool_failed", "completed"}:
+                return
+
+        if active_message_id:
+            try:
+                await self._edit_message(
+                    chat_id=chat_id,
+                    message_id=int(active_message_id),
+                    text=text,
+                    reply_markup=None,
+                    trusted_html=trusted_html,
+                )
+            except Exception:
+                sent = await self._send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=None,
+                    trusted_html=trusted_html,
+                )
+                state["active_stream_message_id"] = getattr(sent, "message_id", None)
+                self._save_ui_state()
+        else:
+            sent = await self._send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=None,
+                trusted_html=trusted_html,
+            )
+            state["active_stream_message_id"] = getattr(sent, "message_id", None)
+            self._save_ui_state()
+
+        state["last_stream_text"] = text
+        state["last_stream_update_ts"] = now
+
+    async def _send_final_message(
+        self,
+        chat_id: int,
+        content: str,
+        metadata: dict,
+        buttons: Optional[InlineKeyboardMarkup],
+    ) -> None:
+        state = self._ensure_chat_state(str(chat_id))
+        chunks = self._chunk_text(content or "")
+        active_message_id = state.get("active_stream_message_id")
+
+        if active_message_id and chunks:
+            first_chunk = chunks.pop(0)
+            try:
+                await self._edit_message(
+                    chat_id=chat_id,
+                    message_id=int(active_message_id),
+                    text=first_chunk,
+                    reply_markup=buttons,
+                    disable_preview=metadata.get("telegram_disable_preview", self._disable_web_page_preview),
+                )
+            except Exception:
+                sent = await self._send_message(
+                    chat_id=chat_id,
+                    text=first_chunk,
+                    reply_markup=buttons,
+                    disable_preview=metadata.get("telegram_disable_preview", self._disable_web_page_preview),
+                )
+                active_message_id = getattr(sent, "message_id", None)
+            for chunk in chunks:
+                sent = await self._send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    reply_markup=None,
+                    disable_preview=metadata.get("telegram_disable_preview", self._disable_web_page_preview),
+                )
+                active_message_id = getattr(sent, "message_id", active_message_id)
+        else:
+            for index, chunk in enumerate(chunks or [""]):
+                sent = await self._send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    reply_markup=buttons if index == 0 else None,
+                    disable_preview=metadata.get("telegram_disable_preview", self._disable_web_page_preview),
+                )
+                active_message_id = getattr(sent, "message_id", active_message_id)
+
+        state["active_stream_message_id"] = None
+        state["last_stream_text"] = ""
+        state["last_stream_update_ts"] = 0.0
+        if active_message_id is not None:
+            state["last_message_id"] = active_message_id
+        self._save_ui_state()
+
+    async def _send_message(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        reply_markup: Optional[Any],
+        disable_preview: bool = True,
+        trusted_html: bool = False,
+    ):
+        html_text = _prepare_html_text(text, trusted_html=trusted_html)
+        try:
+            return await self.app.bot.send_message(
+                chat_id=chat_id,
+                text=html_text,
+                parse_mode="HTML",
+                disable_web_page_preview=disable_preview,
+                reply_markup=reply_markup,
+            )
+        except BadRequest:
+            return await self.app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=None,
+                disable_web_page_preview=disable_preview,
+                reply_markup=reply_markup,
+            )
+
+    async def _edit_message(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: Optional[Any],
+        disable_preview: bool = True,
+        trusted_html: bool = False,
+    ) -> None:
+        html_text = _prepare_html_text(text, trusted_html=trusted_html)
+        try:
+            await self.app.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=html_text,
+                parse_mode="HTML",
+                disable_web_page_preview=disable_preview,
+                reply_markup=reply_markup,
+            )
+        except BadRequest:
+            await self.app.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode=None,
+                disable_web_page_preview=disable_preview,
+                reply_markup=reply_markup,
+            )
+
+    async def _edit_callback_message(
+        self,
+        query,
+        text: str,
+        reply_markup: Optional[InlineKeyboardMarkup],
+        trusted_html: bool = True,
+    ) -> None:
+        try:
+            await query.edit_message_text(
+                text=_prepare_html_text(text, trusted_html=trusted_html),
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        except BadRequest:
+            try:
+                await query.edit_message_text(
+                    text=text,
+                    parse_mode=None,
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=True,
+                )
+            except Exception as e:
+                logger.debug(f"Could not edit callback message: {e}")
+
+    def _render_progress_text(self, mode: str, event_type: str, content: str, detail: str) -> str:
+        base = content.strip()
+        if mode == "verbose_debug" and detail:
+            return f"{base}\n<code>{escape(detail)}</code>"
+        if mode == "progress":
+            return base
+        return ""
+
+    def _render_welcome_text(self, user_name: str) -> str:
+        return (
+            f"Hello {user_name}. I am Clawlet on Telegram.\n\n"
+            "Use the command menu or the inline controls below to inspect status, change streaming mode, "
+            "approve actions, and start new work."
+        )
+
+    def _render_help_card(self) -> str:
+        return (
+            "<b>Telegram controls</b>\n"
+            "Use the Telegram command menu, the reply keyboard, or the inline buttons below.\n\n"
+            "<b>Streaming</b>\n"
+            "Progress mode edits one live message while the agent is working.\n"
+            "Verbose debug adds tool-level details. Off only sends the final answer."
+        )
+
+    def _render_status_card(self, chat_id: str) -> str:
+        state = self._ensure_chat_state(chat_id)
+        pending_count = len((state.get("pending_approvals") or {}))
+        runtime = self.agent.get_runtime_status(self.name, chat_id) if self.agent else {}
+        return (
+            "<b>Telegram status</b>\n"
+            f"Stream mode: <code>{state.get('stream_mode', self._stream_mode_default)}</code>\n"
+            f"Active stream message: <code>{state.get('active_stream_message_id') or 'none'}</code>\n"
+            f"Pending approvals: <code>{pending_count}</code>\n"
+            f"Session: <code>{runtime.get('session_id', 'n/a')}</code>\n"
+            f"Messages in memory: <code>{runtime.get('history_messages', 0)}</code>\n"
+            f"Current run: <code>{runtime.get('current_run_id') or 'idle'}</code>"
+        )
+
+    def _render_settings_card(self, chat_id: str) -> str:
+        state = self._ensure_chat_state(chat_id)
+        return (
+            "<b>Telegram settings</b>\n"
+            f"Current stream mode: <code>{state.get('stream_mode', self._stream_mode_default)}</code>\n"
+            f"Edit throttle: <code>{self._stream_update_interval:.1f}s</code>\n"
+            f"Link previews: <code>{'off' if self._disable_web_page_preview else 'on'}</code>"
+        )
+
+    def _render_heartbeat_card(self, chat_id: str) -> str:
+        enabled = bool(self._heartbeat_config.get("enabled", False))
+        interval = int(self._heartbeat_config.get("interval_minutes", 30) or 30)
+        proactive_enabled = bool(self._heartbeat_config.get("proactive_enabled", False))
+        target = str(self._heartbeat_config.get("target", "last") or "last")
+        ack_max_chars = int(self._heartbeat_config.get("ack_max_chars", 24) or 24)
+        quiet_hours = self._format_quiet_hours()
+        route = self.agent.get_last_route() if self.agent else None
+        if route:
+            route_text = f"<code>{escape(route.channel)}/{escape(route.chat_id)}</code>"
+        else:
+            route_text = "<code>none</code>"
+        route_label = "Last route" if target == "last" else "Target route"
+
+        return (
+            "<b>Heartbeat status</b>\n"
+            f"Enabled: <code>{'yes' if enabled else 'no'}</code>\n"
+            f"Interval: <code>{interval}m</code>\n"
+            f"Quiet hours: <code>{quiet_hours}</code>\n"
+            f"Target: <code>{escape(target)}</code>\n"
+            f"{route_label}: {route_text}\n"
+            f"Proactive queue: <code>{'on' if proactive_enabled else 'off'}</code>\n"
+            f"Ack limit: <code>{ack_max_chars}</code>"
+        )
+
+    def _format_quiet_hours(self) -> str:
+        start = int(self._heartbeat_config.get("quiet_hours_start", 0) or 0)
+        end = int(self._heartbeat_config.get("quiet_hours_end", 0) or 0)
+        if start == end:
+            return "disabled"
+        return f"{start:02d}:00-{end:02d}:00 UTC"
+
+    def _default_reply_keyboard(self) -> ReplyKeyboardMarkup:
+        return ReplyKeyboardMarkup(
+            [
+                ["Status", "Settings"],
+                ["Memory", "Heartbeat"],
+                ["Approve", "Cancel"],
+                ["New conversation", "Stop updates"],
+            ],
+            resize_keyboard=True,
+        )
+
+    def _main_menu_markup(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Status", callback_data="action:status"),
+                    InlineKeyboardButton("Settings", callback_data="menu:settings"),
+                ],
+                [
+                    InlineKeyboardButton("Memory", callback_data="action:memory"),
+                    InlineKeyboardButton("Heartbeat", callback_data="action:heartbeat"),
+                ],
+                [
+                    InlineKeyboardButton("New conversation", callback_data="action:new"),
+                ],
+            ]
+        )
+
+    def _settings_menu_markup(self, chat_id: str) -> InlineKeyboardMarkup:
+        current = self._ensure_chat_state(chat_id).get("stream_mode", self._stream_mode_default)
+
+        def _label(mode: str) -> str:
+            return f"{'• ' if current == mode else ''}{mode}"
+
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(_label("off"), callback_data="settings:stream_mode:off"),
+                    InlineKeyboardButton(_label("progress"), callback_data="settings:stream_mode:progress"),
+                    InlineKeyboardButton(
+                        _label("verbose_debug"),
+                        callback_data="settings:stream_mode:verbose_debug",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton("Back", callback_data="menu:main"),
+                ],
+            ]
+        )
+
+    def _build_inline_keyboard(self, button_rows: Any) -> Optional[InlineKeyboardMarkup]:
+        if not button_rows:
+            return None
+        rows = []
+        for row in button_rows:
+            buttons = []
+            for button in row:
+                text = str(button.get("text", "") or "").strip()
+                if not text:
+                    continue
+                if button.get("url"):
+                    buttons.append(InlineKeyboardButton(text, url=str(button["url"])))
+                    continue
+                callback_data = str(button.get("callback_data", "") or "").strip()
+                if callback_data:
+                    buttons.append(InlineKeyboardButton(text, callback_data=callback_data))
+            if buttons:
+                rows.append(buttons)
+        return InlineKeyboardMarkup(rows) if rows else None
+
+    def _chunk_text(self, text: str) -> list[str]:
+        if not text:
+            return [""]
+        if len(text) <= TELEGRAM_SAFE_HTML_CHUNK:
+            return [text]
+
+        chunks: list[str] = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= TELEGRAM_SAFE_HTML_CHUNK:
+                chunks.append(remaining)
+                break
+            split_at = remaining.rfind("\n", 0, TELEGRAM_SAFE_HTML_CHUNK)
+            if split_at <= 0:
+                split_at = TELEGRAM_SAFE_HTML_CHUNK
+            chunks.append(remaining[:split_at].rstrip())
+            remaining = remaining[split_at:].lstrip("\n")
+        return chunks
+
+    def _resolve_ui_state_path(self) -> Path:
+        if self.agent is not None and getattr(self.agent, "workspace", None) is not None:
+            return Path(self.agent.workspace) / ".telegram_ui_state.json"
+        return Path.home() / ".clawlet" / "telegram_ui_state.json"
+
+    def _load_ui_state(self) -> dict[str, dict[str, Any]]:
+        try:
+            if not self._ui_state_path.exists():
+                return {}
+            payload = json.loads(self._ui_state_path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception as e:
+            logger.warning(f"Could not load Telegram UI state: {e}")
+            return {}
+
+    def _save_ui_state(self) -> None:
+        try:
+            self._ui_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ui_state_path.write_text(json.dumps(self._chat_state, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not persist Telegram UI state: {e}")
+
+    def _ensure_chat_state(self, chat_id: str) -> dict[str, Any]:
+        state = self._chat_state.setdefault(
+            chat_id,
+            {
+                "stream_mode": self._stream_mode_default,
+                "active_stream_message_id": None,
+                "last_stream_text": "",
+                "last_stream_update_ts": 0.0,
+                "last_message_id": None,
+                "pending_approvals": {},
+            },
+        )
+        if state.get("stream_mode") not in STREAM_MODES:
+            state["stream_mode"] = self._stream_mode_default
+        state.setdefault("pending_approvals", {})
+        return state
+
+    def _normalize_stream_mode(self, value: Any) -> str:
+        fallback = getattr(self, "_stream_mode_default", "progress")
+        mode = str(value or fallback).strip().lower()
+        return mode if mode in STREAM_MODES else "progress"
+
+    def _remember_pending_approval(self, chat_id: str, payload: dict) -> None:
+        token = str(payload.get("token", "") or "").strip()
+        if not token:
+            return
+        state = self._ensure_chat_state(chat_id)
+        state["pending_approvals"][token] = {
+            "reason": str(payload.get("reason", "") or ""),
+            "tool_name": str(payload.get("tool_name", "") or ""),
+            "details": str(payload.get("details", "") or ""),
+        }
+        self._save_ui_state()
+
+    def _forget_pending_approval(self, chat_id: str, token: Optional[str] = None) -> None:
+        state = self._ensure_chat_state(chat_id)
+        pending = state.get("pending_approvals", {})
+        if token:
+            pending.pop(token, None)
+        else:
+            pending.clear()
+        self._save_ui_state()
+
+    def _latest_pending_token(self, chat_id: str) -> str:
+        pending = self._ensure_chat_state(chat_id).get("pending_approvals", {})
+        if not pending:
+            agent_pending = self.agent.peek_pending_confirmation(self.name, chat_id) if self.agent else None
+            return str((agent_pending or {}).get("token", "") or "")
+        return next(reversed(pending.keys()))
+
+    def _pending_approval_details(self, chat_id: str, token: str) -> str:
+        pending = self._ensure_chat_state(chat_id).get("pending_approvals", {})
+        details = (pending.get(token) or {}).get("details", "")
+        if details:
+            return details
+        if self.agent:
+            payload = self.agent.peek_pending_confirmation(self.name, chat_id) or {}
+            if payload.get("token") == token:
+                return json.dumps(payload.get("arguments", {}), indent=2, sort_keys=True)
+        return ""
+
     async def _start_typing(self, chat_id: str) -> None:
-        """Start keepalive typing indicator for a chat."""
         self._typing_refcounts[chat_id] += 1
         if chat_id in self._typing_tasks:
             return
         self._typing_tasks[chat_id] = asyncio.create_task(self._typing_keepalive_loop(chat_id))
 
     async def _stop_typing(self, chat_id: str) -> None:
-        """Decrease typing reference count and stop indicator when no work remains."""
         count = self._typing_refcounts.get(chat_id, 0)
         if count <= 0:
             return
@@ -320,7 +971,6 @@ class TelegramChannel(BaseChannel):
                 pass
 
     async def _typing_keepalive_loop(self, chat_id: str) -> None:
-        """Send typing action periodically until stopped."""
         try:
             while self._running and self._typing_refcounts.get(chat_id, 0) > 0:
                 try:

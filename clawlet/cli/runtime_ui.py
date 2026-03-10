@@ -183,8 +183,10 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     provider, effective_model = _create_provider(config, model)
 
     from clawlet.tools import create_default_tool_registry
+    from clawlet.agent.memory import MemoryManager
 
-    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config)
+    memory_manager = MemoryManager(workspace)
+    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config, memory_manager=memory_manager)
     logger.info(f"Created tool registry with {len(tools.all_tools())} tools")
 
     agent = AgentLoop(
@@ -194,6 +196,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         provider=provider,
         model=effective_model,
         tools=tools,
+        memory_manager=memory_manager,
         max_iterations=config.agent.max_iterations,
         max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
         storage_config=config.storage,
@@ -265,8 +268,28 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         if not token:
             raise ValueError("Telegram token is missing in config")
         from clawlet.channels.telegram import TelegramChannel
-
-        runtime_channel = TelegramChannel(bus, {"token": token}, agent)
+        if isinstance(telegram_cfg, dict):
+            telegram_channel_config = dict(telegram_cfg)
+        else:
+            telegram_channel_config = {
+                "enabled": getattr(telegram_cfg, "enabled", False),
+                "token": getattr(telegram_cfg, "token", ""),
+                "stream_mode": getattr(telegram_cfg, "stream_mode", "progress"),
+                "stream_update_interval_seconds": getattr(telegram_cfg, "stream_update_interval_seconds", 1.5),
+                "disable_web_page_preview": getattr(telegram_cfg, "disable_web_page_preview", True),
+                "use_reply_keyboard": getattr(telegram_cfg, "use_reply_keyboard", True),
+                "register_commands": getattr(telegram_cfg, "register_commands", True),
+            }
+        telegram_channel_config["heartbeat"] = {
+            "enabled": getattr(hb_cfg, "enabled", False),
+            "interval_minutes": getattr(hb_cfg, "interval_minutes", 30),
+            "quiet_hours_start": getattr(hb_cfg, "quiet_hours_start", 0),
+            "quiet_hours_end": getattr(hb_cfg, "quiet_hours_end", 0),
+            "target": getattr(hb_cfg, "target", "last"),
+            "ack_max_chars": getattr(hb_cfg, "ack_max_chars", 24),
+            "proactive_enabled": getattr(hb_cfg, "proactive_enabled", False),
+        }
+        runtime_channel = TelegramChannel(bus, telegram_channel_config, agent)
         await runtime_channel.start()
     elif channel == "discord":
         discord_cfg = config.channels.get("discord")
@@ -351,7 +374,10 @@ async def run_chat(workspace: Path, model: Optional[str]) -> None:
     bus = MessageBus()
     config = load_config(workspace)
     provider, effective_model = _create_provider(config, model)
-    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config)
+    from clawlet.agent.memory import MemoryManager
+
+    memory_manager = MemoryManager(workspace)
+    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config, memory_manager=memory_manager)
 
     agent = AgentLoop(
         bus=bus,
@@ -360,6 +386,7 @@ async def run_chat(workspace: Path, model: Optional[str]) -> None:
         provider=provider,
         model=effective_model,
         tools=tools,
+        memory_manager=memory_manager,
         max_iterations=config.agent.max_iterations,
         max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
         storage_config=config.storage,

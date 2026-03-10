@@ -8,6 +8,8 @@ from typing import Optional
 
 from loguru import logger
 
+from clawlet.agent.memory import MemoryManager
+
 
 @dataclass
 class Identity:
@@ -135,7 +137,7 @@ class IdentityLoader:
         # Load MEMORY.md
         memory_path = self.workspace / "MEMORY.md"
         if memory_path.exists():
-            identity.memory = memory_path.read_text(encoding="utf-8")
+            identity.memory = MemoryManager(self.workspace).get_identity_memory()
             logger.info("Loaded MEMORY.md")
         else:
             logger.warning(f"MEMORY.md not found at {memory_path}")
