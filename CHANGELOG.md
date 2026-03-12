@@ -2,6 +2,19 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.2] - 2026-03-12
+
+### Fixes
+
+- **Telegram Rendering Fix**: Fixed leaked internal Telegram placeholder tokens in user-facing replies by switching the renderer to markdown-safe temporary markers and preserving code/preformatted content through final rendering.
+- **Stable CLI Menu Surface**: Tightened the default `clawlet` command menu so it reflects the stable day-to-day command surface instead of surfacing fragile or advanced commands by default.
+- **Config Output Redaction**: `clawlet config` now redacts secrets and tokens consistently instead of printing live credential values.
+- **Plugin Loader Import Safety**: Deferred plugin-loader import paths to avoid circular-import failures in advanced CLI flows.
+
+### Release
+
+- **Release Verification Refresh**: Re-ran smoke and regression release checks successfully against the current tree before the 0.4.2 bump.
+
 ## [0.4.1] - 2026-03-12
 
 ### Heartbeat

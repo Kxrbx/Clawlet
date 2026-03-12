@@ -58,7 +58,9 @@ def convert_markdown_to_html(text: str) -> str:
 
     def _stash(tag: str, body: str) -> str:
         placeholders.append(f"<{tag}>{escape(body)}</{tag}>")
-        return f"@@TG_PLACEHOLDER_{len(placeholders) - 1}@@"
+        # Keep the temporary token free of markdown metacharacters so later
+        # emphasis processing cannot mutate it before restoration.
+        return f"@@TGPH{len(placeholders) - 1}@@"
 
     text = re.sub(
         r"```(?:\w+)?\n?([\s\S]*?)```",
@@ -77,7 +79,7 @@ def convert_markdown_to_html(text: str) -> str:
     text = re.sub(r"^[\-\*]\s+", "• ", text, flags=re.MULTILINE)
 
     for index, placeholder in enumerate(placeholders):
-        text = text.replace(f"@@TG_PLACEHOLDER_{index}@@", placeholder)
+        text = text.replace(f"@@TGPH{index}@@", placeholder)
     return text
 
 
