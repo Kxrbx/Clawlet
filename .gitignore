@@ -38,6 +38,8 @@ env/
 .coverage
 htmlcov/
 .tox/
+clawlet/tests/
+clawlet/pytest.ini
 
 # Type checking
 .mypy_cache/
@@ -55,16 +57,17 @@ htmlcov/
 *.sqlite3
 *.log
 *.pid
+MEMORY.md
+PLAN_STATUS.md
 
 # OS
 .DS_Store
 Thumbs.db
-Microsoft/Windows/PowerShell/ModuleAnalysisCache
 .kilocode/mcp.json
 plans/openclaw-vs-clawlet-comparison.md
 plans/first-contact-profile-collection.md
 # Development-only memory/audit artifacts
-memory/*.md
+memory/
 
 # Python packaging/build artifacts
 **/__pycache__/

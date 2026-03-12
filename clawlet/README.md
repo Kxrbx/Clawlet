@@ -1,10 +1,10 @@
 # Clawlet 🤖🌸
 
-> A lightweight AI agent framework with identity awareness. Build autonomous agents that know who they are.
+> A lightweight autonomous agent framework with identity awareness, heartbeat-driven background work, and hybrid durable memory.
 
 ![Python](https://img.shields.io/badge/Python-%3E%3D3.10-blue?logo=python)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Version](https://img.shields.io/badge/version-0.1.0-orange.svg)
+![Version](https://img.shields.io/badge/version-0.4.0-orange.svg)
 
 ---
 
@@ -24,7 +24,8 @@
 
 - 🔐 **Identity Awareness** – Agents have persistent identity via `IdentityLoader`
 - 🧠 **Agent Loop** – Async event loop with health checks and rate limiting
-- 💾 **Memory Management** – Pluggable storage backends for context persistence
+- 💾 **Hybrid Memory** – SQLite-backed memory, curated `MEMORY.md`, and daily episodic notes
+- ❤️ **Heartbeat Runtime** – `HEARTBEAT.md`-driven autonomous checks with persisted heartbeat state
 - ⚙️ **Configuration** – YAML-based config with sensible defaults
 - 🛡️ **Health & Resilience** – Circuit breakers, retries, rate limiters built-in
 - 📡 **Multi-channel** – Support for various messaging providers (extensible)
@@ -47,8 +48,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourorg/clawlet.git
-cd clawlet
+git clone https://github.com/Kxrbx/Clawlet.git
+cd Clawlet
 
 # Create virtual environment
 python -m venv .venv
@@ -78,13 +79,14 @@ pip install clawlet
 python -m clawlet --help
 
 # Run agent
-python -m clawlet run --config path/to/config.yaml
+clawlet agent
 
 # Health check
-python -m clawlet health
+clawlet health
 
-# Interactive mode
-python -m clawlet repl
+# Heartbeat inspection
+clawlet heartbeat status
+clawlet heartbeat last
 ```
 
 ### As a library
@@ -151,10 +153,19 @@ Main async loop that:
 - Handles errors with retries & circuit breakers
 
 ### `agent.memory.MemoryManager`
-Abstracted storage interface with implementations:
-- `FileMemory` – JSON file storage
-- `SQLiteMemory` – SQLite backend (coming soon)
-- `RedisMemory` – Redis backend (coming soon)
+Hybrid memory system:
+- SQLite-backed structured long-term memory in `memory.db`
+- Curated human-readable memory in `MEMORY.md`
+- Episodic daily notes in `memory/YYYY-MM-DD.md`
+- Memory tools for recall, search, recent memories, daily-note review, curation, and memory-status inspection
+- `MEMORY.md` is a curated projection; not every SQLite/daily-note entry is promoted there automatically
+
+### `heartbeat.runner.HeartbeatRunner`
+Heartbeat runtime:
+- Re-reads `HEARTBEAT.md` on every tick
+- Skips work when heartbeat instructions are empty/comment-only
+- Persists heartbeat state and last-result metadata
+- Supports operator-facing heartbeat status/last/enable/disable commands
 
 ### `config.Config`
 YAML configuration with defaults for:
@@ -178,12 +189,14 @@ Token bucket algorithm for provider rate limiting. Supports per-provider limits 
 
 | Command | Description |
 |---------|-------------|
-| `run` | Start the agent loop |
-| `health` | Run health checks and exit |
-| `repl` | Interactive agent session |
-| `onboard` | First-time setup wizard |
-| `config` | Validate & view configuration |
-| `version` | Show version info |
+| `clawlet agent` | Start the agent loop |
+| `clawlet health` | Run health checks and exit |
+| `clawlet onboard` | First-time setup wizard |
+| `clawlet heartbeat status|last|enable|disable` | Inspect and control heartbeat |
+| `clawlet config` | Validate and view configuration |
+| `clawlet replay` | Inspect runtime replay logs |
+| `clawlet recovery` | Work with interrupted runs |
+| `clawlet --version` | Show version info |
 
 ---
 
@@ -208,9 +221,15 @@ providers:
     base_url: "https://openrouter.ai/api/v1"
     model: "openrouter/anthropic/claude-3.5-sonnet"
 
-rate_limits:
-  openrouter:
-    requests_per_minute: 30
+runtime:
+  engine: python
+
+heartbeat:
+  enabled: true
+  interval_minutes: 30
+  quiet_hours_start: 0
+  quiet_hours_end: 0
+  target: "last"
 
 logging:
   level: "INFO"
@@ -226,7 +245,7 @@ Environment variables are supported via `${VAR_NAME}` syntax.
 1. **Make changes** in a module
 2. **Run tests** (if present): `pytest tests/`
 3. **Check health**: `python -m clawlet health`
-4. **Run agent**: `python -m clawlet run --config examples/dev.yaml`
+4. **Run agent**: `clawlet agent`
 5. **Format code**: `ruff format .`
 6. **Lint**: `ruff check .`
 

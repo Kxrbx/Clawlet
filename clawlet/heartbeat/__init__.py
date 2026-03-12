@@ -30,6 +30,7 @@ from clawlet.heartbeat.cron_scheduler import (
 )
 from clawlet.heartbeat.runner import HeartbeatRunner, LastRoute
 from clawlet.heartbeat.proactive_queue import ProactiveQueueWorker
+from clawlet.heartbeat.state import HeartbeatStateStore, HeartbeatDecision
 
 __all__ = [
     # Legacy heartbeat scheduler
@@ -52,4 +53,6 @@ __all__ = [
     "HeartbeatRunner",
     "LastRoute",
     "ProactiveQueueWorker",
+    "HeartbeatStateStore",
+    "HeartbeatDecision",
 ]

@@ -185,7 +185,7 @@ Or add manually to `config.yaml`:
 
 ```yaml
 web_search:
-  api_key: "YOUR_BRAVE_SEARCH_API_KEY"
+  api_key: "${BRAVE_SEARCH_API_KEY}"
   enabled: true
 ```
 
@@ -216,14 +216,17 @@ web_search:
 # Start with default channel
 clawlet agent
 
-# Start with specific channel
+# Start with a specific channel after configuring it
 clawlet agent --channel telegram
 clawlet agent --channel discord
 
 # Use a different model
 clawlet agent --model anthropic/claude-sonnet-4-20250514
 
-# Start dashboard
+# Validate setup before starting optional surfaces
+clawlet validate
+
+# Start dashboard after installing frontend deps in dashboard/
 clawlet dashboard
 ```
 

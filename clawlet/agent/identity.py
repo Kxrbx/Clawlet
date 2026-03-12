@@ -4,6 +4,7 @@ Identity loader for reading SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md files.
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Optional
 
 from loguru import logger
@@ -77,6 +78,8 @@ Your workspace is located at: {workspace_path}
 - Ask at most one short clarification question only when required information is missing
 - Prefer the minimum number of tool calls needed to complete the current user request
 - If the user gives explicit URL(s), fetch those URL(s) first before exploring unrelated local files or paths
+- Prefer structured network tools over shell/curl when one exists for an API call
+- Treat external services such as Moltbook as benchmark environments, not as special-cased goals; generalize the same autonomous behavior to any comparable system
 
 Current timezone: {self.timezone}
 """
@@ -127,7 +130,7 @@ class IdentityLoader:
         # Load USER.md
         user_path = self.workspace / "USER.md"
         if user_path.exists():
-            identity.user = user_path.read_text(encoding="utf-8")
+            identity.user = self._sanitize_user_content(user_path.read_text(encoding="utf-8"))
             identity.user_name = self._extract_name(identity.user, "Human")
             identity.timezone = self._extract_timezone(identity.user)
             logger.info(f"Loaded USER.md for {identity.user_name}")
@@ -179,14 +182,14 @@ class IdentityLoader:
                 idx = i + 1
                 if idx < len(lines):
                     name_line = lines[idx].strip()
-                    if name_line and not name_line.startswith("#"):
+                    if self._is_meaningful_identity_value(name_line) and not name_line.startswith("#"):
                         return name_line
             if line.startswith("## What to call you"):
                 seen_indices.add(i)
                 idx = i + 1
                 if idx < len(lines):
                     name_line = lines[idx].strip()
-                    if name_line and not name_line.startswith("#"):
+                    if self._is_meaningful_identity_value(name_line) and not name_line.startswith("#"):
                         return name_line
         return default
     
@@ -197,9 +200,84 @@ class IdentityLoader:
             if line.strip().startswith("## Timezone"):
                 if i + 1 < len(lines):
                     tz = lines[i + 1].strip()
-                    if tz and not tz.startswith("#"):
+                    if self._is_meaningful_identity_value(tz) and not tz.startswith("#"):
                         return tz
         return "UTC"
+
+    def _sanitize_user_content(self, content: str) -> str:
+        """Drop template placeholders and boilerplate guidance from USER.md before prompt injection."""
+        sanitized_lines: list[str] = []
+        for raw_line in content.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                sanitized_lines.append("")
+                continue
+            if stripped.startswith("# USER.md - About Your Human"):
+                sanitized_lines.append(line)
+                continue
+            if stripped == "Tell your agent about yourself so it can help you better.":
+                continue
+            if stripped == "_The more your agent knows, the better it can help!_":
+                continue
+            if stripped == "🌸 _The more your agent knows, the better it can help!_":
+                continue
+            if self._is_placeholder_line(stripped):
+                continue
+            if self._is_template_prompt_bullet(stripped):
+                continue
+            sanitized_lines.append(line)
+        return self._prune_empty_sections("\n".join(sanitized_lines)).strip()
+
+    @staticmethod
+    def _is_meaningful_identity_value(value: str) -> bool:
+        stripped = value.strip()
+        return bool(stripped) and not IdentityLoader._is_placeholder_line(stripped)
+
+    @staticmethod
+    def _is_placeholder_line(value: str) -> bool:
+        stripped = value.strip()
+        if not stripped:
+            return False
+        if re.fullmatch(r"\[[^\]]+\]", stripped):
+            return True
+        if re.fullmatch(r"YOUR_[A-Z0-9_]+", stripped):
+            return True
+        return False
+
+    @staticmethod
+    def _is_template_prompt_bullet(value: str) -> bool:
+        stripped = value.strip()
+        return stripped in {
+            "- What do you care about?",
+            "- What projects are you working on?",
+            "- What annoys you?",
+            "- What makes you laugh?",
+        }
+
+    @staticmethod
+    def _prune_empty_sections(content: str) -> str:
+        """Remove headings that ended up with no real content after placeholder filtering."""
+        lines = content.splitlines()
+        result: list[str] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.strip().startswith("## "):
+                section = [line]
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith("## "):
+                    section.append(lines[i])
+                    i += 1
+                body = [entry.strip() for entry in section[1:] if entry.strip()]
+                if body:
+                    if result and result[-1] != "":
+                        result.append("")
+                    result.extend(section)
+                continue
+            result.append(line)
+            i += 1
+        return "\n".join(result)
     
     def build_system_prompt(self, tools: list = None) -> str:
         """Build full system prompt from identity files."""
@@ -222,6 +300,7 @@ You are {identity.agent_name}, an AI assistant.
 - Ask at most one short clarification question only when required information is missing
 - Prefer the minimum number of tool calls needed to complete the current user request
 - If the user gives explicit URL(s), fetch those URL(s) first before exploring unrelated local files or paths
+- Prefer structured network tools over shell/curl when one exists for an API call
 
 Current timezone: {identity.timezone}
 """

@@ -22,7 +22,7 @@ def run_event_schema_smokecheck(_workdir: Path) -> tuple[bool, list[str]]:
             payload={
                 "channel": "cli",
                 "chat_id": "local",
-                "engine": "hybrid_rust",
+                "engine": "python",
                 "engine_resolved": "python",
             },
         ),

@@ -45,6 +45,31 @@ CUSTOM_STYLE = Style([
 console = Console()
 
 
+def _merge_channel_tokens_into_config(config: Config, telegram_token: str | None = None, discord_token: str | None = None) -> None:
+    """Apply channel tokens into the config using the canonical nested channels shape."""
+    channels = dict(getattr(config, "channels", {}) or {})
+
+    def _channel_dict(name: str) -> dict:
+        current = channels.get(name, {})
+        if hasattr(current, "model_dump"):
+            return current.model_dump(mode="python")
+        return dict(current or {})
+
+    telegram = _channel_dict("telegram")
+    discord = _channel_dict("discord")
+
+    if telegram_token:
+        telegram["enabled"] = True
+        telegram["token"] = telegram_token
+    if discord_token:
+        discord["enabled"] = True
+        discord["token"] = discord_token
+
+    channels["telegram"] = telegram
+    channels["discord"] = discord
+    config.channels = channels
+
+
 def print_sakura_header():
     """Print ASCII art header with sakura petals."""
     console.clear()
@@ -484,7 +509,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_OPENROUTER_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -572,7 +597,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_OPENAI_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -596,7 +621,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_ANTHROPIC_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -620,7 +645,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_MINIMAX_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -644,7 +669,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_MOONSHOT_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -668,7 +693,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_GOOGLE_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -692,7 +717,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_QWEN_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -716,7 +741,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_ZAI_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -742,7 +767,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not access_token:
             console.print("  [yellow]! No token provided, you'll need to add it later[/yellow]")
-            access_token = "YOUR_GITHUB_ACCESS_TOKEN"
+            access_token = ""
         else:
             console.print("  [green]✓[/green] Token saved")
         
@@ -766,7 +791,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_VERCEL_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -790,7 +815,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_OPENCODE_ZEN_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -814,7 +839,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_XIAOMI_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -838,7 +863,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_SYNTHETIC_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -862,7 +887,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         
         if not api_key:
             console.print("  [yellow]! No key provided, you'll need to add it later[/yellow]")
-            api_key = "YOUR_VENICE_API_KEY"
+            api_key = ""
         else:
             console.print("  [green]✓[/green] Key saved")
         
@@ -1014,6 +1039,11 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
                 enabled=bool(brave_api_key),
             ) if brave_use else BraveSearchConfig()
         )
+        _merge_channel_tokens_into_config(
+            config,
+            telegram_token=telegram_token,
+            discord_token=discord_token,
+        )
         config.save(workspace / "config.yaml")
         progress.update(task, advance=1, description="Creating identity files...")
         
@@ -1021,8 +1051,6 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             workspace,
             agent_name=agent_name,
             personality=personality,
-            telegram_token=telegram_token,
-            discord_token=discord_token,
         )
         progress.update(task, advance=1, description="Finalizing...")
         await asyncio.sleep(0.3)
@@ -1040,14 +1068,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     console.print()
     
     console.print("[bold]Quick Start:[/bold]")
-    console.print(f"  1. Edit [{SAKURA_PINK}]{workspace}/config.yaml[/{SAKURA_PINK}] to add API keys")
-    console.print(f"  2. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start your agent")
+    console.print(f"  1. Review [{SAKURA_PINK}]{workspace}/config.yaml[/{SAKURA_PINK}]")
+    console.print(f"  2. Run [{SAKURA_PINK}]clawlet validate[/{SAKURA_PINK}] to verify the setup")
+    console.print(f"  3. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start your agent")
     console.print()
     
     console.print("[bold]Commands:[/bold]")
     console.print(f"  [{SAKURA_PINK}]clawlet --help[/{SAKURA_PINK}]     Show all commands")
     console.print(f"  [{SAKURA_PINK}]clawlet status[/{SAKURA_PINK}]    Check your setup")
-    console.print(f"  [{SAKURA_PINK}]clawlet dashboard[/{SAKURA_PINK}]  Launch web UI")
+    console.print(f"  [{SAKURA_PINK}]clawlet dashboard[/{SAKURA_PINK}]  Launch web UI after dashboard setup")
     console.print()
     console.print(f"[dim]🌸 Docs: https://github.com/Kxrbx/Clawlet[/dim]")
     console.print()
@@ -1059,8 +1088,6 @@ def create_identity_files(
     workspace: Path,
     agent_name: str = "Clawlet",
     personality: str = None,
-    telegram_token: str = None,
-    discord_token: str = None,
 ):
     """Create identity files in workspace."""
     
@@ -1097,36 +1124,7 @@ def create_identity_files(
     (workspace / "MEMORY.md").write_text("# MEMORY.md - Long-Term Memory\n\n## Key Information\n- Add important facts here\n- Decisions made\n- Lessons learned\n\n## Recent Updates\n- [Date] Initial setup\n\n---\n🌸 _Memories persist across sessions._\n", encoding="utf-8")
     
     # HEARTBEAT.md
-    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md - Periodic Tasks\n\n## Check Interval\nEvery 30 minutes\n\n## Tasks\n- [ ] Check for important updates\n- [ ] Review recent activity\n## Quiet Hours\nDisabled\n\n---\n🌸 _Heartbeats help your agent stay proactive._\n", encoding="utf-8")
+    (workspace / "HEARTBEAT.md").write_text("# HEARTBEAT.md\n\n# Keep this file empty (or with only comments) to skip heartbeat API calls.\n\n# Add tasks below when you want the agent to check something periodically.\n", encoding="utf-8")
     
-    # Update config with channel tokens
-    if telegram_token or discord_token:
-        import yaml
-        config_path = workspace / "config.yaml"
-        
-        with open(config_path, encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
-        
-        # Write to individual channel fields instead of 'channels:' key
-        # This matches the ClawletConfig schema
-        if telegram_token:
-            config_data["telegram"] = {
-                "enabled": True,
-                "token": telegram_token,
-            }
-        
-        if discord_token:
-            config_data["discord"] = {
-                "enabled": True,
-                "token": discord_token,
-            }
-        
-        # Remove legacy 'channels:' key if it exists to avoid confusion
-        config_data.pop("channels", None)
-        
-        with open(config_path, 'w') as f:
-            yaml.dump(config_data, f, default_flow_style=False)
-
-
 if __name__ == "__main__":
     asyncio.run(run_onboarding())

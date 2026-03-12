@@ -64,9 +64,9 @@ Also add:
 
 Expected files:
 
-- `/root/Clawlet/clawlet/channels/telegram.py`
-- `/root/Clawlet/clawlet/channels/base.py`
-- `/root/Clawlet/clawlet/bus/queue.py`
+- `clawlet/channels/telegram.py`
+- `clawlet/channels/base.py`
+- `clawlet/bus/queue.py`
 
 ### 2. Structured Progress Streaming
 
@@ -100,9 +100,9 @@ Suggested display modes:
 
 Expected files:
 
-- `/root/Clawlet/clawlet/agent/loop.py`
-- `/root/Clawlet/clawlet/runtime/events.py`
-- `/root/Clawlet/clawlet/channels/telegram.py`
+- `clawlet/agent/loop.py`
+- `clawlet/runtime/events.py`
+- `clawlet/channels/telegram.py`
 
 ### 3. Approval And Confirmation UX
 
@@ -119,9 +119,9 @@ Actions:
 
 Expected files:
 
-- `/root/Clawlet/clawlet/agent/loop.py`
-- `/root/Clawlet/clawlet/channels/telegram.py`
-- `/root/Clawlet/clawlet/runtime/policy.py`
+- `clawlet/agent/loop.py`
+- `clawlet/channels/telegram.py`
+- `clawlet/runtime/policy.py`
 
 ### 4. Telegram-Safe Rendering
 
@@ -136,8 +136,8 @@ Add a renderer focused on Telegram constraints:
 
 Expected files:
 
-- `/root/Clawlet/clawlet/channels/telegram.py`
-- `/root/Clawlet/clawlet/channels/base.py`
+- `clawlet/channels/telegram.py`
+- `clawlet/channels/base.py`
 
 ### 5. Per-Chat UI State
 
@@ -153,9 +153,9 @@ State must survive normal runtime loops and degrade safely across restarts.
 
 Expected files:
 
-- `/root/Clawlet/clawlet/channels/telegram.py`
-- `/root/Clawlet/clawlet/storage/sqlite.py`
-- `/root/Clawlet/clawlet/agent/loop.py`
+- `clawlet/channels/telegram.py`
+- `clawlet/storage/sqlite.py`
+- `clawlet/agent/loop.py`
 
 ### 6. Reliability Under Telegram Limits
 
@@ -171,9 +171,9 @@ Harden behavior around:
 
 Expected files:
 
-- `/root/Clawlet/clawlet/channels/telegram.py`
-- `/root/Clawlet/clawlet/retry.py`
-- `/root/Clawlet/clawlet/rate_limit.py`
+- `clawlet/channels/telegram.py`
+- `clawlet/retry.py`
+- `clawlet/rate_limit.py`
 
 ## Proposed Delivery Phases
 
@@ -225,7 +225,7 @@ Exit criteria:
 
 ## File-Level Backlog
 
-### `/root/Clawlet/clawlet/channels/telegram.py`
+### `clawlet/channels/telegram.py`
 
 - add command registration
 - add callback query dispatch
@@ -235,27 +235,27 @@ Exit criteria:
 - add per-chat UI state store
 - add edit/send fallback logic
 
-### `/root/Clawlet/clawlet/agent/loop.py`
+### `clawlet/agent/loop.py`
 
 - emit structured progress events
 - separate user-facing progress summaries from internal reasoning
 - expose approval prompts in a transport-friendly structure
 
-### `/root/Clawlet/clawlet/runtime/events.py`
+### `clawlet/runtime/events.py`
 
 - add optional progress event schema entries
 - ensure they are serializable and replay-safe
 
-### `/root/Clawlet/clawlet/channels/base.py`
+### `clawlet/channels/base.py`
 
 - support richer outbound payloads than plain text only
 - allow channel-specific metadata for buttons, edits, and progress
 
-### `/root/Clawlet/clawlet/storage/sqlite.py`
+### `clawlet/storage/sqlite.py`
 
 - persist Telegram UI state if needed for restart recovery
 
-### `/root/Clawlet/clawlet/tests/`
+### `clawlet/tests/`
 
 Add coverage for:
 

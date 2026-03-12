@@ -332,6 +332,10 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
         if not args:
             return False, "Empty command"
 
+        inline_python_error = self._validate_inline_python(args)
+        if inline_python_error:
+            return False, inline_python_error
+
         for base_cmd in self._extract_segment_commands(args):
             if base_cmd not in self.allowed_commands:
                 allowed_list = ", ".join(sorted(self.allowed_commands)[:10])
@@ -379,6 +383,25 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
             if token in REDIRECTION_OPERATORS:
                 continue
             return token
+        return None
+
+    def _validate_inline_python(self, args: list[str]) -> Optional[str]:
+        base_cmd = self._extract_base_command(args)
+        if base_cmd not in {"python", "python3"}:
+            return None
+        if "-c" not in args:
+            return None
+        try:
+            code = args[args.index("-c") + 1]
+        except IndexError:
+            return "Inline Python requires code after -c"
+        lowered = code.lower()
+        complex_markers = ("\n", ";", " if ", " for ", " while ", " try:", " with ", " def ", " class ", ":")
+        if any(marker in lowered for marker in complex_markers):
+            return (
+                "Complex inline Python via -c is not allowed. "
+                "Use a script file, a heredoc-style invocation, or simpler shell commands."
+            )
         return None
     
     def add_allowed(self, *commands: str) -> None:

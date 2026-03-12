@@ -33,16 +33,25 @@ def _validate_api_key_strict(api_key: str, provider_name: str = "") -> str:
     return api_key
 
 
+def _validate_optional_api_key(api_key: str, provider_name: str = "") -> str:
+    """Allow empty values at rest, but strictly validate populated credentials."""
+    if api_key is None:
+        return ""
+    if not str(api_key).strip():
+        return ""
+    return _validate_api_key_strict(str(api_key), provider_name)
+
+
 class OpenRouterConfig(BaseModel):
     """OpenRouter provider configuration."""
-    api_key: str = Field(..., description="OpenRouter API key")
+    api_key: str = Field(default="", description="OpenRouter API key")
     model: str = Field(default="anthropic/claude-sonnet-4", description="Model to use")
     base_url: str = Field(default="https://openrouter.ai/api/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "OpenRouter")
+        return _validate_optional_api_key(v, "OpenRouter")
 
 
 class OllamaConfig(BaseModel):
@@ -59,7 +68,7 @@ class LMStudioConfig(BaseModel):
 
 class OpenAIConfig(BaseModel):
     """OpenAI provider configuration."""
-    api_key: str = Field(..., description="OpenAI API key")
+    api_key: str = Field(default="", description="OpenAI API key")
     organization: Optional[str] = Field(default=None, description="OpenAI Organization ID")
     model: str = Field(default="gpt-5", description="Model to use")
     base_url: str = Field(default="https://api.openai.com/v1", description="API base URL")
@@ -67,150 +76,150 @@ class OpenAIConfig(BaseModel):
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "OpenAI")
+        return _validate_optional_api_key(v, "OpenAI")
 
 
 class AnthropicConfig(BaseModel):
     """Anthropic provider configuration."""
-    api_key: str = Field(..., description="Anthropic API key")
+    api_key: str = Field(default="", description="Anthropic API key")
     model: str = Field(default="claude-sonnet-5-20260203", description="Model to use")
     base_url: str = Field(default="https://api.anthropic.com", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Anthropic")
+        return _validate_optional_api_key(v, "Anthropic")
 
 
 class MiniMaxConfig(BaseModel):
     """MiniMax provider configuration."""
-    api_key: str = Field(..., description="MiniMax API key")
+    api_key: str = Field(default="", description="MiniMax API key")
     model: str = Field(default="abab7-preview", description="Model to use")
     base_url: str = Field(default="https://api.minimax.chat/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "MiniMax")
+        return _validate_optional_api_key(v, "MiniMax")
 
 
 class MoonshotConfig(BaseModel):
     """Moonshot AI provider configuration."""
-    api_key: str = Field(..., description="Moonshot API key")
+    api_key: str = Field(default="", description="Moonshot API key")
     model: str = Field(default="kimi-k2.5", description="Model to use")
     base_url: str = Field(default="https://api.moonshot.chat/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Moonshot")
+        return _validate_optional_api_key(v, "Moonshot")
 
 
 class GoogleConfig(BaseModel):
     """Google Gemini provider configuration."""
-    api_key: str = Field(..., description="Google API key")
+    api_key: str = Field(default="", description="Google API key")
     model: str = Field(default="gemini-4-pro", description="Model to use")
     base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Google")
+        return _validate_optional_api_key(v, "Google")
 
 
 class QwenConfig(BaseModel):
     """Qwen (Alibaba) provider configuration."""
-    api_key: str = Field(..., description="Qwen API key")
+    api_key: str = Field(default="", description="Qwen API key")
     model: str = Field(default="qwen4", description="Model to use")
     base_url: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Qwen")
+        return _validate_optional_api_key(v, "Qwen")
 
 
 class ZAIConfig(BaseModel):
     """Z.AI (GLM) provider configuration."""
-    api_key: str = Field(..., description="Z.AI API key")
+    api_key: str = Field(default="", description="Z.AI API key")
     model: str = Field(default="glm-5", description="Model to use")
     base_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Z.AI")
+        return _validate_optional_api_key(v, "Z.AI")
 
 
 class CopilotConfig(BaseModel):
     """GitHub Copilot provider configuration."""
-    access_token: str = Field(..., description="GitHub Access Token")
+    access_token: str = Field(default="", description="GitHub Access Token")
     model: str = Field(default="gpt-4.2", description="Model to use")
     
     @field_validator('access_token')
     @classmethod
     def validate_token(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "GitHub Token")
+        return _validate_optional_api_key(v, "GitHub Token")
 
 
 class VercelConfig(BaseModel):
     """Vercel AI Gateway provider configuration."""
-    api_key: str = Field(..., description="Vercel API key")
+    api_key: str = Field(default="", description="Vercel API key")
     model: str = Field(default="openai/gpt-5", description="Model to use")
     base_url: str = Field(default="https://gateway.ai.cloudflare.com/v1/account/gateway", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Vercel")
+        return _validate_optional_api_key(v, "Vercel")
 
 
 class OpenCodeZenConfig(BaseModel):
     """OpenCode Zen provider configuration."""
-    api_key: str = Field(..., description="OpenCode Zen API key")
+    api_key: str = Field(default="", description="OpenCode Zen API key")
     model: str = Field(default="zen-3.0", description="Model to use")
     base_url: str = Field(default="https://api.opencode.io/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "OpenCode Zen")
+        return _validate_optional_api_key(v, "OpenCode Zen")
 
 
 class XiaomiConfig(BaseModel):
     """Xiaomi provider configuration."""
-    api_key: str = Field(..., description="Xiaomi API key")
+    api_key: str = Field(default="", description="Xiaomi API key")
     model: str = Field(default="mi-agent-2", description="Model to use")
     base_url: str = Field(default="https://api.xiaomi.com/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Xiaomi")
+        return _validate_optional_api_key(v, "Xiaomi")
 
 
 class SyntheticConfig(BaseModel):
     """Synthetic AI provider configuration."""
-    api_key: str = Field(..., description="Synthetic AI API key")
+    api_key: str = Field(default="", description="Synthetic AI API key")
     model: str = Field(default="synthetic-llm-2", description="Model to use")
     base_url: str = Field(default="https://api.synthetic.ai/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Synthetic AI")
+        return _validate_optional_api_key(v, "Synthetic AI")
 
 
 class VeniceAIConfig(BaseModel):
     """Venice AI provider configuration."""
-    api_key: str = Field(..., description="Venice AI API key")
+    api_key: str = Field(default="", description="Venice AI API key")
     model: str = Field(default="venice-llama-4", description="Model to use")
     base_url: str = Field(default="https://api.venice.ai/v1", description="API base URL")
     
     @field_validator('api_key')
     @classmethod
     def validate_api_key(cls, v: str) -> str:
-        return _validate_api_key_strict(v, "Venice AI")
+        return _validate_optional_api_key(v, "Venice AI")
 
 
 class BraveSearchConfig(BaseModel):
@@ -226,6 +235,15 @@ class BraveSearchConfig(BaseModel):
                 raise ValueError("Brave Search API key is required when enabled")
             return _validate_api_key_strict(v, "Brave Search")
         return v
+
+
+class HttpAuthProfileConfig(BaseModel):
+    """Explicit local auth profile used by structured HTTP requests."""
+
+    bearer_token_path: str = ""
+    env_var: str = ""
+    header_name: str = "Authorization"
+    header_prefix: str = "Bearer "
 
 
 class ProviderConfig(BaseModel):
@@ -563,7 +581,7 @@ class RuntimeRemoteSettings(BaseModel):
 class RuntimeSettings(BaseModel):
     """Runtime engine settings."""
 
-    engine: Literal["python", "hybrid_rust"] = "hybrid_rust"
+    engine: Literal["python", "hybrid_rust"] = "python"
     policy: RuntimePolicySettings = Field(default_factory=RuntimePolicySettings)
     replay: RuntimeReplaySettings = Field(default_factory=RuntimeReplaySettings)
     remote: RuntimeRemoteSettings = Field(default_factory=RuntimeRemoteSettings)
@@ -574,6 +592,13 @@ class RuntimeSettings(BaseModel):
     default_tool_retries: int = Field(default=1, ge=0, le=5)
     outbound_publish_retries: int = Field(default=2, ge=0, le=10)
     outbound_publish_backoff_seconds: float = Field(default=0.5, ge=0.0, le=30.0)
+
+    @field_validator("engine", mode="before")
+    @classmethod
+    def _normalize_engine(cls, value):
+        if str(value or "").strip().lower() == "hybrid_rust":
+            return "python"
+        return value or "python"
 
 
 class BenchmarkGatesSettings(BaseModel):
@@ -588,7 +613,6 @@ class BenchmarkGatesSettings(BaseModel):
     max_context_cache_warm_ms: float = Field(default=1200.0, ge=1.0)
     min_coding_loop_success_rate_pct: float = Field(default=99.0, ge=0.0, le=100.0)
     max_coding_loop_p95_total_ms: float = Field(default=2500.0, ge=1.0)
-    require_rust_equivalence: bool = False
 
 
 class BenchmarksSettings(BaseModel):
@@ -613,6 +637,7 @@ class Config(BaseModel):
         "telegram": TelegramConfig(),
         "discord": DiscordConfig(),
     })
+    http_auth_profiles: dict[str, HttpAuthProfileConfig] = Field(default_factory=dict)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     heartbeat: HeartbeatSettings = Field(default_factory=HeartbeatSettings)
@@ -625,6 +650,35 @@ class Config(BaseModel):
     
     # Track the source file path for reload
     config_path: Optional[Path] = None
+
+    def primary_provider_issue(self) -> str:
+        """Return a user-facing issue if the selected provider is not fully configured."""
+        primary = str(getattr(self.provider, "primary", "") or "").strip().lower()
+        if primary in {"ollama", "lmstudio"}:
+            return ""
+        mapping: dict[str, tuple[object | None, str]] = {
+            "openrouter": (self.provider.openrouter, "api_key"),
+            "openai": (self.provider.openai, "api_key"),
+            "anthropic": (self.provider.anthropic, "api_key"),
+            "minimax": (self.provider.minimax, "api_key"),
+            "moonshot": (self.provider.moonshot, "api_key"),
+            "google": (self.provider.google, "api_key"),
+            "qwen": (self.provider.qwen, "api_key"),
+            "zai": (self.provider.zai, "api_key"),
+            "copilot": (self.provider.copilot, "access_token"),
+            "vercel": (self.provider.vercel, "api_key"),
+            "opencode_zen": (self.provider.opencode_zen, "api_key"),
+            "xiaomi": (self.provider.xiaomi, "api_key"),
+            "synthetic": (self.provider.synthetic, "api_key"),
+            "venice": (self.provider.venice, "api_key"),
+        }
+        cfg, field_name = mapping.get(primary, (None, ""))
+        if cfg is None:
+            return f"Primary provider '{primary}' is selected but not configured."
+        value = str(getattr(cfg, field_name, "") or "").strip()
+        if not value:
+            return f"Primary provider '{primary}' is selected but its credential field '{field_name}' is empty."
+        return ""
     
     def __init__(self, **data):
         # Handle root-level telegram/discord fields by moving them to channels dict
@@ -700,6 +754,10 @@ class Config(BaseModel):
         
         with open(path, 'w', encoding='utf-8') as f:
             yaml.dump(self.model_dump(mode='python'), f, default_flow_style=False)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            logger.debug(f"Could not restrict config permissions for {path}")
         
         logger.info(f"Saved config to {path}")
 

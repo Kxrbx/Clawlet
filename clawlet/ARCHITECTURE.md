@@ -23,7 +23,7 @@ _Deep dive into the core components and data flows._
 │                         AgentLoop                                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │  - History (RAM, capped MAX_HISTORY=100)                          │
-│  - MemoryManager (persistence to MEMORY.md)                       │
+│  - MemoryManager (SQLite + MEMORY.md projection + daily notes)   │
 │  - Storage (SQLite/Postgres for message history)                 │
 │  - Provider (OpenRouter/Ollama/LMStudio)                          │
 │  - Tools (registry)                                               │
@@ -42,7 +42,7 @@ _Deep dive into the core components and data flows._
                                 ▼
                     ┌─────────────────────────┐
                     │   Conversation History  │
-                    │   (MEMORY.md + DB)      │
+                    │   (SQLite + MEMORY.md)  │
                     └─────────────────────────┘
 ```
 
@@ -73,13 +73,13 @@ The heart of Clawlet. Runs a continuous loop:
 4. Detect tool calls in response
 5. If tool calls: execute tools, append results, repeat (max_iterations)
 6. If final response: append to history, publish outbound
-7. Persist messages (storage + MEMORY.md)
+7. Persist messages (storage + structured memory)
 
 **Key attributes:**
 
 - `_history`: list of `Message` (RAM, capped at 100)
 - `_session_id`: unique identifier for the current agent run (used in storage)
-- `memory`: `MemoryManager` for long-term Markdown storage
+- `memory`: `MemoryManager` for SQLite-backed memory plus curated Markdown projection
 - `storage`: `SQLiteStorage` or `PostgresStorage` for durable message history
 - `_consecutive_errors` & `_circuit_open_until`: circuit breaker state
 
@@ -93,19 +93,25 @@ The heart of Clawlet. Runs a continuous loop:
 
 ### 3. MemoryManager
 
-Manages two tiers of memory:
+Manages four tiers of memory:
 
-- **Short-term**: `_short_term` list (kept in RAM, trimmed to `max_short_term`)
-- **Long-term**: `MEMORY.md` file (Markdown, human-readable)
+- **Short-term**: `_short_term` list (RAM, trimmed to `max_short_term`)
+- **Structured long-term**: `memory.db` SQLite table for durable queryable memories
+- **Curated memory**: `MEMORY.md` as a human-readable projection of the durable memory set
+- **Episodic notes**: `memory/YYYY-MM-DD.md` daily notes for recent raw memory and later review
 
 **Workflow:**
 
-- `remember(key, value, category, importance)` adds to short-term
-- `save_long_term()` writes selected memories to `MEMORY.md` (grouped by category)
-- `recall(key)` checks short-term first, then long-term file content
-- `recall_by_category(category)` returns combined memories filtered by category
+- `remember(...)` writes to RAM, SQLite, and daily notes immediately
+- `append_note(...)` writes episodic notes to both SQLite and `memory/YYYY-MM-DD.md`
+- `search(...)` / `recent(...)` query the SQLite-backed memory store
+- `review_daily_notes(...)` surfaces recent episodic notes for maintenance
+- `curate_from_recent_daily_notes(...)` promotes durable items into curated long-term memory
+- `save_long_term()` rewrites `MEMORY.md` from curated/high-importance memories
+- `memory_status(...)` explains why a memory may exist in SQLite or daily notes but not yet appear in `MEMORY.md`
 
-**Persistence strategy:** Only messages with `importance >= threshold` are saved to avoid bloating `MEMORY.md`. Currently, all assistant messages (importance 7) and long user messages (importance boosted) are persisted.
+**Persistence strategy:** SQLite is the primary memory store. `MEMORY.md` is the curated projection, not the source of truth.
+When SQLite FTS5 is available, free-text memory search uses it before falling back to `LIKE` scans.
 
 ---
 
@@ -152,6 +158,7 @@ AgentLoop stores every inbound/outbound message here, enabling session reconstru
 
 - Provider selection (`openrouter`, `ollama`, `lmstudio`)
 - Channel tokens (Telegram, Discord)
+- Explicit `http_auth_profiles` for structured HTTP credential injection
 - Storage backend (sqlite/postgres)
 - Agent settings (max_iterations, context_window, temperature)
 - Heartbeat interval
@@ -180,6 +187,7 @@ Tools are registered in `ToolRegistry`. AgentLoop detects tool calls in LLM resp
 2. JSON block with `{"name": "...", "arguments": {...}}`
 
 If tool calls found, they are executed sequentially and results appended to history. Loop continues until no more tool calls.
+For authenticated API calls, the preferred path is structured `http_request` with an explicit `auth_profile`, not shell `curl`.
 
 ---
 
@@ -233,6 +241,7 @@ If tool calls found, they are executed sequentially and results appended to hist
 - Message history loaded from storage on startup (max `MAX_HISTORY` messages)
 - MemoryManager uses importance‑based filtering to keep `MEMORY.md` size manageable
 - Storage operations are async (non‑blocking)
+- Context indexing prunes ignored directories during filesystem walks to avoid unnecessary full-tree scans
 - Circuit breaker prevents thundering herd on unavailable provider
 
 ---

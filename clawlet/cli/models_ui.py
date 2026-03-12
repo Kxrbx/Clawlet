@@ -64,7 +64,7 @@ def run_models_command(workspace_path: Path, config_path: Path, current: bool, l
 
                 config.provider = ProviderConfig(
                     primary="openrouter",
-                    openrouter=OpenRouterConfig(api_key=api_key or "YOUR_OPENROUTER_API_KEY", model=new_model),
+                    openrouter=OpenRouterConfig(api_key=api_key or "", model=new_model),
                 )
             config.to_yaml(config_path)
             console.print()

@@ -16,7 +16,14 @@ READ_ONLY_TOOLS = {
     "fetch_url",
     "list_skills",
     "recall_memory",
+    "recall",
     "search_memory",
+    "recent_memories",
+    "recent_memory",
+    "review_daily_notes",
+    "daily_notes",
+    "memory_status",
+    "memory_overview",
 }
 
 WRITE_TOOLS = {
@@ -25,6 +32,7 @@ WRITE_TOOLS = {
     "apply_patch",
     "remember",
     "forget",
+    "curate_memory",
     "install_skill",
 }
 

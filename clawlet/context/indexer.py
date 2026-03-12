@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict
 from pathlib import Path
@@ -119,19 +120,19 @@ class RepositoryIndexer:
         return repo_hash, indexed
 
     def _iter_candidate_files(self):
-        for path in self.workspace.rglob("*"):
-            if not path.is_file():
-                continue
-            if any(part in IGNORE_DIR_NAMES for part in path.parts):
-                continue
-            if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
-            try:
-                if path.stat().st_size > MAX_FILE_SIZE:
+        for root, dirs, files in os.walk(self.workspace):
+            dirs[:] = [name for name in dirs if name not in IGNORE_DIR_NAMES]
+            root_path = Path(root)
+            for name in files:
+                path = root_path / name
+                if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                     continue
-            except OSError:
-                continue
-            yield path
+                try:
+                    if path.stat().st_size > MAX_FILE_SIZE:
+                        continue
+                except OSError:
+                    continue
+                yield path
 
     def _extract_symbols(self, suffix: str, text: str) -> list[str]:
         if not text:

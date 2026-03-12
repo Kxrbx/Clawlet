@@ -185,6 +185,7 @@ class TelegramChannel(BaseChannel):
             return
 
         try:
+            content = (msg.content or "").strip()
             if metadata.get("progress"):
                 await self._send_progress_message(chat_id, msg.content, metadata)
                 return
@@ -194,7 +195,10 @@ class TelegramChannel(BaseChannel):
             if pending:
                 self._remember_pending_approval(str(chat_id), pending)
 
-            await self._send_final_message(chat_id, msg.content or "", metadata, buttons)
+            if not content:
+                logger.warning("Skipping empty Telegram outbound message")
+                return
+            await self._send_final_message(chat_id, content, metadata, buttons)
         except RetryAfter as e:
             logger.warning(f"Telegram rate-limited for {chat_id}, retrying after {e.retry_after}s")
             await asyncio.sleep(float(e.retry_after))
@@ -219,6 +223,14 @@ class TelegramChannel(BaseChannel):
         self.app.add_handler(CommandHandler("new", self._handle_new))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback_query))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
+        self.app.add_error_handler(self._handle_telegram_error)
+
+    async def _handle_telegram_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error(f"Telegram handler error: {context.error}")
+
+    @staticmethod
+    def _reply_target(update: Update):
+        return getattr(update, "effective_message", None) or getattr(update, "message", None)
 
     async def _register_telegram_commands(self) -> None:
         """Register Telegram command menu entries."""
@@ -243,14 +255,17 @@ class TelegramChannel(BaseChannel):
             logger.warning(f"Could not register Telegram commands/menu button: {e}")
 
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
         user_name = update.effective_user.first_name or "there"
         self._ensure_chat_state(chat_id)
-        await update.message.reply_text(
+        await message.reply_text(
             self._render_welcome_text(user_name),
             reply_markup=self._default_reply_keyboard() if self._use_reply_keyboard else None,
         )
-        await update.message.reply_text(
+        await message.reply_text(
             self._render_help_card(),
             parse_mode="HTML",
             reply_markup=self._main_menu_markup(),
@@ -258,7 +273,10 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text(
+        message = self._reply_target(update)
+        if message is None:
+            return
+        await message.reply_text(
             self._render_help_card(),
             parse_mode="HTML",
             reply_markup=self._main_menu_markup(),
@@ -266,8 +284,11 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
-        await update.message.reply_text(
+        await message.reply_text(
             self._render_status_card(chat_id),
             parse_mode="HTML",
             reply_markup=self._main_menu_markup(),
@@ -275,8 +296,11 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _handle_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
-        await update.message.reply_text(
+        await message.reply_text(
             self._render_settings_card(chat_id),
             parse_mode="HTML",
             reply_markup=self._settings_menu_markup(chat_id),
@@ -294,8 +318,11 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _handle_heartbeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
-        await update.message.reply_text(
+        await message.reply_text(
             self._render_heartbeat_card(chat_id),
             parse_mode="HTML",
             reply_markup=self._main_menu_markup(),
@@ -303,11 +330,14 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _handle_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
         args = list(context.args or [])
         token = args[0] if args else self._latest_pending_token(chat_id)
         if not token:
-            await update.message.reply_text("No pending action is waiting for approval in this chat.")
+            await message.reply_text("No pending action is waiting for approval in this chat.")
             return
         await self._publish_agent_text(
             chat_id=chat_id,
@@ -316,9 +346,12 @@ class TelegramChannel(BaseChannel):
             content=f"confirm {token}",
             metadata={"telegram_command": "approve", "approval_token": token},
         )
-        await update.message.reply_text(f"Approval sent for token {token}.")
+        await message.reply_text(f"Approval sent for token {token}.")
 
     async def _handle_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
         await self._publish_agent_text(
             chat_id=chat_id,
@@ -328,29 +361,35 @@ class TelegramChannel(BaseChannel):
             metadata={"telegram_command": "cancel"},
         )
         self._forget_pending_approval(chat_id)
-        await update.message.reply_text("Pending action cancelled.")
+        await message.reply_text("Pending action cancelled.")
 
     async def _handle_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
         state = self._ensure_chat_state(chat_id)
         state["active_stream_message_id"] = None
         state["last_stream_text"] = ""
         state["last_stream_update_ts"] = 0.0
         self._save_ui_state()
-        await update.message.reply_text("Live progress updates stopped for this chat.")
+        await message.reply_text("Live progress updates stopped for this chat.")
 
     async def _handle_new(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = self._reply_target(update)
+        if message is None:
+            return
         chat_id = str(update.effective_chat.id)
         user_name = update.effective_user.first_name or "there"
         if self.agent:
             success = await self.agent.clear_conversation(self.name, chat_id)
             if success:
-                await update.message.reply_text(
+                await message.reply_text(
                     f"New conversation started for {user_name}.",
                     reply_markup=self._main_menu_markup(),
                 )
                 return
-        await update.message.reply_text("New conversation started.", reply_markup=self._main_menu_markup())
+        await message.reply_text("New conversation started.", reply_markup=self._main_menu_markup())
 
     async def _handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -752,10 +791,18 @@ class TelegramChannel(BaseChannel):
         quiet_hours = self._format_quiet_hours()
         route = self.agent.get_last_route() if self.agent else None
         if route:
-            route_text = f"<code>{escape(route.channel)}/{escape(route.chat_id)}</code>"
+            if isinstance(route, dict):
+                channel = str(route.get("channel") or "")
+                route_chat_id = str(route.get("chat_id") or "")
+            else:
+                channel = str(getattr(route, "channel", "") or "")
+                route_chat_id = str(getattr(route, "chat_id", "") or "")
+            route_text = f"<code>{escape(channel)}/{escape(route_chat_id)}</code>"
         else:
-            route_text = "<code>none</code>"
+            route_text = "<code>scheduler/main</code>"
         route_label = "Last route" if target == "last" else "Target route"
+        if target == "last" and not route:
+            route_label = "Fallback route"
 
         return (
             "<b>Heartbeat status</b>\n"

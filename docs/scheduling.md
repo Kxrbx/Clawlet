@@ -2,9 +2,10 @@
 
 This document defines Clawlet's canonical scheduling schema (`heartbeat` + `scheduler`) and the event payload contract for scheduled runs.
 
-As of 2026-03-05:
+As of 2026-03-12:
 - Config schema is implemented and validated by `clawlet/config.py`.
-- Full runtime execution wiring is being rolled out in phases.
+- Heartbeat runner/state wiring is active in the Python runtime.
+- Heartbeat behavior is driven by `HEARTBEAT.md` with state persisted in `memory/heartbeat-state.json`.
 
 ## Overview
 
@@ -48,6 +49,13 @@ Fields:
 - `proactive_handoff_dir`: proactive handoff output directory
 - `proactive_max_turns_per_hour`: guardrail cap
 - `proactive_max_tool_calls_per_cycle`: guardrail cap
+
+Behavior notes:
+- Heartbeat re-reads `HEARTBEAT.md` on every tick.
+- If `HEARTBEAT.md` is empty or only comments, the tick is skipped without heartbeat API work.
+- `target: last` falls back to `scheduler/main` when no prior routable conversation exists.
+- Heartbeat results are tracked in `memory/heartbeat-state.json`.
+- Canonical outcome values are `HEARTBEAT_OK`, `HEARTBEAT_BLOCKED`, and `HEARTBEAT_ACTION_TAKEN`.
 
 ## Scheduler Config
 
@@ -140,6 +148,10 @@ Run log payload (per line in `runs_dir/<job_id>.jsonl`) includes:
 ## CLI Operations
 
 Current operator commands:
+- `clawlet heartbeat status`
+- `clawlet heartbeat last [--json]`
+- `clawlet heartbeat enable`
+- `clawlet heartbeat disable`
 - `clawlet cron list`
 - `clawlet cron add <job_id> --name ...` (supports advanced fields: retry, priority, tags, depends_on, params-json)
 - `clawlet cron edit <job_id> [--field ...]`
@@ -151,6 +163,10 @@ Current operator commands:
 
 Dashboard API:
 - `GET /automation/status`: heartbeat + scheduler config summary and persisted run counters.
+
+Persisted heartbeat files:
+- `.runtime/heartbeat_last.json`: last runner decision/prompt metadata
+- `memory/heartbeat-state.json`: long-lived heartbeat state, due checks, recent actions, blockers
 
 Migration:
 - `clawlet migrate-heartbeat --write` normalizes legacy `heartbeat.every` and `heartbeat.active_hours`.

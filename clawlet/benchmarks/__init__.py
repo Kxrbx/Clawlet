@@ -4,7 +4,6 @@ from importlib import import_module
 
 __all__ = [
     "BenchmarkSummary",
-    "EquivalenceResult",
     "check_gates",
     "check_corpus_gates",
     "compare_corpus_reports",
@@ -19,10 +18,9 @@ __all__ = [
     "write_release_gate_report",
     "run_determinism_smokecheck",
     "run_determinism_trials",
-    "run_openclaw_matched_corpus",
+    "run_matched_corpus",
     "run_corpus_compare_smokecheck",
-    "run_openclaw_matched_corpus_smokecheck",
-    "run_engine_equivalence_smokecheck",
+    "run_matched_corpus_smokecheck",
     "run_event_schema_smokecheck",
     "run_failure_taxonomy_smokecheck",
     "run_replay_reexecution_smokecheck",
@@ -46,7 +44,6 @@ __all__ = [
 
 _LAZY_IMPORTS = {
     "BenchmarkSummary": ("clawlet.benchmarks.runner", "BenchmarkSummary"),
-    "EquivalenceResult": ("clawlet.benchmarks.equivalence", "EquivalenceResult"),
     "check_gates": ("clawlet.benchmarks.runner", "check_gates"),
     "check_corpus_gates": ("clawlet.benchmarks.corpus", "check_corpus_gates"),
     "compare_corpus_reports": ("clawlet.benchmarks.corpus", "compare_corpus_reports"),
@@ -64,13 +61,12 @@ _LAZY_IMPORTS = {
     "write_release_gate_report": ("clawlet.benchmarks.release_gate", "write_release_gate_report"),
     "run_determinism_smokecheck": ("clawlet.benchmarks.determinism", "run_determinism_smokecheck"),
     "run_determinism_trials": ("clawlet.benchmarks.determinism", "run_determinism_trials"),
-    "run_openclaw_matched_corpus": ("clawlet.benchmarks.corpus", "run_openclaw_matched_corpus"),
+    "run_matched_corpus": ("clawlet.benchmarks.corpus", "run_matched_corpus"),
     "run_corpus_compare_smokecheck": ("clawlet.benchmarks.corpus", "run_corpus_compare_smokecheck"),
-    "run_openclaw_matched_corpus_smokecheck": (
+    "run_matched_corpus_smokecheck": (
         "clawlet.benchmarks.corpus",
-        "run_openclaw_matched_corpus_smokecheck",
+        "run_matched_corpus_smokecheck",
     ),
-    "run_engine_equivalence_smokecheck": ("clawlet.benchmarks.equivalence", "run_engine_equivalence_smokecheck"),
     "run_event_schema_smokecheck": ("clawlet.benchmarks.event_schema", "run_event_schema_smokecheck"),
     "run_failure_taxonomy_smokecheck": ("clawlet.benchmarks.failure_taxonomy", "run_failure_taxonomy_smokecheck"),
     "run_replay_reexecution_smokecheck": ("clawlet.benchmarks.replay_reexecution", "run_replay_reexecution_smokecheck"),

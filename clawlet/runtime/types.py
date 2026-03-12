@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 ToolExecutionMode = Literal["read_only", "workspace_write", "elevated"]
 ExecutionTarget = Literal["local", "remote"]
@@ -24,6 +24,7 @@ class ToolCallEnvelope:
     timeout_seconds: float = 30.0
     max_retries: int = 0
     idempotency_key: str = ""
+    cacheable: Optional[bool] = None
     execution_target: ExecutionTarget = "local"
     lane: str = ""
     requested_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

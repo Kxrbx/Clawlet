@@ -307,6 +307,7 @@ def _check_unknown_top_level(raw: dict[str, Any], report: ConfigMigrationReport)
         "storage",
         "agent",
         "heartbeat",
+        "scheduler",
         "web_search",
         "runtime",
         "benchmarks",

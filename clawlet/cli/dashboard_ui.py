@@ -192,8 +192,8 @@ def run_dashboard_command(
         console.print("Install with:")
         console.print(f"  [{SAKURA_PINK}]pip install -e '.[dashboard]'[/{SAKURA_PINK}]")
         console.print()
-        console.print("Or:")
-        console.print(f"  [{SAKURA_PINK}]pip install fastapi uvicorn[/{SAKURA_PINK}]")
+        console.print("Then install the frontend dependencies in:")
+        console.print(f"  [{SAKURA_PINK}]dashboard/[/{SAKURA_PINK}] with [{SAKURA_PINK}]npm install[/{SAKURA_PINK}]")
         raise typer.Exit(1)
     except KeyboardInterrupt:
         cleanup_processes()

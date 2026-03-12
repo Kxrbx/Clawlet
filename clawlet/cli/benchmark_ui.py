@@ -62,30 +62,6 @@ def run_benchmark_run(
         raise typer.Exit(2)
 
 
-def run_benchmark_equivalence(workspace: Optional[Path], strict_rust: bool, get_workspace_path_fn) -> None:
-    """Run Python vs Rust execution equivalence checks."""
-    from clawlet.benchmarks import run_engine_equivalence_smokecheck
-
-    workspace_path = workspace or get_workspace_path_fn()
-    result = run_engine_equivalence_smokecheck(workspace_path)
-
-    print_section("Benchmark Equivalence", "Python vs Rust execution paths")
-    console.print(f"|  Rust available: {'yes' if result.rust_available else 'no'}")
-    console.print(f"|  Shell equivalent: {'yes' if result.shell_equivalent else 'no'}")
-    console.print(f"|  File equivalent: {'yes' if result.file_equivalent else 'no'}")
-    console.print(f"|  Patch equivalent: {'yes' if result.patch_equivalent else 'no'}")
-    if result.details:
-        console.print("|")
-        for detail in result.details:
-            console.print(f"|  - {detail}")
-    print_footer()
-
-    if strict_rust and not result.rust_available:
-        raise typer.Exit(2)
-    if not result.passed:
-        raise typer.Exit(2)
-
-
 def run_benchmark_remote_health(workspace: Optional[Path], get_workspace_path_fn) -> None:
     """Check configured remote worker health endpoint."""
     from clawlet.config import RuntimeSettings
@@ -248,12 +224,12 @@ def run_benchmark_corpus(
     load_benchmarks_settings_fn,
     print_corpus_comparison_summary_fn,
 ) -> None:
-    """Run OpenClaw-matched corpus and optional baseline comparison."""
+    """Run the standard corpus and optional baseline comparison."""
     from clawlet.benchmarks import (
         check_corpus_gates,
         compare_corpus_to_baseline,
         format_publishable_corpus_report,
-        run_openclaw_matched_corpus,
+        run_matched_corpus,
         write_corpus_report,
         write_publishable_corpus_report,
     )
@@ -261,8 +237,8 @@ def run_benchmark_corpus(
     workspace_path = workspace or get_workspace_path_fn()
     gates_cfg = load_benchmarks_settings_fn(workspace_path)
 
-    print_section("Benchmark Corpus", f"OpenClaw-matched scenarios x {iterations} iteration(s)")
-    report = run_openclaw_matched_corpus(workspace=workspace_path, iterations=iterations)
+    print_section("Benchmark Corpus", f"Standard scenarios x {iterations} iteration(s)")
+    report = run_matched_corpus(workspace=workspace_path, iterations=iterations)
     gate_failures = check_corpus_gates(report, gates_cfg.gates)
 
     summary = report.summary
@@ -307,7 +283,7 @@ def run_benchmark_corpus(
             console.print("|  [red]publish-report requires --baseline-report[/red]")
             print_footer()
             raise typer.Exit(2)
-        publish_out = publish_report_path or (workspace_path / "benchmark-openclaw-report.md")
+        publish_out = publish_report_path or (workspace_path / "benchmark-report.md")
         markdown = format_publishable_corpus_report(report, comparison)
         write_publishable_corpus_report(publish_out, markdown)
         console.print(f"|  Publish report: {publish_out}")
@@ -329,7 +305,7 @@ def run_benchmark_compare(
     print_corpus_comparison_summary_fn,
     corpus_comparison_payload_fn,
 ) -> None:
-    """Compare two saved OpenClaw-matched corpus reports."""
+    """Compare two saved corpus reports."""
     from clawlet.benchmarks import (
         build_publishable_corpus_report_from_paths,
         compare_corpus_reports,
@@ -392,7 +368,7 @@ def run_benchmark_publish_report(
     )
     write_publishable_corpus_report(out, markdown)
 
-    print_section("Benchmark Publish Report", "OpenClaw comparison markdown")
+    print_section("Benchmark Publish Report", "Baseline comparison markdown")
     console.print(f"|  current={current_report}")
     console.print(f"|  baseline={baseline_report}")
     console.print(f"|  output={out}")
@@ -434,8 +410,7 @@ def run_benchmark_competitive_report(
         check_corpus_gates,
         compare_corpus_to_baseline,
         format_publishable_corpus_report,
-        run_engine_equivalence_smokecheck,
-        run_openclaw_matched_corpus,
+        run_matched_corpus,
         write_competitive_corpus_bundle,
         write_corpus_report,
         write_publishable_corpus_report,
@@ -443,46 +418,28 @@ def run_benchmark_competitive_report(
 
     workspace_path = workspace or get_workspace_path_fn()
     gates_cfg = load_benchmarks_settings_fn(workspace_path)
-    require_rust_gate = bool(getattr(gates_cfg.gates, "require_rust_equivalence", False))
 
-    report = run_openclaw_matched_corpus(workspace=workspace_path, iterations=iterations)
+    report = run_matched_corpus(workspace=workspace_path, iterations=iterations)
     gate_failures = check_corpus_gates(report, gates_cfg.gates)
     comparison = compare_corpus_to_baseline(
         report=report,
         baseline_path=baseline_report,
         target_improvement_pct=target_improvement_pct,
     )
-    eq = run_engine_equivalence_smokecheck(workspace_path)
-    rust_equivalence = {
-        "passed": bool(eq.passed),
-        "gate_passed": bool(eq.passed and (bool(eq.rust_available) or (not require_rust_gate))),
-        "require_rust_equivalence_gate": require_rust_gate,
-        "rust_available": bool(eq.rust_available),
-        "shell_equivalent": bool(eq.shell_equivalent),
-        "file_equivalent": bool(eq.file_equivalent),
-        "patch_equivalent": bool(eq.patch_equivalent),
-        "details": list(eq.details),
-    }
-    if require_rust_gate and (not bool(eq.passed) or not bool(eq.rust_available)):
-        gate_failures = list(gate_failures)
-        gate_failures.append(
-            "rust equivalence required by gate (require_rust_equivalence=true) but rust extension is unavailable or parity check failed"
-        )
 
     corpus_out = corpus_report_out or (workspace_path / "benchmark-corpus-report.json")
     write_corpus_report(corpus_out, report, gate_failures, comparison=comparison)
 
     markdown_text = format_publishable_corpus_report(report, comparison)
-    markdown_path = markdown_out or (workspace_path / "benchmark-openclaw-report.md")
+    markdown_path = markdown_out or (workspace_path / "benchmark-report.md")
     write_publishable_corpus_report(markdown_path, markdown_text)
 
     bundle = build_competitive_corpus_bundle(
         report,
         comparison,
         gate_failures,
-        rust_equivalence=rust_equivalence,
     )
-    bundle_path = bundle_out or (workspace_path / "benchmark-openclaw-competitive.json")
+    bundle_path = bundle_out or (workspace_path / "benchmark-competitive.json")
     write_competitive_corpus_bundle(bundle_path, bundle)
 
     if json_output:
@@ -505,11 +462,6 @@ def run_benchmark_competitive_report(
     console.print(f"|  gate_passed={'yes' if len(gate_failures) == 0 else 'no'}")
     console.print(f"|  comparison_passed={'yes' if comparison.meets_target else 'no'}")
     console.print(f"|  improvement={comparison.improvement_pct:.2f}%")
-    console.print(
-        "|  "
-        f"rust_equivalence_passed={'yes' if rust_equivalence.get('passed') else 'no'} "
-        f"rust_available={'yes' if rust_equivalence.get('rust_available') else 'no'}"
-    )
     if gate_failures:
         console.print("|  [red]Gate failures:[/red]")
         for item in gate_failures:
@@ -611,14 +563,6 @@ def run_benchmark_release_gate(
         f"passed={'yes' if report.coding_loop.get('passed') else 'no'} "
         f"success={float(report.coding_loop.get('success_rate', 0.0)):.2f}% "
         f"p95_total_ms={float(report.coding_loop.get('p95_total_ms', 0.0)):.2f}"
-    )
-    console.print("|  Rust equivalence:")
-    console.print(
-        "|    "
-        f"passed={'yes' if report.rust_equivalence.get('passed') else 'no'} "
-        f"gate_passed={'yes' if report.rust_equivalence.get('gate_passed') else 'no'} "
-        f"rust_available={'yes' if report.rust_equivalence.get('rust_available') else 'no'} "
-        f"require_gate={'yes' if report.rust_equivalence.get('require_rust_equivalence_gate') else 'no'}"
     )
     if report.comparison is not None:
         console.print("|  Baseline comparison:")

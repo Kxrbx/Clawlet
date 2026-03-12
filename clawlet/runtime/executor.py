@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from dataclasses import asdict
 from typing import Optional
@@ -89,7 +90,8 @@ class DeterministicToolRuntime:
             return result, ToolExecutionMetadata(duration_ms=0.0, attempts=0, cached=False)
 
         idempotency_key = envelope.idempotency_key or self._build_idempotency_key(envelope)
-        if self.enable_idempotency and idempotency_key in self._idempotency_cache:
+        cacheable = self._is_cacheable(envelope)
+        if cacheable and idempotency_key in self._idempotency_cache:
             cached = self._idempotency_cache[idempotency_key]
             meta = ToolExecutionMetadata(duration_ms=0.0, attempts=0, cached=True)
             self.event_store.append(
@@ -116,7 +118,7 @@ class DeterministicToolRuntime:
                 last_result, metadata, use_remote = await self._execute_inner(envelope, args, lane)
 
         if last_result.success:
-            if self.enable_idempotency:
+            if cacheable:
                 self._idempotency_cache[idempotency_key] = last_result
             self.event_store.append(
                 RuntimeEvent(
@@ -159,6 +161,31 @@ class DeterministicToolRuntime:
             )
 
         return last_result, metadata
+
+    def _is_cacheable(self, envelope: ToolCallEnvelope) -> bool:
+        if not self.enable_idempotency:
+            return False
+        if envelope.cacheable is False:
+            return False
+        if envelope.execution_mode != "read_only":
+            return False
+
+        tool_name = (envelope.tool_name or "").strip().lower()
+        if tool_name == "read_file":
+            return True
+        if tool_name != "fetch_url":
+            return False
+
+        url = str((envelope.arguments or {}).get("url", "") or "").strip().lower()
+        if not url:
+            return False
+        if "/api/" in url:
+            return False
+        if any(marker in url for marker in ("timestamp=", "ts=", "cachebust=", "nocache=", "notifications/")):
+            return False
+        if re.search(r"/(upvote|downvote|comment|comments|reply|replies|messages|dm|follow|like)\b", url):
+            return False
+        return True
 
     def _build_idempotency_key(self, envelope: ToolCallEnvelope) -> str:
         raw = json.dumps(

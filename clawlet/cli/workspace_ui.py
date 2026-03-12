@@ -90,8 +90,13 @@ def run_validate(workspace_path: Path, migration: bool = False) -> None:
 
     try:
         config = Config.from_yaml(config_path)
+        provider_issue = config.primary_provider_issue()
 
         console.print("|  [green]OK[/green] Configuration is valid")
+        if provider_issue:
+            console.print(f"|  [red]x[/red] {provider_issue}")
+            print_footer()
+            raise typer.Exit(1)
         console.print("|")
         console.print("|  [bold]Settings:[/bold]")
         console.print(f"|    Provider: [{SAKURA_PINK}]{config.provider.primary}[/{SAKURA_PINK}]")

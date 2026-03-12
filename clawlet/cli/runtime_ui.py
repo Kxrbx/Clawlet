@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import signal
 import subprocess
 from pathlib import Path
@@ -14,6 +15,63 @@ from loguru import logger
 from rich.console import Console
 
 console = Console()
+
+
+def _build_effective_heartbeat_context(raw_context: str, hb_cfg) -> str:
+    """Overlay runtime heartbeat settings onto HEARTBEAT.md-derived context."""
+    context = (raw_context or "").strip()
+    actionable = False
+    for raw_line in context.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("<!--"):
+            continue
+        actionable = True
+        break
+    if not actionable:
+        return ""
+    start = int(getattr(hb_cfg, "quiet_hours_start", 0) or 0)
+    end = int(getattr(hb_cfg, "quiet_hours_end", 0) or 0)
+    quiet_text = "Disabled" if start == end else f"{start}:00-{end}:00 UTC"
+
+    if "## Quiet Hours" in context:
+        context = re.sub(
+            r"(?ms)^## Quiet Hours\n.*?(?=^## |\Z)",
+            f"## Quiet Hours\n{quiet_text}\n\n",
+            context,
+        )
+    else:
+        context = f"{context}\n\n## Quiet Hours\n{quiet_text}".strip()
+    return context
+
+
+def _make_heartbeat_context_loader(workspace: Path, hb_cfg):
+    """Read HEARTBEAT.md lazily with a small mtime cache instead of reloading full identity."""
+    heartbeat_path = workspace / "HEARTBEAT.md"
+    cache = {"mtime_ns": None, "value": ""}
+
+    def _load() -> str:
+        try:
+            stat = heartbeat_path.stat()
+        except FileNotFoundError:
+            cache["mtime_ns"] = None
+            cache["value"] = ""
+            return ""
+
+        mtime_ns = getattr(stat, "st_mtime_ns", None)
+        if cache["mtime_ns"] == mtime_ns:
+            return str(cache["value"])
+
+        raw = heartbeat_path.read_text(encoding="utf-8")
+        value = _build_effective_heartbeat_context(f"## Periodic Tasks\n\n{raw}", hb_cfg)
+        cache["mtime_ns"] = mtime_ns
+        cache["value"] = value
+        return value
+
+    return _load
 
 
 def run_agent_command(
@@ -243,6 +301,8 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         if proactive_worker is not None:
             await proactive_worker.on_heartbeat_tick(now)
 
+    heartbeat_loader = _make_heartbeat_context_loader(workspace, hb_cfg)
+
     if getattr(hb_cfg, "enabled", False):
         heartbeat_runner = HeartbeatRunner(
             bus=bus,
@@ -252,7 +312,9 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             target=hb_cfg.target,
             ack_max_chars=hb_cfg.ack_max_chars,
             route_provider=agent.get_last_route,
-            heartbeat_context=identity.build_heartbeat_context(),
+            heartbeat_context_provider=heartbeat_loader,
+            state_path=workspace / ".runtime" / "heartbeat_last.json",
+            heartbeat_state_path=workspace / "memory" / "heartbeat-state.json",
             on_tick=_heartbeat_tick_hook,
         )
         heartbeat_task = asyncio.create_task(heartbeat_runner.start())
