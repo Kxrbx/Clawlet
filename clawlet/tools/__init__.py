@@ -34,7 +34,6 @@ from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
 from clawlet.skills.registry import SkillRegistry
-from clawlet.plugins.loader import PluginLoader
 
 
 FULL_EXEC_COMMANDS = [
@@ -171,6 +170,7 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
             if not candidate.is_absolute():
                 candidate = base_dir / candidate
             plugin_dirs.append(candidate)
+        from clawlet.plugins.loader import PluginLoader
         loader = PluginLoader(plugin_dirs)
         plugin_tools = loader.load_tools()
         for tool in plugin_tools:

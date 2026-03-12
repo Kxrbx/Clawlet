@@ -2,7 +2,7 @@
 
 All notable changes to Clawlet will be documented in this file.
 
-## [0.4.0] - 2026-03-12
+## [0.4.1] - 2026-03-12
 
 ### Heartbeat
 

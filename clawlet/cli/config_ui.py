@@ -10,9 +10,18 @@ import yaml
 from rich.console import Console
 
 from clawlet.cli.common_ui import print_footer, print_section
+from clawlet.utils.security import mask_secrets
 
 SAKURA_PINK = "#FF69B4"
 console = Console()
+SENSITIVE_FIELD_NAMES = {"api_key", "token", "password", "secret", "access_token", "signing_secret", "verify_token"}
+
+
+def _render_config_value(name: str, value) -> str:
+    if str(name).lower() in SENSITIVE_FIELD_NAMES and value not in (None, ""):
+        return "***"
+    rendered = yaml.safe_dump(value, sort_keys=False).strip() if isinstance(value, (dict, list)) else str(value)
+    return mask_secrets(rendered)
 
 
 def run_config_command(workspace_path: Path, key: Optional[str]) -> None:
@@ -35,7 +44,8 @@ def run_config_command(workspace_path: Path, key: Optional[str]) -> None:
                 value = None
                 break
         if value is not None:
-            console.print(f"[{SAKURA_PINK}]{key}[/{SAKURA_PINK}]: {value}")
+            leaf_name = keys[-1] if keys else key
+            console.print(f"[{SAKURA_PINK}]{key}[/{SAKURA_PINK}]: {_render_config_value(leaf_name, value)}")
         else:
             console.print(f"[red]Key not found: {key}[/red]")
         return
@@ -50,7 +60,7 @@ def run_config_command(workspace_path: Path, key: Optional[str]) -> None:
                 console.print(f"{prefix}[bold]{name}:[/bold]")
                 print_dict(val, indent + 1)
             else:
-                console.print(f"{prefix}[{SAKURA_PINK}]{name}[/{SAKURA_PINK}]: {val}")
+                console.print(f"{prefix}[{SAKURA_PINK}]{name}[/{SAKURA_PINK}]: {_render_config_value(name, val)}")
 
     print_dict(config_data)
     print_footer()

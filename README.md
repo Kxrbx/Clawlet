@@ -517,7 +517,7 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.0 Highlights
+### 0.4.1 Highlights
 - **Heartbeat Runtime Refresh**: `HEARTBEAT.md` now drives background autonomy with persistent heartbeat state and quieter no-op behavior
 - **Hybrid Durable Memory**: `memory.db`, curated `MEMORY.md`, and daily episodic notes now work together as one memory model
 - **Python-Only Runtime**: the supported runtime path is now `runtime.engine: python`

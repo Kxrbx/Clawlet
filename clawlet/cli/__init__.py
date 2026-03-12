@@ -125,30 +125,52 @@ def print_sakura_banner():
 """
     )
 
+MAIN_MENU_COMMANDS = [
+    ("onboard", "Interactive setup wizard (recommended)", "clawlet onboard"),
+    ("init", "Quick workspace initialization", "clawlet init"),
+    ("agent", "Start your AI agent", "clawlet agent"),
+    ("chat", "Start a local terminal chat session", "clawlet chat"),
+    ("logs", "Tail the Clawlet agent logs", "clawlet logs"),
+    ("models", "Manage AI models", "clawlet models"),
+    ("dashboard", "Launch web dashboard", "clawlet dashboard"),
+    ("heartbeat", "Inspect heartbeat state and controls", "clawlet heartbeat status"),
+    ("cron", "List and run scheduled jobs", "clawlet cron list"),
+    ("benchmark", "Run performance regression suite", "clawlet benchmark run"),
+    ("replay", "Inspect deterministic run events", "clawlet replay <run_id>"),
+    ("sessions", "List and export stored sessions", "clawlet sessions"),
+    ("status", "Check workspace status", "clawlet status"),
+    ("health", "Run health checks", "clawlet health"),
+    ("validate", "Validate configuration", "clawlet validate"),
+    ("config", "View/edit configuration", "clawlet config"),
+]
+
+
+def _registered_top_level_command_names() -> set[str]:
+    names: set[str] = set()
+    for command in app.registered_commands:
+        callback = getattr(command, "callback", None)
+        callback_name = getattr(callback, "__name__", "")
+        explicit_name = str(getattr(command, "name", "") or "").strip()
+        if explicit_name:
+            names.add(explicit_name)
+        elif callback_name:
+            names.add(callback_name.replace("_", "-"))
+    for group in getattr(app, "registered_groups", []):
+        group_name = str(getattr(group, "name", "") or "").strip()
+        if group_name:
+            names.add(group_name)
+    return names
+
+
 def print_main_menu():
     """Print the main menu when clawlet is invoked without args."""
     print_sakura_banner()
     
     print_section("Commands", "What would you like to do?")
-    
-    print_command("onboard", "Interactive setup wizard (recommended)", "clawlet onboard")
-    print_command("init", "Quick workspace initialization", "clawlet init")
-    print_command("agent", "Start your AI agent", "clawlet agent")
-    print_command("models", "Manage AI models", "clawlet models")
-    print_command("dashboard", "Launch web dashboard", "clawlet dashboard")
-    print_command("benchmark", "Run performance regression suite", "clawlet benchmark run")
-    print_command("replay", "Inspect deterministic run events", "clawlet replay <run_id>")
-    print_command("plugin", "Manage plugin SDK extensions", "clawlet plugin init")
-    print_command("recovery", "Inspect and recover interrupted runs", "clawlet recovery list")
-    print_command("cron", "List and run scheduled jobs", "clawlet cron list")
-    print_command("status", "Check workspace status", "clawlet status")
-    print_command("health", "Run health checks", "clawlet health")
-    print_command("validate", "Validate configuration", "clawlet validate")
-    print_command("config", "View/edit configuration", "clawlet config")
-    print_command("migrate-config", "Analyze/autofix legacy config keys", "clawlet migrate-config")
-    print_command("migrate-heartbeat", "Normalize heartbeat legacy keys", "clawlet migrate-heartbeat --write")
-    print_command("migration-matrix", "Scan migration readiness across workspaces", "clawlet migration-matrix")
-    print_command("release-readiness", "Run consolidated release readiness checks", "clawlet release-readiness")
+    available = _registered_top_level_command_names()
+    for name, description, example in MAIN_MENU_COMMANDS:
+        if name in available:
+            print_command(name, description, example)
     
     print_footer()
     
