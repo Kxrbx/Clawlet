@@ -135,19 +135,13 @@ MAIN_MENU_COMMANDS = [
     ("dashboard", "Launch web dashboard", "clawlet dashboard"),
     ("heartbeat", "Inspect heartbeat state and controls", "clawlet heartbeat status"),
     ("cron", "List and run scheduled jobs", "clawlet cron list"),
-    ("replay", "Inspect deterministic run events", "clawlet replay <run_id>"),
-    ("recovery", "Inspect and recover interrupted runs", "clawlet recovery list"),
-    ("sessions", "List and export stored sessions", "clawlet sessions"),
     ("benchmark", "Run performance regression suite", "clawlet benchmark run"),
-    ("plugin", "Manage plugin SDK extensions", "clawlet plugin init"),
+    ("replay", "Inspect deterministic run events", "clawlet replay <run_id>"),
+    ("sessions", "List and export stored sessions", "clawlet sessions"),
     ("status", "Check workspace status", "clawlet status"),
     ("health", "Run health checks", "clawlet health"),
     ("validate", "Validate configuration", "clawlet validate"),
     ("config", "View/edit configuration", "clawlet config"),
-    ("migrate-config", "Analyze/autofix legacy config keys", "clawlet migrate-config"),
-    ("migrate-heartbeat", "Normalize heartbeat legacy keys", "clawlet migrate-heartbeat --write"),
-    ("migration-matrix", "Scan migration readiness across workspaces", "clawlet migration-matrix"),
-    ("release-readiness", "Run consolidated release readiness checks", "clawlet release-readiness"),
 ]
 
 
