@@ -517,12 +517,11 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.1 Highlights
-- **Heartbeat Runtime Refresh**: `HEARTBEAT.md` now drives background autonomy with persistent heartbeat state and quieter no-op behavior
-- **Hybrid Durable Memory**: `memory.db`, curated `MEMORY.md`, and daily episodic notes now work together as one memory model
-- **Python-Only Runtime**: the supported runtime path is now `runtime.engine: python`
-- **Structured HTTP + Safer Runtime**: safer tool caching, structured HTTP requests, and better malformed-call handling
-- **Heartbeat CLI**: added `clawlet heartbeat status|last|enable|disable`
+### 0.4.2 Highlights
+- **Telegram Rendering Reliability**: fixed leaked internal placeholder markers so inline code and fenced blocks render correctly in Telegram replies
+- **Cleaner Default CLI**: the bare `clawlet` menu now focuses on the stable command surface instead of showing fragile or low-signal commands
+- **Safer Config Inspection**: `clawlet config` now redacts secrets instead of printing live tokens
+- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.2` tree
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.

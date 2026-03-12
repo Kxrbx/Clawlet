@@ -2,7 +2,7 @@
 clawlet - A lightweight AI agent framework with identity awareness.
 """
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 __author__ = "Clawlet Team"
 
 from importlib import import_module
