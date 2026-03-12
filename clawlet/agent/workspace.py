@@ -81,18 +81,11 @@ This file stores important memories and context.
 <!-- Recent conversation highlights will be noted here -->
 """
 
-DEFAULT_HEARTBEAT_MD = """# Periodic Tasks
+DEFAULT_HEARTBEAT_MD = """# HEARTBEAT.md
 
-This file defines tasks I should perform periodically.
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
 
-## Daily Check-in
-Each day, I should:
-- Review any pending tasks
-- Check for important dates or events
-- Ask if there's anything specific you need help with
-
-## Notes
-Configure specific periodic tasks in config.yaml under the schedule section.
+# Add tasks below when you want the agent to check something periodically.
 """
 
 

@@ -5,6 +5,7 @@ Clawlet CLI commands.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -24,7 +25,6 @@ from clawlet.cli.benchmark_ui import (
     run_benchmark_coding_loop,
     run_benchmark_corpus,
     run_benchmark_context_cache,
-    run_benchmark_equivalence,
     run_benchmark_lanes,
     run_benchmark_publish_report,
     run_benchmark_release_gate,
@@ -43,6 +43,11 @@ from clawlet.cli.cron_ui import (
     run_cron_set_enabled_command,
 )
 from clawlet.cli.dashboard_ui import run_dashboard_command
+from clawlet.cli.heartbeat_ui import (
+    run_heartbeat_last_command,
+    run_heartbeat_set_enabled_command,
+    run_heartbeat_status_command,
+)
 from clawlet.cli.common_ui import _filter_breach_lines, print_command, print_footer, print_section
 from clawlet.cli.migration_ui import run_migrate_config, run_migrate_heartbeat, run_migration_matrix
 from clawlet.cli.models_ui import run_models_command
@@ -86,10 +91,12 @@ benchmark_app = typer.Typer(help="Performance and regression benchmark commands"
 plugin_app = typer.Typer(help="Plugin SDK v2 commands")
 recovery_app = typer.Typer(help="Interrupted-run recovery commands")
 cron_app = typer.Typer(help="Cron scheduler commands")
+heartbeat_app = typer.Typer(help="Heartbeat commands")
 app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(plugin_app, name="plugin")
 app.add_typer(recovery_app, name="recovery")
 app.add_typer(cron_app, name="cron")
+app.add_typer(heartbeat_app, name="heartbeat")
 
 console = Console()
 
@@ -220,7 +227,11 @@ def init(
     # Create config file
     config_path = workspace_path / "config.yaml"
     if not config_path.exists() or force:
-        config_path.write_text(get_config_template())
+        config_path.write_text(get_config_template(), encoding="utf-8")
+        try:
+            os.chmod(config_path, 0o600)
+        except OSError:
+            pass
         console.print(f"|  [green]OK[/green] config.yaml")
     
     print_footer()
@@ -230,8 +241,9 @@ def init(
     console.print(f"  Location: [{SAKURA_PINK}]{workspace_path}[/{SAKURA_PINK}]")
     console.print()
     console.print("[bold]Next steps:[/bold]")
-    console.print(f"  1. Edit [{SAKURA_PINK}]config.yaml[/{SAKURA_PINK}] to add API keys")
-    console.print(f"  2. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start")
+    console.print(f"  1. Edit [{SAKURA_PINK}]config.yaml[/{SAKURA_PINK}] to configure a provider")
+    console.print(f"  2. Run [{SAKURA_PINK}]clawlet validate[/{SAKURA_PINK}] to check the workspace")
+    console.print(f"  3. Run [{SAKURA_PINK}]clawlet agent[/{SAKURA_PINK}] to start")
     console.print()
 
 
@@ -294,7 +306,7 @@ def dashboard(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to run on"),
     frontend_port: int = typer.Option(5173, "--frontend-port", "-f", help="Frontend dev server port"),
-    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser automatically"),
+    open_browser: bool = typer.Option(True, "--open-browser", help="Open browser automatically"),
     no_frontend: bool = typer.Option(False, "--no-frontend", help="Don't start frontend dev server"),
 ):
     """Start the Clawlet dashboard.
@@ -339,6 +351,39 @@ def config(
 ):
     """* View or manage configuration."""
     run_config_command(workspace or get_workspace_path(), key=key)
+
+
+@heartbeat_app.command("status")
+def heartbeat_status(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Show heartbeat configuration and last recorded tick."""
+    run_heartbeat_status_command(workspace or get_workspace_path())
+
+
+@heartbeat_app.command("last")
+def heartbeat_last(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON"),
+):
+    """Show the last recorded heartbeat tick."""
+    run_heartbeat_last_command(workspace or get_workspace_path(), as_json=json_output)
+
+
+@heartbeat_app.command("enable")
+def heartbeat_enable(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Enable heartbeat execution in config."""
+    run_heartbeat_set_enabled_command(workspace or get_workspace_path(), enabled=True)
+
+
+@heartbeat_app.command("disable")
+def heartbeat_disable(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Disable heartbeat execution in config."""
+    run_heartbeat_set_enabled_command(workspace or get_workspace_path(), enabled=False)
 
 
 @cron_app.command("list")
@@ -430,7 +475,7 @@ def cron_add(
     delay_seconds: float = typer.Option(60.0, "--delay-seconds", min=0.0, max=86400.0),
     backoff_multiplier: float = typer.Option(2.0, "--backoff-multiplier", min=1.0, max=10.0),
     max_delay_seconds: float = typer.Option(3600.0, "--max-delay-seconds", min=0.0, max=86400.0),
-    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Create job enabled/disabled"),
+    enabled: bool = typer.Option(True, "--enabled", help="Create job enabled/disabled"),
 ):
     """Add one cron job to scheduler config."""
     run_cron_add_command(
@@ -528,9 +573,9 @@ def cron_edit(
     wake_mode: Optional[str] = typer.Option(None, "--wake-mode"),
     delivery_mode: Optional[str] = typer.Option(None, "--delivery-mode"),
     delivery_channel: Optional[str] = typer.Option(None, "--delivery-channel"),
-    best_effort_delivery: Optional[bool] = typer.Option(None, "--best-effort-delivery/--no-best-effort-delivery"),
-    delete_after_run: Optional[bool] = typer.Option(None, "--delete-after-run/--keep-after-run"),
-    failure_alert_enabled: Optional[bool] = typer.Option(None, "--failure-alert-enabled/--failure-alert-disabled"),
+    best_effort_delivery: Optional[bool] = typer.Option(None, "--best-effort-delivery", help="Set to true/false"),
+    delete_after_run: Optional[bool] = typer.Option(None, "--delete-after-run", help="Set to true/false"),
+    failure_alert_enabled: Optional[bool] = typer.Option(None, "--failure-alert-enabled", help="Set to true/false"),
     failure_alert_after: Optional[int] = typer.Option(None, "--failure-alert-after", min=1, max=100),
     failure_alert_cooldown_seconds: Optional[int] = typer.Option(None, "--failure-alert-cooldown-seconds", min=0, max=604800),
     failure_alert_mode: Optional[str] = typer.Option(None, "--failure-alert-mode"),
@@ -538,7 +583,7 @@ def cron_edit(
     failure_alert_to: Optional[str] = typer.Option(None, "--failure-alert-to"),
     priority: Optional[str] = typer.Option(None, "--priority"),
     params_json: Optional[str] = typer.Option(None, "--params-json"),
-    enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled"),
+    enabled: Optional[bool] = typer.Option(None, "--enabled", help="Set to true/false"),
 ):
     """Edit one cron job."""
     run_cron_edit_command(
@@ -577,7 +622,7 @@ def cron_edit(
 def migrate_config(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     write: bool = typer.Option(False, "--write", help="Apply autofix changes to config.yaml"),
-    backup: bool = typer.Option(True, "--backup/--no-backup", help="Create .bak backup when writing"),
+    backup: bool = typer.Option(True, "--backup", help="Create .bak backup when writing"),
 ):
     """Analyze and optionally autofix legacy config keys."""
     run_migrate_config(workspace or get_workspace_path(), write=write, backup=backup)
@@ -640,7 +685,7 @@ def release_readiness(
     ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
     report_path: Optional[Path] = typer.Option(None, "--report", help="Optional JSON report output path"),
-    fail_on_not_ready: bool = typer.Option(True, "--fail-on-not-ready/--no-fail-on-not-ready"),
+    fail_on_not_ready: bool = typer.Option(True, "--fail-on-not-ready"),
 ):
     """Run consolidated release readiness checks across benchmarks/migration/plugins."""
     run_release_readiness_command(
@@ -706,19 +751,6 @@ def benchmark_run(
     )
 
 
-@benchmark_app.command("equivalence")
-def benchmark_equivalence(
-    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-    strict_rust: bool = typer.Option(
-        False,
-        "--strict-rust",
-        help="Fail if Rust extension is unavailable",
-    ),
-):
-    """Run Python vs Rust execution equivalence checks."""
-    run_benchmark_equivalence(workspace=workspace, strict_rust=strict_rust, get_workspace_path_fn=get_workspace_path)
-
-
 @benchmark_app.command("remote-health")
 def benchmark_remote_health(
     workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
@@ -780,7 +812,7 @@ def benchmark_corpus(
     baseline_report: Optional[Path] = typer.Option(
         None,
         "--baseline-report",
-        help="Optional baseline report JSON (OpenClaw or previous Clawlet run)",
+        help="Optional baseline report JSON (previous Clawlet run or another saved baseline)",
     ),
     target_improvement_pct: float = typer.Option(
         35.0,
@@ -803,10 +835,10 @@ def benchmark_corpus(
     publish_report_path: Optional[Path] = typer.Option(
         None,
         "--publish-report-path",
-        help="Output markdown report path (default: benchmark-openclaw-report.md in workspace)",
+        help="Output markdown report path (default: benchmark-report.md in workspace)",
     ),
 ):
-    """Run OpenClaw-matched corpus and optional baseline comparison."""
+    """Run the standard corpus and optional baseline comparison."""
     run_benchmark_corpus(
         workspace=workspace,
         iterations=iterations,
@@ -836,7 +868,7 @@ def benchmark_compare(
     ),
     fail_on_regression: bool = typer.Option(
         True,
-        "--fail-on-regression/--no-fail-on-regression",
+        "--fail-on-regression",
         help="Exit non-zero on regressions or target miss",
     ),
     publish_report_path: Optional[Path] = typer.Option(
@@ -846,7 +878,7 @@ def benchmark_compare(
     ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
 ):
-    """Compare two saved OpenClaw-matched corpus reports."""
+    """Compare two saved corpus reports."""
     run_benchmark_compare(
         current_report=current_report,
         baseline_report=baseline_report,
@@ -862,7 +894,7 @@ def benchmark_compare(
 def benchmark_publish_report(
     current_report: Path = typer.Option(..., "--current-report", help="Current corpus report JSON"),
     baseline_report: Path = typer.Option(..., "--baseline-report", help="Baseline corpus report JSON"),
-    out: Path = typer.Option(Path("benchmark-openclaw-report.md"), "--out", help="Output markdown report path"),
+    out: Path = typer.Option(Path("benchmark-report.md"), "--out", help="Output markdown report path"),
     target_improvement_pct: float = typer.Option(
         35.0,
         "--target-improvement-pct",
@@ -872,7 +904,7 @@ def benchmark_publish_report(
     ),
     fail_on_regression: bool = typer.Option(
         True,
-        "--fail-on-regression/--no-fail-on-regression",
+        "--fail-on-regression",
         help="Exit non-zero on regressions or target miss",
     ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
@@ -917,8 +949,8 @@ def benchmark_competitive_report(
         help="Optional publishable markdown output path",
     ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
-    fail_on_gate: bool = typer.Option(True, "--fail-on-gate/--no-fail-on-gate"),
-    fail_on_regression: bool = typer.Option(True, "--fail-on-regression/--no-fail-on-regression"),
+    fail_on_gate: bool = typer.Option(True, "--fail-on-gate"),
+    fail_on_regression: bool = typer.Option(True, "--fail-on-regression"),
 ):
     """Run corpus benchmark + baseline comparison and emit publishable artifacts."""
     run_benchmark_competitive_report(
@@ -992,7 +1024,7 @@ def benchmark_release_gate(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON summary to stdout"),
     fail_on_gate: bool = typer.Option(
         True,
-        "--fail-on-gate/--no-fail-on-gate",
+        "--fail-on-gate",
         help="Exit non-zero when any release gate fails",
     ),
 ):
@@ -1044,7 +1076,7 @@ def replay(
     ),
     fail_on_mismatch: bool = typer.Option(
         True,
-        "--fail-on-mismatch/--no-fail-on-mismatch",
+        "--fail-on-mismatch",
         help="Exit non-zero when replay reexecution detects mismatches",
     ),
 ):
@@ -1131,7 +1163,7 @@ def plugin_test(
     path: Path = typer.Option(..., "--path", help="Plugin directory containing plugin.py"),
     strict: bool = typer.Option(
         True,
-        "--strict/--no-strict",
+        "--strict",
         help="Fail on conformance errors",
     ),
 ):

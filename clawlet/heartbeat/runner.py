@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 from uuid import uuid4
 
 from loguru import logger
 
 from clawlet.bus.queue import InboundMessage, MessageBus
+from clawlet.heartbeat.state import HeartbeatStateStore
 from clawlet.metrics import get_metrics
 from clawlet.runtime.events import (
     SCHED_PAYLOAD_JOB_ID,
@@ -40,6 +43,11 @@ class LastRoute:
 
 class HeartbeatRunner:
     """Publishes heartbeat prompts to the agent message bus."""
+    DEFAULT_PROMPT = (
+        "Read HEARTBEAT.md if it exists (workspace context). "
+        "Follow it strictly. Do not infer or repeat old tasks from prior chats. "
+        "If nothing needs attention, reply HEARTBEAT_OK."
+    )
 
     def __init__(
         self,
@@ -51,6 +59,9 @@ class HeartbeatRunner:
         ack_max_chars: int = 24,
         route_provider: Optional[Callable[[], Optional[object]]] = None,
         heartbeat_context: str = "",
+        heartbeat_context_provider: Optional[Callable[[], str]] = None,
+        state_path: Optional[Path] = None,
+        heartbeat_state_path: Optional[Path] = None,
         on_tick: Optional[Callable[[datetime], Awaitable[Any]]] = None,
     ):
         self.bus = bus
@@ -61,6 +72,11 @@ class HeartbeatRunner:
         self.ack_max_chars = max(1, int(ack_max_chars))
         self.route_provider = route_provider
         self.heartbeat_context = heartbeat_context.strip()
+        self.heartbeat_context_provider = heartbeat_context_provider
+        self.state_path = Path(state_path) if state_path is not None else None
+        self.heartbeat_state = HeartbeatStateStore(
+            Path(heartbeat_state_path) if heartbeat_state_path is not None else Path.cwd() / "memory" / "heartbeat-state.json"
+        )
         self.on_tick = on_tick
         self._running = False
 
@@ -92,6 +108,8 @@ class HeartbeatRunner:
     async def _tick(self, now: datetime) -> None:
         if self._is_quiet_hour(now):
             logger.debug("Heartbeat skipped due to quiet hours")
+            self._persist_state(now=now, status="skipped", reason="quiet_hours")
+            self.heartbeat_state.record_runner_decision(now=now, status="skipped", reason="quiet_hours")
             return
 
         if self.on_tick is not None:
@@ -100,9 +118,36 @@ class HeartbeatRunner:
             except Exception as e:
                 logger.warning(f"Heartbeat on_tick hook failed: {e}")
 
+        heartbeat_context = self._get_heartbeat_context()
+        if not self._has_actionable_heartbeat_context(heartbeat_context):
+            logger.debug("Heartbeat skipped: HEARTBEAT.md has no actionable content")
+            self._persist_state(now=now, status="skipped", reason="no_actionable_context")
+            self.heartbeat_state.record_runner_decision(
+                now=now,
+                status="skipped",
+                reason="no_actionable_context",
+            )
+            return
+
         route = self._resolve_route()
-        if route is None:
-            logger.debug("Heartbeat skipped: no routable target")
+        route_payload = {"channel": route.channel, "chat_id": route.chat_id} if route is not None else None
+        decision = self.heartbeat_state.evaluate_tick(
+            now=now,
+            context=heartbeat_context,
+            route=route_payload,
+            interval_minutes=self.interval_minutes,
+        )
+        if not decision.should_publish:
+            logger.debug(f"Heartbeat skipped: {decision.reason}")
+            self._persist_state(now=now, status="skipped", reason=decision.reason, route=decision.route)
+            self.heartbeat_state.record_runner_decision(
+                now=now,
+                status="skipped",
+                reason=decision.reason,
+                route=decision.route,
+                check_types=decision.check_types,
+                due_checks=decision.due_checks,
+            )
             return
 
         get_metrics().inc_heartbeat_ticks()
@@ -119,6 +164,9 @@ class HeartbeatRunner:
                     "heartbeat": True,
                     "heartbeat_tick_at": now.isoformat(),
                     "ack_max_chars": self.ack_max_chars,
+                    "heartbeat_check_types": list(decision.check_types),
+                    "heartbeat_due_checks": list(decision.due_checks),
+                    "heartbeat_state_summary": self.heartbeat_state.build_prompt_summary(now),
                     SCHED_PAYLOAD_JOB_ID: "heartbeat",
                     SCHED_PAYLOAD_RUN_ID: f"hb-{uuid4().hex[:12]}",
                     SCHED_PAYLOAD_SOURCE: "heartbeat",
@@ -126,6 +174,21 @@ class HeartbeatRunner:
                     SCHED_PAYLOAD_WAKE_MODE: "next_heartbeat",
                 },
             )
+        )
+        self._persist_state(
+            now=now,
+            status="published",
+            reason=decision.reason,
+            route={"channel": route.channel, "chat_id": route.chat_id},
+            prompt=prompt,
+        )
+        self.heartbeat_state.record_runner_decision(
+            now=now,
+            status="published",
+            reason=decision.reason,
+            route={"channel": route.channel, "chat_id": route.chat_id},
+            check_types=decision.check_types,
+            due_checks=decision.due_checks,
         )
         logger.info(f"Heartbeat tick published to {route.channel}/{route.chat_id}")
 
@@ -135,20 +198,21 @@ class HeartbeatRunner:
         if self.target == "last" and self.route_provider is not None:
             route = self.route_provider()
             if route is None:
-                return None
+                return LastRoute(channel="scheduler", chat_id="main")
             if isinstance(route, LastRoute):
                 return route
             if isinstance(route, dict):
                 ch = str(route.get("channel") or "")
                 cid = str(route.get("chat_id") or "")
                 if not ch or not cid:
-                    return None
+                    return LastRoute(channel="scheduler", chat_id="main")
                 return LastRoute(
                     channel=ch,
                     chat_id=cid,
                     user_id=str(route.get("user_id") or ""),
                     user_name=str(route.get("user_name") or ""),
                 )
+            return LastRoute(channel="scheduler", chat_id="main")
         return None
 
     def _is_quiet_hour(self, now: datetime) -> bool:
@@ -161,11 +225,54 @@ class HeartbeatRunner:
             return start <= hour < end
         return hour >= start or hour < end
 
+    def _get_heartbeat_context(self) -> str:
+        if self.heartbeat_context_provider is not None:
+            try:
+                return (self.heartbeat_context_provider() or "").strip()
+            except Exception as e:
+                logger.warning(f"Heartbeat context provider failed: {e}")
+        return self.heartbeat_context
+
+    @staticmethod
+    def _has_actionable_heartbeat_context(context: str) -> bool:
+        for raw_line in (context or "").splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                continue
+            if stripped.startswith("<!--"):
+                continue
+            return True
+        return False
+
     def _build_prompt(self) -> str:
-        base = (
-            "Heartbeat check: perform one meaningful proactive action if possible. "
-            "If there is nothing actionable, respond exactly with HEARTBEAT_OK."
-        )
-        if self.heartbeat_context:
-            return f"{base}\n\nHEARTBEAT_CONTEXT:\n{self.heartbeat_context[:4000]}"
-        return base
+        return self.DEFAULT_PROMPT
+
+    def _persist_state(
+        self,
+        *,
+        now: datetime,
+        status: str,
+        reason: str,
+        route: Optional[dict[str, str]] = None,
+        prompt: str = "",
+    ) -> None:
+        if self.state_path is None:
+            return
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "timestamp": now.isoformat(),
+                "status": status,
+                "reason": reason,
+                "target": self.target,
+                "interval_minutes": self.interval_minutes,
+                "route": route or {},
+                "prompt": prompt,
+            }
+            tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(self.state_path)
+        except Exception as e:
+            logger.warning(f"Failed to persist heartbeat state: {e}")

@@ -29,12 +29,12 @@ from clawlet.tools.files import (
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.patch import ApplyPatchTool
 from clawlet.tools.fetch_url import FetchUrlTool
+from clawlet.tools.http_request import HttpRequestTool
 from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
 from clawlet.skills.registry import SkillRegistry
 from clawlet.plugins.loader import PluginLoader
-from clawlet.runtime.rust_bridge import is_available as rust_core_available
 
 
 FULL_EXEC_COMMANDS = [
@@ -82,16 +82,15 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
     
     agent_mode = getattr(getattr(config, "agent", None), "mode", "safe") if config is not None else "safe"
     allow_dangerous = bool(getattr(getattr(config, "agent", None), "shell_allow_dangerous", False)) if config is not None else False
+    file_allowed_dir = allowed_dir
     effective_allowed_dir = None if agent_mode == "full_exec" else allowed_dir
 
     # Add file tools
-    runtime_engine = getattr(getattr(config, "runtime", None), "engine", "python") if config is not None else "python"
-    rust_available = rust_core_available()
-    use_rust_core = runtime_engine == "hybrid_rust" and rust_available
-    if runtime_engine == "hybrid_rust" and not rust_available:
-        logger.warning("runtime.engine=hybrid_rust but Rust core extension is unavailable; tools will use python path")
+    use_rust_core = False
 
-    file_tool = FileTool(allowed_dir=effective_allowed_dir, use_rust_core=use_rust_core)
+    # Keep file operations anchored to the workspace even in full_exec so
+    # relative paths like HEARTBEAT.md resolve where the agent expects.
+    file_tool = FileTool(allowed_dir=file_allowed_dir, use_rust_core=use_rust_core)
     for tool in file_tool.tools:
         registry.register(tool)
     
@@ -109,6 +108,15 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
 
     # Add direct URL fetch tool
     registry.register(FetchUrlTool())
+    auth_profiles = {}
+    if config is not None:
+        raw_profiles = getattr(config, "http_auth_profiles", {}) or {}
+        for name, profile in raw_profiles.items():
+            if hasattr(profile, "model_dump"):
+                auth_profiles[str(name)] = profile.model_dump(mode="python")
+            else:
+                auth_profiles[str(name)] = dict(profile or {})
+    registry.register(HttpRequestTool(workspace=file_allowed_dir, auth_profiles=auth_profiles))
 
     # Add web search tool (uses Brave Search API)
     # Get API key from config, or check both WEB_SEARCH_API_KEY and BRAVE_SEARCH_API_KEY env vars
@@ -137,6 +145,12 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
         memory_tools = MemoryTools(memory_manager)
         for tool in memory_tools.all_tools():
             registry.register(tool)
+        registry.register_alias("recall_memory", "recall")
+        registry.register_alias("search_memories", "search_memory")
+        registry.register_alias("recent_memory", "recent_memories")
+        registry.register_alias("daily_notes", "review_daily_notes")
+        registry.register_alias("memory_maintenance", "curate_memory")
+        registry.register_alias("memory_overview", "memory_status")
         logger.info(f"Registered {len(memory_tools.all_tools())} memory tools")
     
     # Register skill tools if skill_registry is provided
@@ -178,6 +192,7 @@ __all__ = [
     "ShellTool",
     "ApplyPatchTool",
     "FetchUrlTool",
+    "HttpRequestTool",
     "WebSearchTool",
     "InstallSkillTool",
     "ListSkillsTool",

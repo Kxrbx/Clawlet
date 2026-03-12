@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -119,7 +120,7 @@ class RuntimeEventStore:
             for key in ("output", "stdout", "stderr"):
                 if key in payload:
                     payload[key] = "[redacted]"
-        data["payload"] = _to_jsonable(payload)
+        data["payload"] = _redact_event_payload(_to_jsonable(payload))
         return data
 
     def _maybe_validate(self, event: RuntimeEvent) -> None:
@@ -155,3 +156,24 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_to_jsonable(v) for v in value]
     return str(value)
+
+
+def _redact_event_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        patterns = [
+            (r"moltbook_sk_[A-Za-z0-9_\-]+", "[redacted]"),
+            (r"sk-or-v1-[A-Za-z0-9]+", "[redacted]"),
+            (r"\b\d{8,}:[A-Za-z0-9_-]{20,}\b", "[redacted]"),
+            (r'(?im)^(\s*(?:token|api_key|password)\s*:\s*).+$', r"\1[redacted]"),
+            (r'(?im)^(\s*(?:token|api_key|password)\s*=\s*).+$', r"\1[redacted]"),
+            (r'(?im)^(\s*"?(?:token|api_key|password|authorization)"?\s*:\s*").+?(".*)$', r"\1[redacted]\2"),
+        ]
+        redacted = value
+        for pattern, replacement in patterns:
+            redacted = re.sub(pattern, replacement, redacted)
+        return redacted
+    if isinstance(value, dict):
+        return {str(k): _redact_event_payload(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_event_payload(v) for v in value]
+    return value

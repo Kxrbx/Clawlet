@@ -2,6 +2,45 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.0] - 2026-03-12
+
+### Heartbeat
+
+- **Heartbeat Contract Refresh**: Heartbeat now reads `HEARTBEAT.md` at each tick, skips API work when the file is empty or comment-only, falls back cleanly to `scheduler/main`, and keeps heartbeat history isolated from normal chat history.
+- **Heartbeat State Tracking**: Added persistent heartbeat state in `memory/heartbeat-state.json` plus operator-facing `clawlet heartbeat status|last|enable|disable`.
+- **Stricter Heartbeat Outcomes**: Heartbeat runs now canonicalize to `HEARTBEAT_OK`, `HEARTBEAT_BLOCKED`, or `HEARTBEAT_ACTION_TAKEN`, with state and runtime events aligned to the actual result.
+- **Quieter Publish Policy**: No-op heartbeats stay internal by default, while meaningful action results can surface without replaying scheduler noise into user conversations.
+
+### Memory
+
+- **Hybrid Memory Model**: `MemoryManager` now uses `memory.db` as the durable structured memory store, keeps `MEMORY.md` as a curated projection, and records episodic daily notes under `memory/YYYY-MM-DD.md`.
+- **Immediate Durable Writes**: `remember()` and `forget()` persist to SQLite immediately instead of waiting for shutdown-only flushing.
+- **Daily Note Review and Curation**: Added `review_daily_notes`, `curate_memory`, and `memory_status` tools plus supporting docs/tests for periodic memory maintenance.
+- **Prompt Context Cleanup**: Deduplicated memory context/category recall so the same memory entry is not injected twice from short-term and long-term views.
+
+### Runtime
+
+- **Python-Only Runtime Path**: `runtime.engine: python` is now the supported execution path. Legacy `hybrid_rust` config values are normalized to `python`, and user-facing Rust parity/equivalence surfaces were removed.
+- **Safer Tool Caching**: Idempotency caching is now limited to safe read paths. `shell` and workspace-write tools are no longer cached by default, and API-like fetches are excluded unless explicitly marked cacheable.
+- **Endpoint-Scoped HTTP Recovery**: Runtime failure bucketing for structured HTTP calls is now endpoint-aware, with less global tool poisoning after one bad request.
+- **Structured Runtime Replay Improvements**: Runtime events, checkpoints, and replay/recovery surfaces now carry better failure taxonomy and per-run tool stats.
+- **Explicit HTTP Auth Profiles**: Structured HTTP auth is now driven by explicit `http_auth_profiles` config instead of hardcoded host-specific credential injection.
+
+### Tooling
+
+- **Generic Structured HTTP Tool**: Added `http_request` as the structured network tool path, replacing benchmark-specific dedicated API logic.
+- **Complex Inline Python Guardrails**: Shell execution now rejects fragile multi-statement `python -c` calls and nudges the runtime toward safer execution patterns.
+- **Template Placeholder Rejection and Repair**: Tool args containing template placeholders are rejected or repaired before execution, reducing invalid autonomous calls.
+- **Faster Memory and Context Retrieval**: Memory search now uses SQLite FTS when available, and context indexing now prunes ignored directories with a cheaper walk strategy.
+
+### CLI and Docs
+
+- **Heartbeat CLI**: Added `clawlet heartbeat status`, `last`, `enable`, and `disable`.
+- **Documentation Refresh**: Updated README, architecture, runtime, and scheduling docs to reflect heartbeat-state, Python-only runtime, and the hybrid memory system.
+- **Benchmark Surface Cleanup**: Removed the old `benchmark equivalence` command and Rust-equivalence reporting from the release/readiness flow.
+- **Bootstrap Integrity Fixes**: `clawlet onboard` now writes canonical nested channel config, avoids persisting fake placeholder secrets, and generated configs are validated more honestly.
+- **Release Gate Expansion**: Added `scripts/release_regression.py` and wired CI to run both smoke and regression checks for first-clone/bootstrap behavior.
+
 ## [0.3.1] - 2026-03-10
 
 ### Defaults
@@ -297,4 +336,4 @@ All notable changes to Clawlet will be documented in this file.
 - Configuration examples
 - API documentation
 - Security notes
-- Comparison with OpenClaw/nanobot
+- Comparison with related agent frameworks

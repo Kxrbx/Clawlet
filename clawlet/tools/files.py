@@ -3,6 +3,7 @@ File system tools.
 """
 
 from pathlib import Path
+import re
 from typing import Optional
 from loguru import logger
 
@@ -17,6 +18,28 @@ from clawlet.tools.registry import BaseTool, ToolResult
 def _normalize_user_path(path: str) -> Path:
     """Expand user-home markers before security resolution."""
     return Path(path).expanduser()
+
+
+def _looks_like_sensitive_config(path: Path) -> bool:
+    lowered = str(path).lower()
+    return lowered.endswith("/config.yaml") or lowered.endswith("/config.yml") or lowered.endswith(".env")
+
+
+def _redact_sensitive_content(path: Path, content: str) -> str:
+    """Redact obvious secrets from config-like files while preserving structure."""
+    if not _looks_like_sensitive_config(path):
+        return content
+
+    redacted = content
+    patterns = [
+        (r'(?im)^(\s*(?:token|api_key|password)\s*:\s*).+$', r"\1[redacted]"),
+        (r'(?im)^(\s*(?:token|api_key|password)\s*=\s*).+$', r"\1[redacted]"),
+        (r'(?im)^(\s*authorization\s*:\s*).+$', r"\1[redacted]"),
+        (r'(?im)^(\s*"?(?:token|api_key|password|authorization)"?\s*:\s*").+?(".*)$', r"\1[redacted]\2"),
+    ]
+    for pattern, replacement in patterns:
+        redacted = re.sub(pattern, replacement, redacted)
+    return redacted
 
 
 def _secure_resolve(
@@ -126,16 +149,18 @@ class ReadFileTool(BaseTool):
                     ok, content, error = rust_result
                     if not ok:
                         return ToolResult(success=False, output="", error=error or "Read error")
+                    safe_content = _redact_sensitive_content(resolved_path, content)
                     return ToolResult(
                         success=True,
-                        output=content,
+                        output=safe_content,
                         data={"path": str(resolved_path), "size": len(content), "engine": "rust"},
                     )
 
             content = resolved_path.read_text(encoding="utf-8")
+            safe_content = _redact_sensitive_content(resolved_path, content)
             return ToolResult(
                 success=True,
-                output=content,
+                output=safe_content,
                 data={"path": str(resolved_path), "size": len(content), "engine": "python"}
             )
         except Exception as e:

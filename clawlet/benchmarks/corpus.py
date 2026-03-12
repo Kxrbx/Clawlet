@@ -1,4 +1,4 @@
-"""OpenClaw-matched coding corpus benchmark and baseline comparison."""
+"""Matched coding corpus benchmark and baseline comparison."""
 
 from __future__ import annotations
 
@@ -121,8 +121,8 @@ def load_corpus_benchmark_report(path: Path) -> CorpusBenchmarkReport:
     )
 
 
-def run_openclaw_matched_corpus(workspace: Path, iterations: int = 10) -> CorpusBenchmarkReport:
-    """Run coding-agent scenarios aligned with OpenClaw benchmark intent."""
+def run_matched_corpus(workspace: Path, iterations: int = 10) -> CorpusBenchmarkReport:
+    """Run the standard coding-agent scenario corpus."""
     from clawlet.tools import create_default_tool_registry
 
     iterations = max(1, int(iterations))
@@ -216,7 +216,7 @@ def run_openclaw_matched_corpus(workspace: Path, iterations: int = 10) -> Corpus
     }
 
     return CorpusBenchmarkReport(
-        corpus_id="openclaw-matched-v1",
+        corpus_id="matched-v1",
         created_at=datetime.now(timezone.utc).isoformat(),
         workspace=str(workspace),
         iterations=iterations,
@@ -334,7 +334,7 @@ def format_publishable_corpus_report(
     current_p95 = float(current_report.summary.get("p95_ms", 0.0))
     current_success = float(current_report.summary.get("success_rate", 0.0))
     lines: list[str] = []
-    lines.append("# Clawlet vs OpenClaw Benchmark Report")
+    lines.append("# Clawlet Benchmark Report")
     lines.append("")
     lines.append(f"- Corpus: `{current_report.corpus_id}`")
     lines.append(f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}")
@@ -395,19 +395,15 @@ def build_competitive_corpus_bundle(
     report: CorpusBenchmarkReport,
     comparison: CorpusComparisonReport,
     gate_failures: list[str],
-    rust_equivalence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a machine-readable competitive benchmark artifact payload."""
-    rust_data = dict(rust_equivalence or {})
-    rust_gate_passed = bool(rust_data.get("gate_passed", rust_data.get("passed", True)))
-    gate_passed = (len(gate_failures) == 0) and rust_gate_passed
+    gate_passed = len(gate_failures) == 0
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "passed": gate_passed and bool(comparison.meets_target),
         "gate_passed": gate_passed,
         "comparison_passed": bool(comparison.meets_target),
         "gate_failures": list(gate_failures),
-        "rust_equivalence": rust_data,
         "report": report.to_dict(),
         "comparison": comparison.to_dict(),
     }
@@ -435,10 +431,10 @@ def build_publishable_corpus_report_from_paths(
     return comparison, markdown
 
 
-def run_openclaw_matched_corpus_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
+def run_matched_corpus_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
     errors: list[str] = []
-    report = run_openclaw_matched_corpus(workdir, iterations=1)
-    if report.corpus_id != "openclaw-matched-v1":
+    report = run_matched_corpus(workdir, iterations=1)
+    if report.corpus_id != "matched-v1":
         errors.append("unexpected corpus id")
     if not report.scenarios:
         errors.append("missing scenario results")
@@ -457,7 +453,7 @@ def run_corpus_compare_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
 
     baseline = {
         "report": {
-            "corpus_id": "openclaw-matched-v1",
+            "corpus_id": "matched-v1",
             "created_at": "2026-02-20T00:00:00+00:00",
             "workspace": str(workdir),
             "iterations": 1,
@@ -484,7 +480,7 @@ def run_corpus_compare_smokecheck(workdir: Path) -> tuple[bool, list[str]]:
     }
     current = {
         "report": {
-            "corpus_id": "openclaw-matched-v1",
+            "corpus_id": "matched-v1",
             "created_at": "2026-02-27T00:00:00+00:00",
             "workspace": str(workdir),
             "iterations": 1,

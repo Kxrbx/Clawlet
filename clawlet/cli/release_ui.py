@@ -87,7 +87,6 @@ def run_release_readiness_command(
     lane = report.lane_scheduling or {}
     context = report.context_cache or {}
     coding = report.coding_loop or {}
-    rust = report.rust_equivalence or {}
     gate_breaches = list(report.gate_breaches or [])[:max_breaches]
     if not gate_breaches:
         gate_breaches = summarize_gate_breaches(report, max_items=max_breaches)
@@ -119,7 +118,6 @@ def run_release_readiness_command(
     console.print(f"|  lane_scheduling={'yes' if report.lane_scheduling_passed else 'no'}")
     console.print(f"|  context_cache={'yes' if report.context_cache_passed else 'no'}")
     console.print(f"|  coding_loop={'yes' if report.coding_loop_passed else 'no'}")
-    console.print(f"|  rust_equivalence={'yes' if report.rust_equivalence_passed else 'no'}")
     console.print(f"|  remote_health={'yes' if report.remote_health_passed else 'no'}")
     if local or lane or context or coding or rust:
         console.print("|  Metrics:")
@@ -147,13 +145,6 @@ def run_release_readiness_command(
                 "|    "
                 f"coding_success={float(coding.get('success_rate', 0.0)):.2f}% "
                 f"coding_p95_total_ms={float(coding.get('p95_total_ms', 0.0)):.2f}"
-            )
-        if rust:
-            console.print(
-                "|    "
-                f"rust_gate_passed={'yes' if rust.get('gate_passed') else 'no'} "
-                f"rust_available={'yes' if rust.get('rust_available') else 'no'} "
-                f"rust_check_passed={'yes' if rust.get('passed') else 'no'}"
             )
     if breach_counts:
         compact = ", ".join(f"{k}={v}" for k, v in sorted(breach_counts.items()))

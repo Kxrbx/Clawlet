@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clawlet"
-version = "0.3.1"
+version = "0.4.0"
 description = "A lightweight AI agent framework with identity awareness"
 readme = "README.md"
 license = {text = "MIT"}
@@ -48,6 +48,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dashboard = []
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

@@ -88,24 +88,11 @@ _Memories are consolidated from daily notes automatically._
 
 
 def get_heartbeat_template() -> str:
-    return """# HEARTBEAT.md - Periodic Tasks
+    return """# HEARTBEAT.md
 
-This file defines tasks your agent performs periodically.
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
 
-## Check Interval
-Every 30 minutes
-
-## Tasks
-- [ ] Check for important updates
-- [ ] Review recent activity
-- [ ] Update memory if needed
-
-## Quiet Hours
-Disabled
-
----
-
-_Heartbeats help your agent stay proactive._
+# Add tasks below when you want the agent to check something periodically.
 """
 
 
@@ -124,12 +111,12 @@ def get_config_template() -> str:
 # LLM Provider Settings
 provider:
   # Primary provider: openrouter, ollama, lmstudio
-  primary: openrouter
-  
-  # OpenRouter settings
-  openrouter:
-    api_key: "YOUR_OPENROUTER_API_KEY"
-    model: "anthropic/claude-sonnet-4"
+  primary: ollama
+
+  # Example OpenRouter settings:
+  # openrouter:
+  #   api_key: "${OPENROUTER_API_KEY}"
+  #   model: "anthropic/claude-sonnet-4"
   
   # Ollama settings (local)
   ollama:
@@ -145,7 +132,7 @@ provider:
 channels:
   telegram:
     enabled: false
-    token: "YOUR_TELEGRAM_BOT_TOKEN"
+    token: ""
     stream_mode: "progress"
     stream_update_interval_seconds: 1.5
     disable_web_page_preview: true
@@ -154,7 +141,7 @@ channels:
   
   discord:
     enabled: false
-    token: "YOUR_DISCORD_BOT_TOKEN"
+    token: ""
   
   whatsapp:
     enabled: false
@@ -174,7 +161,15 @@ storage:
     port: 5432
     database: "clawlet"
     user: "clawlet"
-    password: "your_password"
+    password: ""
+
+# Optional structured HTTP auth profiles
+# http_auth_profiles:
+#   example_service:
+#     bearer_token_path: ".config/example_service/credentials.json"
+#     env_var: "EXAMPLE_SERVICE_TOKEN"
+#     header_name: "Authorization"
+#     header_prefix: "Bearer "
 
 # Agent Settings
 agent:
@@ -228,7 +223,7 @@ scheduler:
 
 # Runtime v2 Settings
 runtime:
-  engine: hybrid_rust
+  engine: python
   enable_idempotency_cache: true
   enable_parallel_read_batches: true
   max_parallel_read_tools: 4
@@ -269,7 +264,6 @@ benchmarks:
     max_context_cache_warm_ms: 1200
     min_coding_loop_success_rate_pct: 99.0
     max_coding_loop_p95_total_ms: 2500
-    require_rust_equivalence: false
 
 # Plugin SDK v2
 plugins:

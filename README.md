@@ -9,9 +9,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub release](https://img.shields.io/github/v/release/Kxrbx/Clawlet?include_prereleases)](https://github.com/Kxrbx/Clawlet/releases)
 
-*Build AI agents that know who they are*
+*Build AI agents that know who they are and can act autonomously with durable memory*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [v0.3.1](#-v031---2026-03-10)
+[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -25,7 +25,7 @@
 
 ## Why Clawlet?
 
-Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for developers who want:
+Clawlet is a **lightweight** agent framework designed for developers who want:
 
 - 🏠 **Local-First** - Run Ollama or LM Studio, no cloud required
 - 🎭 **Identity Awareness** - Agents read SOUL.md, USER.md, MEMORY.md
@@ -33,17 +33,18 @@ Clawlet is a **lightweight** alternative to OpenClaw/nanobot, designed for devel
 - 📊 **Built-in Dashboard** - React UI for monitoring and management
 - 🔒 **Security-First** - Hardened shell tool, safe command execution
 - 🌐 **Web Search** - Brave Search API integration for up-to-date information
-- 🔌 **Skills System** - Modular capabilities with OpenClaw-compatible SKILL.md format
+- 🔌 **Skills System** - Modular capabilities with portable `SKILL.md`-based workflows
 
 ## ✨ Features
 
 ### Core
 - **Identity System** - Define your agent's personality, values, and memory
 - **18+ LLM Providers** - Cloud and local options for every budget
-- **Persistent Memory** - SQLite (default) or PostgreSQL
-- **Tool System** - File ops, shell commands, web search
+- **Hybrid Memory** - SQLite-backed structured memory, curated `MEMORY.md`, and daily episodic notes
+- **Tool System** - File ops, shell commands, structured HTTP, web search
 - **Models Cache** - Daily auto-updating cache with disk persistence
 - **Skills System** - Extend agent capabilities with modular skills
+- **Heartbeat State** - `HEARTBEAT.md`-driven heartbeat loop with persisted state
 
 ### Infrastructure
 - **Health Checks** - Monitor providers, storage, channels
@@ -86,8 +87,16 @@ cd Clawlet
 # Install
 pip install -e .
 
-# Optional: Dashboard dependencies
+# Optional: enable the dashboard CLI entrypoint
 pip install -e ".[dashboard]"
+```
+
+The dashboard backend dependencies are already included in the base install.
+If you want the web UI, also install the frontend dependencies separately:
+
+```bash
+cd dashboard
+npm install
 ```
 
 ### Interactive Setup (Recommended)
@@ -114,18 +123,36 @@ clawlet init
 
 Default runtime behavior after init/onboard:
 - Heartbeat enabled by default
+- New `HEARTBEAT.md` starts comment-only, so heartbeat stays dormant until you add actionable tasks
 - Heartbeat cadence set to every 30 minutes
 - Quiet hours disabled by default
 - `max_iterations: 50`
 - `max_tool_calls_per_message: 20`
+- `runtime.engine: python`
 
 ### Start Your Agent
 
 ```bash
-# Start agent
-clawlet agent --channel telegram
+# Validate your workspace first
+clawlet validate
 
-# Or start dashboard
+# Start the local agent runtime
+clawlet agent
+```
+
+If you picked a cloud provider during onboarding but skipped the credential, `clawlet validate`
+will fail until you add the real key to `config.yaml`. Local providers like Ollama and LM Studio
+remain valid out of the box.
+
+Channel-specific startup comes after channel configuration. For example:
+
+```bash
+clawlet agent --channel telegram
+```
+
+Only start the dashboard after installing the frontend dependencies in `dashboard/`:
+
+```bash
 clawlet dashboard
 ```
 
@@ -139,12 +166,12 @@ clawlet dashboard
 | `clawlet init` | Quick setup with defaults |
 | `clawlet agent` | Start the AI agent |
 | `clawlet dashboard` | Launch web dashboard |
+| `clawlet heartbeat status|last|enable|disable` | Inspect and control heartbeat behavior |
 | `clawlet status` | Show workspace status |
 | `clawlet health` | Run health checks |
 | `clawlet validate` | Validate configuration |
 | `clawlet config [key]` | View configuration |
 | `clawlet benchmark run` | Run latency/reliability benchmark gates |
-| `clawlet benchmark equivalence` | Verify Python vs Rust execution parity |
 | `clawlet replay <run_id>` | Inspect deterministic runtime replay events |
 | `clawlet recovery list` | List interrupted runs with recovery checkpoints |
 | `clawlet plugin init/test/publish` | Manage Plugin SDK v2 extensions |
@@ -230,6 +257,22 @@ ollama serve
 ollama pull llama3.2
 ```
 
+## Structured HTTP Auth
+
+`http_request` supports explicit local auth profiles configured in `config.yaml`:
+
+```yaml
+http_auth_profiles:
+  example_service:
+    bearer_token_path: ".config/example_service/credentials.json"
+    env_var: "EXAMPLE_SERVICE_TOKEN"
+    header_name: "Authorization"
+    header_prefix: "Bearer "
+```
+
+The runtime only injects credentials when an explicit `auth_profile` is used. It does not infer
+credentials from hardcoded domains.
+
 #### LM Studio (Local - Free)
 
 ```yaml
@@ -287,6 +330,32 @@ heartbeat:
 ```
 
 When `quiet_hours_start == quiet_hours_end`, quiet hours are effectively disabled.
+
+---
+
+## Heartbeat And Memory
+
+Clawlet’s autonomous loop is now driven by `HEARTBEAT.md` with runtime guardrails:
+
+- Heartbeat checks `HEARTBEAT.md` on each tick
+- Empty/comment-only heartbeat files skip API work and stay quiet
+- Heartbeat state is persisted under `memory/heartbeat-state.json`
+- Operator commands:
+
+```bash
+clawlet heartbeat status
+clawlet heartbeat last
+clawlet heartbeat enable
+clawlet heartbeat disable
+```
+
+Memory is hybrid by design:
+
+- `memory.db`: durable structured memories
+- `MEMORY.md`: curated human-readable projection
+- `memory/YYYY-MM-DD.md`: daily episodic notes
+
+The agent can review and curate recent daily notes back into durable memory over time.
 
 ---
 
@@ -436,33 +505,27 @@ Contributions welcome!
 4. Push (`git push origin feature/amazing`)
 5. Open a Pull Request
 
----
+Minimal release smoke check:
+
+```bash
+python scripts/release_smoke.py
+```
 
 ---
 
-## 📝 v0.3.1 - 2026-03-10
+---
 
-### Latest Updates
-- **Heartbeat Defaults**: Heartbeat is now enabled by default, runs every 30 minutes, and quiet hours are disabled by default
-- **Runtime Headroom**: `max_iterations` now defaults to 50 and `max_tool_calls_per_message` to 20
-- **Follow-Through Reliability**: Improved post-tool finalization so the agent is less likely to stop after partial progress
-- **Shell Execution Fix**: Full-exec shell commands with redirects/chaining now execute correctly
-- **Version Consistency**: Project version references synchronized to v0.3.1
+## 📝 Latest Changes
+
+### 0.4.0 Highlights
+- **Heartbeat Runtime Refresh**: `HEARTBEAT.md` now drives background autonomy with persistent heartbeat state and quieter no-op behavior
+- **Hybrid Durable Memory**: `memory.db`, curated `MEMORY.md`, and daily episodic notes now work together as one memory model
+- **Python-Only Runtime**: the supported runtime path is now `runtime.engine: python`
+- **Structured HTTP + Safer Runtime**: safer tool caching, structured HTTP requests, and better malformed-call handling
+- **Heartbeat CLI**: added `clawlet heartbeat status|last|enable|disable`
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
-
----
-
-## 📝 v0.2.7 - 2026-02-22
-
-### Updates
-- **CORS Configuration**: Environment variable support for custom CORS origins (`CLAWLET_CORS_ORIGINS`)
-- **API Security**: Optional API key enforcement for dashboard access (`CLAWLET_REQUIRE_API_KEY`)
-- **Health Monitoring**: Configurable health history lines via `CLAWLET_MAX_HEALTH_HISTORY_LINES`
-- **OpenAI OAuth**: Added OAuth flow support for OpenAI provider authentication
-- **LM Studio**: Improved timeout handling for reliable local LLM connections
-- **UI Updates**: Enhanced button component styling variants
 
 ---
 

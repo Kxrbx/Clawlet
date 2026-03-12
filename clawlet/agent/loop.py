@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
+from urllib.parse import urlparse
 from uuid import uuid4
 import httpx
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 from clawlet.agent.identity import Identity
 from clawlet.agent.memory import MemoryManager
+from clawlet.heartbeat.state import HeartbeatStateStore
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult, validate_tool_params
 from clawlet.agent.memory import MemoryManager
@@ -54,7 +56,6 @@ from clawlet.runtime import (
     ToolCallEnvelope,
 )
 from clawlet.runtime.failures import classify_error_text, classify_exception, to_payload as failure_payload
-from clawlet.runtime.rust_bridge import is_available as rust_core_available
 
 
 UTC_TZ = timezone.utc
@@ -117,7 +118,10 @@ class AgentLoop:
     CONTEXT_WINDOW = 20  # Messages to include in LLM context
     MAX_TOOL_OUTPUT_CHARS = 4000
     NO_PROGRESS_LIMIT = 3
+    HEARTBEAT_NO_PROGRESS_LIMIT = 1
     MAX_TOOL_CALLS_PER_MESSAGE = 20
+    MAX_HEARTBEAT_TOOL_CALLS = 8
+    MAX_HEARTBEAT_ITERATIONS = 12
     MAX_AUTONOMOUS_FOLLOWUP_DEPTH = 1
     TOOL_ALIASES = {
         "list_files": "list_dir",
@@ -217,6 +221,28 @@ class AgentLoop:
         re.IGNORECASE,
     )
     URL_PATTERN = re.compile(r"https?://[^\s)>\]\"']+", re.IGNORECASE)
+    PLACEHOLDER_PATTERNS = (
+        r"\bYOUR_[A-Z0-9_]+\b",
+        r"\bVOTRE_[A-Z0-9_]+\b",
+        r"\bMOLTY_NAME\b",
+        r"\bPOST_ID\b",
+        r"\bCOMMENT_ID\b",
+        r"\bCURSOR_FROM_PREVIOUS_RESPONSE\b",
+        r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){0,4}(?:_ID|_KEY|_TOKEN|_NAME|_VALUE|_EMAIL|_URL|_HANDLE)\b",
+        r"\[(?:insert|replace|set|use|enter|provide)[^\]]+\]",
+        r"<[A-Z][A-Z0-9 _-]{1,48}>",
+        r"<[^>]*(?:api[_\s-]*key|clé[_\s-]*api|cle[_\s-]*api|token|bearer|post[_\s-]*id|comment[_\s-]*id|molty|name|nom)[^>]*>",
+    )
+    HEARTBEAT_ACTION_POLICY = (
+        "Heartbeat poll policy:\n"
+        "- Follow the heartbeat prompt strictly.\n"
+        "- Do not infer or repeat old tasks from prior chats.\n"
+        "- Read HEARTBEAT.md first when the prompt requires it.\n"
+        "- Prefer `http_request` over shell/curl for API calls and JSON posts.\n"
+        "- Use `review_daily_notes` before curating long-term memory, and use `curate_memory` when recent notes contain durable updates.\n"
+        "- If nothing needs attention, reply exactly with HEARTBEAT_OK.\n"
+        "- Avoid unrelated exploration unless the heartbeat task is blocked."
+    )
     
     def __init__(
         self,
@@ -291,6 +317,8 @@ class AgentLoop:
         self._last_route: dict[str, str] = {}
         self._conversations: dict[str, ConversationState] = {}
         self._pending_confirmations: dict[str, dict] = {}
+        self._heartbeat_state = HeartbeatStateStore(self.workspace / "memory" / "heartbeat-state.json")
+        self._current_heartbeat_metadata: dict = {}
         
         # Circuit breaker for provider failures
         self._consecutive_errors = 0
@@ -312,6 +340,7 @@ class AgentLoop:
             "parallel_batch_tools": 0,
             "serial_batches": 0,
         }
+        self._run_tool_stats_snapshot = dict(self._tool_stats)
         
         # Persistence failure tracking
         self._persist_failures = 0
@@ -327,9 +356,6 @@ class AgentLoop:
             getattr(self.runtime_config, "enable_parallel_read_batches", True)
         )
         self._max_parallel_read_tools = max(1, int(getattr(self.runtime_config, "max_parallel_read_tools", 4) or 4))
-        if self._runtime_engine == "hybrid_rust" and not rust_core_available():
-            logger.warning("runtime.engine=hybrid_rust requested but Rust core is unavailable; falling back to python")
-            self._runtime_engine = "python"
         replay_dir = Path(self.runtime_config.replay.directory).expanduser()
         if not replay_dir.is_absolute():
             replay_dir = self.workspace / replay_dir
@@ -440,6 +466,17 @@ class AgentLoop:
         if not self._current_run_id:
             return
         self._recovery_manager.mark_completed(self._current_run_id)
+
+    def _snapshot_tool_stats(self) -> dict[str, int]:
+        return {key: int(self._tool_stats.get(key, 0) or 0) for key in self._tool_stats}
+
+    def _current_run_tool_stats(self) -> dict[str, int]:
+        delta: dict[str, int] = {}
+        for key, value in self._tool_stats.items():
+            current = int(value or 0)
+            baseline = int(self._run_tool_stats_snapshot.get(key, 0) or 0)
+            delta[key] = max(0, current - baseline)
+        return delta
 
     async def resume_checkpoint(self, run_id: str) -> bool:
         """Resume an interrupted run by queueing a recovery inbound message."""
@@ -608,6 +645,10 @@ class AgentLoop:
         """Publish Telegram-friendly progress updates without exposing raw reasoning."""
         if self._current_channel != "telegram" or not self._current_chat_id or not text.strip():
             return
+        if self._current_source == "heartbeat":
+            return
+        if event_type in {"started", "provider_started", "finalizing"}:
+            return
         from clawlet.bus.queue import OutboundMessage
 
         try:
@@ -629,6 +670,41 @@ class AgentLoop:
         except Exception as e:
             logger.debug(f"Could not publish progress update {event_type}: {e}")
 
+    def _is_low_value_persisted_message(self, role: str, content: str, metadata: Optional[dict] = None) -> bool:
+        """Skip persistence and history reload for low-signal runtime noise."""
+        text = (content or "").strip()
+        lowered = text.lower()
+        metadata = metadata or {}
+        is_heartbeat = bool(metadata.get("heartbeat")) or metadata.get("source") in {"heartbeat", "scheduler"}
+
+        if role == "tool":
+            return True
+        if not text:
+            return True
+        if is_heartbeat:
+            return True
+        if (
+            lowered.startswith("read heartbeat.md if it exists")
+            or "i'll read the heartbeat.md" in lowered
+            or "i will read the heartbeat.md" in lowered
+            or "vérifier le fichier heartbeat.md" in lowered
+            or lowered == "heartbeat_ok"
+            or lowered.startswith("heartbeat_ok ")
+            or lowered == "heartbeat_complete"
+            or lowered.startswith("heartbeat_complete ")
+            or lowered.startswith("heartbeat_needs_attention")
+        ):
+            return True
+        noisy_fragments = (
+            "read heartbeat.md if it exists",
+            "reply heartbeat_ok",
+            "follow it strictly",
+            "do not infer or repeat old tasks from prior chats",
+            "authorization: bearer <votre_cle_api>",
+            "authorization: bearer your_api_key",
+        )
+        return any(fragment in lowered for fragment in noisy_fragments)
+
     async def _get_conversation_state(self, channel: str, chat_id: str) -> ConversationState:
         """Get or create conversation state for an inbound channel/chat."""
         key = f"{channel}:{chat_id}"
@@ -642,9 +718,11 @@ class AgentLoop:
         if self.storage.is_initialized():
             stored_messages = await self.storage.get_messages(session_id, limit=self.MAX_HISTORY)
             for msg in stored_messages:
+                if self._is_low_value_persisted_message(msg.role, msg.content):
+                    continue
                 state.history.append(Message(role=msg.role, content=msg.content, metadata={}, tool_calls=[]))
             if stored_messages:
-                logger.info(f"Loaded {len(stored_messages)} messages for conversation {key}")
+                logger.info(f"Loaded {len(state.history)} sanitized messages for conversation {key}")
 
         self._conversations[key] = state
         return state
@@ -662,6 +740,9 @@ class AgentLoop:
 
     async def _persist_message(self, session_id: str, role: str, content: str, metadata: dict = None) -> None:
         """Persist a message to storage and long-term memory."""
+        if self._is_low_value_persisted_message(role, content, metadata):
+            return
+
         # Wait for storage to be ready (initialization attempt completed)
         if not self._storage_ready.is_set():
             await self._storage_ready.wait()
@@ -697,8 +778,8 @@ class AgentLoop:
                 logger.error("Too many storage failures, aborting persistence.")
                 raise
         
-        # Save to long-term memory (MEMORY.md) — only important messages
-        if role in ("assistant", "user"):
+        # Save to long-term memory (MEMORY.md) only for memory-worthy messages.
+        if role in ("assistant", "user") and self._should_persist_message_to_memory(role, content):
             importance = 5
             if role == "assistant":
                 importance = 7
@@ -707,14 +788,19 @@ class AgentLoop:
             keywords = ["important", "remember", "todo", "task", "remind", "note", "save", "key", "critical"]
             if any(k in content.lower() for k in keywords):
                 importance += 2
-            
+
             key = f"{role}_{session_id}_{int(datetime.now(UTC_TZ).timestamp())}"
             try:
                 self.memory.remember(
                     key=key,
                     value=content,
                     category="conversation",
-                    importance=importance
+                    importance=importance,
+                    metadata={
+                        "source": f"{role}:{session_id}",
+                        "role": role,
+                        "session_id": session_id,
+                    },
                 )
             except Exception as e:
                 logger.warning(f"Failed to save to memory: {e}")
@@ -834,6 +920,7 @@ class AgentLoop:
         autonomous_depth = int(metadata.get("autonomous_followup_depth", 0))
         convo = await self._get_conversation_state(channel, chat_id)
         convo_key = f"{channel}:{chat_id}"
+        self._run_tool_stats_snapshot = self._snapshot_tool_stats()
         self._session_id = convo.session_id
         self._history = convo.history
         self._current_channel = channel
@@ -841,6 +928,7 @@ class AgentLoop:
         self._current_user_id = str(msg.user_id or "")
         self._current_user_name = str(msg.user_name or "")
         self._current_source = source
+        self._current_heartbeat_metadata = metadata if is_heartbeat else {}
         self._last_route = {
             "channel": channel,
             "chat_id": chat_id,
@@ -914,16 +1002,17 @@ class AgentLoop:
             )
         
         # Add to history. Internal autonomous prompts are system context, not user content.
+        persist_metadata = {"heartbeat": is_heartbeat, "source": source}
         if is_internal_autonomous:
             convo.history.append(Message(role="system", content=user_message))
         else:
             convo.history.append(Message(role="user", content=user_message))
-            self._queue_persist(convo.session_id, "user", user_message)
+            self._queue_persist(convo.session_id, "user", user_message, persist_metadata)
 
         direct_install_response = await self._maybe_handle_direct_skill_install(user_message, convo.history)
         if direct_install_response is not None:
             convo.history.append(Message(role="assistant", content=direct_install_response))
-            self._queue_persist(convo.session_id, "assistant", direct_install_response)
+            self._queue_persist(convo.session_id, "assistant", direct_install_response, persist_metadata)
             from clawlet.bus.queue import OutboundMessage
             self._emit_runtime_event(
                 EVENT_RUN_COMPLETED,
@@ -951,6 +1040,7 @@ class AgentLoop:
         
         # Trim history periodically
         self._trim_history(convo.history)
+        self._sanitize_conversation_history(convo.history)
         
         # Iterative tool calling loop
         iteration = 0
@@ -966,19 +1056,33 @@ class AgentLoop:
         tool_calls_used = 0
         final_metadata_extra: dict = {}
         executed_tool_signatures: set[str] = set()
+        heartbeat_tool_names: list[str] = []
+        heartbeat_blockers: list[str] = []
+        heartbeat_action_summaries: list[str] = []
         explicit_urls = self._extract_explicit_urls(user_message)
         explicit_github_url = self._extract_github_url(user_message)
         install_skill_intent = self._is_skill_install_intent(user_message)
-        action_intent = self._is_action_intent(user_message)
+        followup_action_context = self._has_recent_incomplete_action_context(convo.history)
+        action_intent = self._is_action_intent(user_message) or followup_action_context
+        if followup_action_context and not enable_tools:
+            logger.info("Promoting follow-up turn to tools-enabled due to recent unfinished action context")
+            enable_tools = True
+        iteration_limit = self.MAX_HEARTBEAT_ITERATIONS if is_heartbeat else self.max_iterations
+        tool_call_limit = self.MAX_HEARTBEAT_TOOL_CALLS if is_heartbeat else self.max_tool_calls_per_message
+        no_progress_limit = self.HEARTBEAT_NO_PROGRESS_LIMIT if is_heartbeat else self.NO_PROGRESS_LIMIT
 
         await self._publish_progress_update("started", "Starting work on your request.")
         
-        while iteration < self.max_iterations:
+        while iteration < iteration_limit:
             iteration += 1
             self._save_checkpoint(stage="iteration", iteration=iteration, notes="Starting model iteration")
             
             # Build messages for LLM
-            messages = self._build_messages(convo.history, query_hint=user_message)
+            messages = self._build_messages(
+                convo.history,
+                query_hint=user_message,
+                is_heartbeat=is_heartbeat,
+            )
             
             try:
                 # Call LLM provider with retry and circuit breaker
@@ -1015,6 +1119,7 @@ class AgentLoop:
                     and explicit_urls
                     and tool_calls_used == 0
                     and self.tools.get("fetch_url") is not None
+                    and not self._is_authenticated_api_url(explicit_urls[0])
                 ):
                     forced = ToolCall(
                         id="forced_fetch_url_missing_tool_call",
@@ -1056,6 +1161,36 @@ class AgentLoop:
                         )
                         continue
                 tool_calls = novel_tool_calls
+                if tool_calls:
+                    filtered_tool_calls: list[ToolCall] = []
+                    blocked_exploration = False
+                    for tc in tool_calls:
+                        if self._is_low_value_exploration_tool(
+                            tool_call=tc,
+                            user_message=user_message,
+                            is_heartbeat=is_heartbeat,
+                            tool_calls_used=tool_calls_used,
+                        ):
+                            blocked_exploration = True
+                            logger.info(
+                                "Blocked low-value exploration tool call during action-oriented task: "
+                                f"{tc.name} {tc.arguments}"
+                            )
+                            continue
+                        filtered_tool_calls.append(tc)
+                    if blocked_exploration and not filtered_tool_calls:
+                        convo.history.append(
+                            Message(
+                                role="system",
+                                content=(
+                                    "Do not inspect config files, list installed skills, or browse workspace roots "
+                                    "before attempting the requested external action. Use the minimum direct tool step needed. "
+                                    "Do not read credentials files manually; authenticated HTTP tools resolve saved credentials automatically."
+                                ),
+                            )
+                        )
+                        continue
+                    tool_calls = filtered_tool_calls
 
                 # Detect repeated no-progress loop signatures.
                 signature = json.dumps(
@@ -1071,7 +1206,7 @@ class AgentLoop:
                     no_progress_count = 0
                 last_signature = signature
 
-                if no_progress_count >= self.NO_PROGRESS_LIMIT and not tool_calls:
+                if no_progress_count >= no_progress_limit and not tool_calls:
                     logger.warning("Stopping loop due to repeated no-progress model responses")
                     final_response = "I am stuck repeating the same step. Please refine your request."
                     is_error = True
@@ -1089,7 +1224,11 @@ class AgentLoop:
                     if not enable_tools:
                         if (
                             not tool_gate_promoted
-                            and self._should_promote_tools_for_parsed_calls(user_message, tool_calls)
+                            and self._should_promote_tools_for_parsed_calls(
+                                user_message,
+                                tool_calls,
+                                history=convo.history,
+                            )
                         ):
                             logger.info(
                                 "Parsed tool calls while tools were disabled; "
@@ -1107,16 +1246,16 @@ class AgentLoop:
                             )
                         if cleaned and cleaned != response_content:
                             convo.history.append(Message(role="assistant", content=cleaned))
-                            self._queue_persist(convo.session_id, "assistant", cleaned)
+                            self._queue_persist(convo.session_id, "assistant", cleaned, persist_metadata)
                             final_response = cleaned
                             break
                         tool_calls = []
 
                 if tool_calls:
-                    if tool_calls_used + len(tool_calls) > self.max_tool_calls_per_message:
+                    if tool_calls_used + len(tool_calls) > tool_call_limit:
                         logger.warning(
                             "Stopping loop due to tool-call budget exceeded: "
-                            f"{tool_calls_used + len(tool_calls)} > {self.max_tool_calls_per_message}"
+                            f"{tool_calls_used + len(tool_calls)} > {tool_call_limit}"
                         )
                         final_response = (
                             "I stopped to avoid excessive tool calls. "
@@ -1143,7 +1282,7 @@ class AgentLoop:
                             for tc in tool_calls
                         ]
                     ))
-                    self._queue_persist(convo.session_id, "assistant", response_content)
+                    self._queue_persist(convo.session_id, "assistant", response_content, persist_metadata)
 
                     mapped_calls: list[ToolCall] = []
                     for tc in tool_calls:
@@ -1152,7 +1291,9 @@ class AgentLoop:
                         if mapped_tool_name != requested_tool_name:
                             logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{mapped_tool_name}'")
                         tc.name = mapped_tool_name
-                        mapped_calls.append(tc)
+                        mapped_calls.append(self._rewrite_specialized_tool_call(tc))
+                    if is_heartbeat:
+                        heartbeat_tool_names.extend([tc.name for tc in mapped_calls])
                     for tc in mapped_calls:
                         executed_tool_signatures.add(self._tool_call_signature(tc))
 
@@ -1184,6 +1325,12 @@ class AgentLoop:
 
                     for tc, result in executed:
                         rendered_tool_output = self._render_tool_result(result)
+                        if is_heartbeat and not result.success and (result.error or result.output):
+                            heartbeat_blockers.append((result.error or result.output)[:280])
+                        if is_heartbeat:
+                            action_summary = self._summarize_heartbeat_tool_result(tc.name, result)
+                            if action_summary:
+                                heartbeat_action_summaries.append(action_summary)
                         self._save_checkpoint(
                             stage="tool_executed",
                             iteration=iteration,
@@ -1205,6 +1352,18 @@ class AgentLoop:
                     continue
                 
                 # If this looks actionable but the model skipped tools, nudge once and retry.
+                if not tool_calls and is_heartbeat:
+                    final_text = self._sanitize_final_response(response_content, tool_calls_used).strip()
+                    if (
+                        final_text == "HEARTBEAT_OK"
+                        or final_text.startswith("HEARTBEAT_")
+                        or self._looks_like_blocker_response(final_text)
+                    ):
+                        convo.history.append(Message(role="assistant", content=final_text or response_content))
+                        self._queue_persist(convo.session_id, "assistant", final_text or response_content, persist_metadata)
+                        final_response = final_text or response_content
+                        break
+
                 if enable_tools and action_intent and tool_calls_used == 0 and not action_nudge_used:
                     logger.info("Action intent detected with no tool calls; nudging model to use tools")
                     action_nudge_used = True
@@ -1311,7 +1470,7 @@ class AgentLoop:
                 # No tool calls - this is the final response
                 final_text = self._sanitize_final_response(response_content, tool_calls_used)
                 convo.history.append(Message(role="assistant", content=final_text or response_content))
-                self._queue_persist(convo.session_id, "assistant", final_text or response_content)
+                self._queue_persist(convo.session_id, "assistant", final_text or response_content, persist_metadata)
                 final_response = final_text or response_content
                 break
                 
@@ -1336,20 +1495,55 @@ class AgentLoop:
                             ),
                         )
                     )
-                    messages = self._build_messages(convo.history, query_hint=user_message)
+                    messages = self._build_messages(
+                        convo.history,
+                        query_hint=user_message,
+                        is_heartbeat=is_heartbeat,
+                    )
                     response = await self._call_provider_with_retry(messages, enable_tools=False)
                     response_content = self._sanitize_final_response(response.content or "", tool_calls_used).strip()
                     if response_content:
                         convo.history.append(Message(role="assistant", content=response_content))
-                        self._queue_persist(convo.session_id, "assistant", response_content)
+                        self._queue_persist(convo.session_id, "assistant", response_content, persist_metadata)
                         final_response = response_content
                         is_error = self._looks_like_blocker_response(response_content)
                 except Exception as e:
                     logger.error(f"Error in finalization-only pass: {e}")
 
-            if final_response is None:
-                final_response = "I reached my maximum number of iterations. Please try again."
-                is_error = True
+        if final_response is None:
+            final_response = "I reached my maximum number of iterations. Please try again."
+            is_error = True
+        elif not str(final_response).strip():
+            final_response = self._fallback_empty_response(
+                action_intent=action_intent,
+                is_heartbeat=is_heartbeat,
+            )
+            is_error = True
+
+        if not (final_response or "").strip():
+            if action_intent:
+                final_response = (
+                    "I could not complete that action in this turn. "
+                    "I hit an execution failure before producing a usable result."
+                )
+            else:
+                final_response = "I couldn't produce a usable reply for that message."
+            is_error = True
+
+        if is_heartbeat:
+            final_response, is_error = self._canonicalize_heartbeat_outcome(
+                response_text=final_response,
+                is_error=is_error,
+                tool_names=heartbeat_tool_names,
+                blockers=heartbeat_blockers,
+                action_summaries=heartbeat_action_summaries,
+                tool_calls_used=tool_calls_used,
+            )
+            self._record_heartbeat_result(
+                final_response,
+                mapped_tool_names=heartbeat_tool_names,
+                blockers=heartbeat_blockers,
+            )
 
         if self._should_schedule_autonomous_followup(
             assistant_response=final_response,
@@ -1397,7 +1591,7 @@ class AgentLoop:
             payload={
                 "iterations": iteration,
                 "is_error": is_error,
-                "tool_stats": dict(self._tool_stats),
+                "tool_stats": self._current_run_tool_stats(),
                 "response_preview": final_response[:200],
             },
         )
@@ -1571,6 +1765,55 @@ class AgentLoop:
 
         return True
 
+    def _has_recent_incomplete_action_context(self, history: list[Message]) -> bool:
+        """True when recent assistant replies indicate an unfinished action flow."""
+        for msg in reversed(history[-6:]):
+            if msg.role == "user" and self._is_action_intent(msg.content or ""):
+                return True
+            if msg.role != "assistant":
+                continue
+            content = (msg.content or "").strip()
+            if not content:
+                return True
+            if self._looks_like_incomplete_followthrough(content, tool_calls_used=0):
+                return True
+            lowered = content.lower()
+            if (
+                "i'd love to" in lowered
+                or "let me check" in lowered
+                or "need to check" in lowered
+                or "don't see a direct tool" in lowered
+                or "i can do that" in lowered
+            ):
+                return True
+        return False
+
+    def _fallback_empty_response(self, *, action_intent: bool, is_heartbeat: bool) -> str:
+        """Never surface an empty assistant reply to channels."""
+        if is_heartbeat:
+            return "HEARTBEAT_OK"
+        if action_intent:
+            return (
+                "I got stuck before completing the action. "
+                "Please retry, or start a new conversation so I can run it cleanly."
+            )
+        return "I got stuck and produced an empty reply. Please try again."
+
+    def _sanitize_conversation_history(self, history: list[Message]) -> None:
+        """Drop malformed tool artifacts that poison later prompts."""
+        if not history:
+            return
+        sanitized: list[Message] = []
+        removed = 0
+        for msg in history:
+            if msg.role == "tool" and not (msg.metadata or {}).get("tool_call_id"):
+                removed += 1
+                continue
+            sanitized.append(msg)
+        if removed:
+            history[:] = sanitized
+            logger.info(f"Removed {removed} malformed tool message(s) from conversation history")
+
     def _is_trivial_chat_message(self, lowered_text: str) -> bool:
         """True for short, non-actionable conversational turns."""
         return lowered_text in {
@@ -1616,13 +1859,16 @@ class AgentLoop:
         self,
         user_message: str,
         tool_calls: list[ToolCall],
+        history: Optional[list[Message]] = None,
     ) -> bool:
         """Decide whether to re-run with tools enabled after parser detected tool calls."""
         if not tool_calls:
             return False
 
         lowered = (user_message or "").strip().lower()
-        if not lowered or self._is_trivial_chat_message(lowered):
+        if not lowered:
+            return False
+        if self._is_trivial_chat_message(lowered) and not self._has_recent_incomplete_action_context(history or []):
             return False
 
         # Only promote when parsed calls are to known tools (or aliases).
@@ -1630,6 +1876,9 @@ class AgentLoop:
             mapped = self._tool_aliases.get(tc.name, tc.name)
             if self.tools.get(mapped) is None:
                 return False
+
+        if self._has_recent_incomplete_action_context(history or []):
+            return True
 
         # Require at least one action cue in the user's message.
         action_cues = (
@@ -1673,21 +1922,316 @@ class AgentLoop:
         if has_pending_language or self._looks_like_incomplete_followthrough(cleaned, tool_calls_used):
             head = self.FINAL_RESPONSE_CONTINUATION_SPLIT.split(cleaned, maxsplit=1)[0].strip()
             if head:
-                return (
+                cleaned = (
                     "Partial progress:\n\n"
                     f"{head}\n\n"
                     "I did not execute the remaining step in this turn."
                 )
-            return "I made partial progress, but I did not execute the remaining step in this turn."
+            else:
+                cleaned = "I made partial progress, but I did not execute the remaining step in this turn."
 
+        cleaned = self._sanitize_template_placeholders(cleaned)
         return cleaned
+
+    def _rewrite_specialized_tool_call(self, tool_call: ToolCall) -> ToolCall:
+        """Convert brittle shell-based HTTP calls into structured tool calls when possible."""
+        normalized = self._normalize_special_file_path(tool_call)
+        if normalized is not tool_call:
+            tool_call = normalized
+        if tool_call.name != "shell":
+            return tool_call
+        if self.tools.get("http_request") is None:
+            return tool_call
+
+        command = str((tool_call.arguments or {}).get("command", "") or "").strip()
+        rewritten_args = self._parse_curl_shell_command(command)
+        if not rewritten_args:
+            return tool_call
+
+        logger.info("Rewriting shell curl into structured http_request call")
+        return ToolCall(id=tool_call.id, name="http_request", arguments=rewritten_args)
+
+    def _normalize_special_file_path(self, tool_call: ToolCall) -> ToolCall:
+        """Collapse known workspace-relative identity paths onto the real workspace root."""
+        if tool_call.name not in {"read_file", "write_file", "edit_file"}:
+            return tool_call
+        arguments = dict(tool_call.arguments or {})
+        raw_path = str(arguments.get("path", "") or "").strip()
+        if not raw_path:
+            return tool_call
+
+        normalized = raw_path.replace("\\", "/").lower()
+        if not normalized.endswith("/heartbeat.md") and normalized != "heartbeat.md":
+            return tool_call
+
+        candidate = self.workspace / "HEARTBEAT.md"
+        if not candidate.exists():
+            return tool_call
+
+        if raw_path == str(candidate) or raw_path == "HEARTBEAT.md":
+            return tool_call
+
+        arguments["path"] = str(candidate)
+        logger.info(f"Normalizing HEARTBEAT.md path: {raw_path} -> {candidate}")
+        return ToolCall(id=tool_call.id, name=tool_call.name, arguments=arguments)
+
+    def _parse_curl_shell_command(self, command: str) -> Optional[dict]:
+        """Best-effort parser for common curl invocations emitted by the model."""
+        text = (command or "").strip()
+        if "curl" not in text.lower():
+            return None
+
+        url_match = re.search(r"(https?://[^\s\"']+)", text, re.IGNORECASE)
+        if not url_match:
+            return None
+
+        method_match = re.search(r"(?:^|\s)-X\s+([A-Za-z]+)\b", text)
+        data_payload = self._extract_json_payload_from_curl(text)
+        header_pairs = self._extract_headers_from_curl(text)
+        method = (method_match.group(1).upper() if method_match else ("POST" if data_payload is not None else "GET"))
+
+        args: dict[str, object] = {
+            "method": method,
+            "url": url_match.group(1),
+        }
+        if header_pairs:
+            args["headers"] = header_pairs
+        if data_payload is not None:
+            args["json_body"] = data_payload
+        return args
+
+    def _extract_headers_from_curl(self, command: str) -> dict[str, str]:
+        """Extract simple header pairs from a curl command string."""
+        headers: dict[str, str] = {}
+        for match in re.finditer(r"(?:^|\s)-H\s+", command):
+            start = match.end()
+            quote = command[start] if start < len(command) and command[start] in {"'", '"'} else ""
+            if quote:
+                start += 1
+                end = command.find(quote, start)
+                if end == -1:
+                    continue
+                raw = command[start:end]
+            else:
+                next_space = command.find(" ", start)
+                end = len(command) if next_space == -1 else next_space
+                raw = command[start:end]
+            if ":" not in raw:
+                continue
+            key, value = raw.split(":", 1)
+            headers[key.strip()] = value.strip()
+        return headers
+
+    def _extract_json_payload_from_curl(self, command: str) -> Optional[dict]:
+        """Extract a JSON object from curl -d/--data payloads without relying on shell parsing."""
+        data_flag = re.search(r"(?:^|\s)(?:-d|--data(?:-raw)?)\s+", command)
+        if not data_flag:
+            return None
+
+        start = command.find("{", data_flag.end())
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape = False
+        end = -1
+        for index in range(start, len(command)):
+            char = command[index]
+            if in_string:
+                if escape:
+                    escape = False
+                    continue
+                if char == "\\":
+                    escape = True
+                    continue
+                if char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                depth += 1
+                continue
+            if char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+
+        if end == -1:
+            return None
+
+        raw_json = command[start:end]
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _sanitize_template_placeholders(self, content: str) -> str:
+        """Remove obvious template/example placeholders from user-facing replies."""
+        raw_placeholder_hits = sum(
+            len(re.findall(pattern, content or "", flags=re.IGNORECASE))
+            for pattern in self.PLACEHOLDER_PATTERNS
+        )
+        cleaned = self._sanitize_context_placeholders(content)
+        cleaned = re.sub(r"Bearer\s+the configured value\b", "a configured API key", cleaned)
+        cleaned = re.sub(r"Bearer\s+your current API key\b", "your current API key", cleaned)
+        cleaned = re.sub(r"moltbook_sk_[A-Za-z0-9_\-]+", "[redacted]", cleaned)
+        cleaned = re.sub(r"sk-or-v1-[A-Za-z0-9]+", "[redacted]", cleaned)
+        cleaned = re.sub(r"\b\d{8,}:[A-Za-z0-9_-]{20,}\b", "[redacted]", cleaned)
+        word_count = len(re.findall(r"\b\w+\b", content or ""))
+        if raw_placeholder_hits >= 3 and word_count <= raw_placeholder_hits + 2:
+            return self._rewrite_placeholder_heavy_response("")
+        elif self._contains_placeholder_artifacts(cleaned):
+            cleaned = self._rewrite_placeholder_heavy_response(cleaned)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def _sanitize_context_placeholders(self, content: str) -> str:
+        """Remove obvious template/example placeholders from model-facing context."""
+        cleaned = content or ""
+        replacements = [
+            (r"Bearer\s+YOUR_API_KEY\b", "Bearer the configured value"),
+            (r"Bearer\s+VOTRE_CLE_API\b", "Bearer the configured value"),
+            (r"Bearer\s+<[^>]*(?:api[_\s-]*key|clé[_\s-]*api|cle[_\s-]*api|token|bearer)[^>]*>", "Bearer the configured value"),
+            (r"\bYOUR_[A-Z0-9_]+\b", "the configured value"),
+            (r"\bVOTRE_[A-Z0-9_]+\b", "the configured value"),
+            (r"\bMOLTY_NAME\b", "the target molty"),
+            (r"\bPOST_ID\b", "the target post ID"),
+            (r"\bCOMMENT_ID\b", "the target comment ID"),
+            (r"\bCURSOR_FROM_PREVIOUS_RESPONSE\b", "the next page cursor"),
+            (r"\bYourAgentName\b", "the configured agent name"),
+            (r"\bYourName\b", "the current name"),
+            (r"\byour-human@example\.com\b", "the owner's email address"),
+            (r"\bmoltbook_xxx\b", "a Moltbook API key"),
+            (r"\bmoltbook_claim_xxx\b", "a Moltbook claim URL token"),
+            (r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){0,4}(?:_ID|_KEY|_TOKEN|_NAME|_VALUE|_EMAIL|_URL|_HANDLE)\b", "the live value"),
+            (r"uuid\.\.\.", "the target resource"),
+            (r"\[Your [^\]]+\]", "your actual details"),
+            (r"\[Preferred [^\]]+\]", "your preferred name"),
+            (r"\[(?:insert|replace|set|use|enter|provide)[^\]]+\]", "the real value"),
+            (r"\[Optional\]", ""),
+            (r"<[^>]*(?:api[_\s-]*key|clé[_\s-]*api|cle[_\s-]*api|token|bearer)[^>]*>", "a configured API key"),
+            (r"<[^>]*(?:post[_\s-]*id|comment[_\s-]*id|molty|name|nom)[^>]*>", "the real target details"),
+            (r"<[A-Z][A-Z0-9 _-]{1,48}>", "the real value"),
+        ]
+        for pattern, replacement in replacements:
+            cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def _contains_placeholder_artifacts(self, content: str) -> bool:
+        text = content or ""
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in self.PLACEHOLDER_PATTERNS)
+
+    def _tool_args_contain_template_placeholders(self, tool_name: str, args: dict) -> bool:
+        """Detect templated values that should never be executed as live tool inputs."""
+        def _walk(value) -> bool:
+            if isinstance(value, dict):
+                return any(_walk(v) or _walk(k) for k, v in value.items())
+            if isinstance(value, list):
+                return any(_walk(item) for item in value)
+            if not isinstance(value, str):
+                return False
+            text = value.strip()
+            if not text:
+                return False
+            if self._contains_placeholder_artifacts(text):
+                return True
+            patterns = (
+                r"\bYOUR_API_KEY_HERE\b",
+                r"\bYOUR_[A-Z0-9_]+\b",
+                r"\bVOTRE_[A-Z0-9_]+\b",
+                r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){0,4}(?:_ID|_KEY|_TOKEN|_NAME|_VALUE|_EMAIL|_URL|_HANDLE)\b",
+                r"\bMOLTY_NAME\b",
+                r"\bPOST_ID\b",
+                r"\bCOMMENT_ID\b",
+                r"\bCURSOR_FROM_PREVIOUS_RESPONSE\b",
+                r"\bYourAgentName\b",
+                r"\bYourName\b",
+                r"\[Your [^\]]+\]",
+                r"\[Preferred [^\]]+\]",
+                r"\[(?:insert|replace|set|use|enter|provide)[^\]]+\]",
+                r"\[Optional\]",
+                r"<[A-Z][A-Z0-9 _-]{1,48}>",
+                r"<[^>]*(?:api[_\s-]*key|clé[_\s-]*api|cle[_\s-]*api|token|bearer|post[_\s-]*id|comment[_\s-]*id|molty|name|nom)[^>]*>",
+            )
+            return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+        if tool_name not in {"http_request", "shell", "fetch_url", "write_file", "edit_file"}:
+            return False
+        return _walk(args)
+
+    def _rewrite_placeholder_heavy_response(self, content: str) -> str:
+        """Fallback rewrite when a response still reads like a template."""
+        text = content or ""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        kept: list[str] = []
+        for line in lines:
+            if self._contains_placeholder_artifacts(line):
+                continue
+            kept.append(line)
+        if kept:
+            return "\n\n".join(kept)
+        return (
+            "I need the real target details from the live context before I can complete that action. "
+            "I will use the actual values on the next attempt."
+        )
+
+    def _should_persist_message_to_memory(self, role: str, content: str) -> bool:
+        """Persist only messages likely to remain useful across future sessions."""
+        lowered = (content or "").strip().lower()
+        if not lowered:
+            return False
+        if len(lowered) < 25:
+            return False
+        if self.memory._is_low_value_memory(lowered):
+            return False
+        low_value_runtime_fragments = (
+            "read heartbeat.md",
+            "heartbeat.md first",
+            "heartbeat_ok",
+            "heartbeat_complete",
+            "authorization: bearer",
+            "http_request",
+            "curl ",
+            "api key",
+        )
+        if any(fragment in lowered for fragment in low_value_runtime_fragments):
+            return False
+
+        durable_keywords = (
+            "preference",
+            "prefer",
+            "call me",
+            "timezone",
+            "project",
+            "working on",
+            "my name is",
+            "you can call me",
+            "remember",
+            "task",
+            "todo",
+            "deadline",
+            "allergic",
+            "likes ",
+            "dislikes ",
+            "important",
+        )
+        return role == "user" and any(keyword in lowered for keyword in durable_keywords)
 
     def _extract_explicit_urls(self, user_message: str) -> list[str]:
         """Extract normalized explicit URLs from user message."""
         urls: list[str] = []
         seen: set[str] = set()
         for raw in self.URL_PATTERN.findall(user_message or ""):
-            candidate = raw.rstrip(".,);!?'\"")
+            candidate = raw.rstrip("`.,);!?'\"")
             if not candidate:
                 continue
             lowered = candidate.lower()
@@ -1705,6 +2249,8 @@ class AgentLoop:
     ) -> list[ToolCall]:
         """Force URL fetch first for explicit-link requests on the first tool step."""
         if not tool_calls or not explicit_urls or tool_calls_used > 0:
+            return tool_calls
+        if self._is_authenticated_api_url(explicit_urls[0]):
             return tool_calls
         if self.tools.get("fetch_url") is None:
             return tool_calls
@@ -1727,6 +2273,84 @@ class AgentLoop:
             f"Applying URL-first policy: forcing fetch_url for explicit URL {explicit_urls[0]}"
         )
         return [forced]
+
+    @staticmethod
+    def _is_authenticated_api_url(url: str) -> bool:
+        lowered = (url or "").strip().lower()
+        return "/api/" in lowered
+
+    def _is_action_oriented_request(self, user_message: str, is_heartbeat: bool) -> bool:
+        if is_heartbeat:
+            return True
+        lowered = (user_message or "").strip().lower()
+        action_markers = (
+            "introduce yourself",
+            "post ",
+            "comment ",
+            "reply ",
+            "perform",
+            "do it",
+            "check moltbook",
+            "heartbeat check",
+            "update your credentials",
+            "update the api key",
+            "introduce yourself on",
+        )
+        return any(marker in lowered for marker in action_markers)
+
+    def _is_low_value_exploration_tool(
+        self,
+        tool_call: ToolCall,
+        user_message: str,
+        is_heartbeat: bool,
+        tool_calls_used: int,
+    ) -> bool:
+        if not self._is_action_oriented_request(user_message, is_heartbeat):
+            return False
+
+        mapped_name = self._tool_aliases.get(tool_call.name, tool_call.name)
+        arguments = dict(tool_call.arguments or {})
+        path = str(arguments.get("path", "") or "")
+        normalized_path = path.lower()
+        normalized_name = Path(path).name.lower()
+        url = str(arguments.get("url", "") or "").strip().lower()
+
+        if mapped_name == "list_skills":
+            return True
+        if mapped_name == "get_context":
+            return True
+        if mapped_name == "read_file" and normalized_name == "skill.md":
+            return True
+        if mapped_name == "read_file" and normalized_name == "heartbeat.md":
+            return is_heartbeat and tool_calls_used > 0
+        if mapped_name == "read_file" and normalized_name == "credentials.json":
+            if "/.config/" in normalized_path or normalized_path.startswith(".config/"):
+                return True
+        if mapped_name == "read_file" and normalized_path.endswith("/config.yaml"):
+            return True
+        if mapped_name == "read_file" and normalized_path.endswith("/config.yml"):
+            return True
+        if mapped_name == "list_dir" and normalized_path in {
+            "/root/.clawlet",
+            "/root/.clawlet/workspace",
+            "workspace",
+        }:
+            return True
+        if mapped_name == "fetch_url" and is_heartbeat and self._is_low_value_heartbeat_url(url):
+            return True
+        if is_heartbeat and tool_calls_used > 0 and mapped_name in {"read_file", "list_dir"}:
+            return True
+        return False
+
+    @staticmethod
+    def _is_low_value_heartbeat_url(url: str) -> bool:
+        lowered = (url or "").strip().lower()
+        if not lowered:
+            return False
+        return any(
+            lowered.endswith(suffix)
+            for suffix in ("/skill.md", "/heartbeat.md", "/rules.md", "/messaging.md")
+        )
 
     def _should_schedule_autonomous_followup(
         self,
@@ -1795,7 +2419,11 @@ class AgentLoop:
     def _render_tool_result(self, result: ToolResult) -> str:
         """Render tool output for conversation history."""
         raw = result.output if result.success else f"Error: {result.error}"
-        return raw
+        cleaned = self._sanitize_context_placeholders(raw)
+        cleaned = re.sub(r"moltbook_sk_[A-Za-z0-9_\-]+", "[redacted]", cleaned)
+        cleaned = re.sub(r"sk-or-v1-[A-Za-z0-9]+", "[redacted]", cleaned)
+        cleaned = re.sub(r"\b\d{8,}:[A-Za-z0-9_-]{20,}\b", "[redacted]", cleaned)
+        return cleaned
 
     def _tool_call_signature(self, tool_call: ToolCall) -> str:
         """Stable signature for duplicate-call suppression within a single turn."""
@@ -1888,12 +2516,14 @@ class AgentLoop:
             logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{tool_name}'")
             tool_call.name = tool_name  # Update the tool call name
         now = datetime.now(UTC_TZ)
+        raw_args = dict(tool_call.arguments or {})
+        failure_key = self._tool_failure_key(tool_name, raw_args)
         
         # Check if circuit is open for this tool
-        if tool_name in self._tool_circuit_open_until:
-            if now < self._tool_circuit_open_until[tool_name]:
+        if failure_key in self._tool_circuit_open_until:
+            if now < self._tool_circuit_open_until[failure_key]:
                 # Circuit is open, skip execution
-                logger.warning(f"Circuit open for tool '{tool_name}'. Skipping execution.")
+                logger.warning(f"Circuit open for tool bucket '{failure_key}'. Skipping execution.")
                 await self._publish_progress_update(
                     "tool_failed",
                     f"Skipped `{tool_name}` because it is temporarily unavailable.",
@@ -1903,12 +2533,13 @@ class AgentLoop:
                     success=False,
                     output="",
                     error=f"Tool '{tool_name}' is temporarily unavailable due to repeated failures.",
+                    data={"transient": True, "failure_key": failure_key},
                 )
             else:
                 # Circuit timeout expired, reset
-                logger.info(f"Circuit breaker timeout for tool '{tool_name}' expired, allowing test call")
-                self._tool_circuit_open_until.pop(tool_name, None)
-                self._tool_failures[tool_name] = 0  # reset failures
+                logger.info(f"Circuit breaker timeout for tool bucket '{failure_key}' expired, allowing test call")
+                self._tool_circuit_open_until.pop(failure_key, None)
+                self._tool_failures[failure_key] = 0  # reset failures
         
         logger.info(f"Executing tool: {tool_name} with args: {tool_call.arguments}")
         await self._publish_progress_update("tool_started", f"Running `{tool_name}`.", detail=tool_name)
@@ -1922,10 +2553,13 @@ class AgentLoop:
         # Validate tool invocation before execution.
         tool = self.tools.get(tool_name)
         schema = tool.parameters_schema if tool else None
-        raw_args = dict(tool_call.arguments or {})
         execution_target_raw = str(raw_args.pop("_execution_target", "local")).strip().lower()
         execution_target = "remote" if execution_target_raw == "remote" else "local"
         lane = str(raw_args.pop("_lane", "")).strip().lower()
+        cacheable_override_raw = raw_args.pop("_cacheable", None)
+        cacheable_override: Optional[bool] = None
+        if isinstance(cacheable_override_raw, bool):
+            cacheable_override = cacheable_override_raw
 
         valid, error_msg, sanitized = validate_tool_params(
             tool_name=tool_name,
@@ -1942,6 +2576,20 @@ class AgentLoop:
             )
             return ToolResult(success=False, output="", error=f"Invalid tool call: {error_msg}")
         args = dict(sanitized.get("params", raw_args))
+        repaired_args = self._repair_templated_tool_args(tool_name, args)
+        if repaired_args is not None:
+            logger.info(f"Applied deterministic repair to templated args for '{tool_name}'")
+            args = repaired_args
+        if self._tool_args_contain_template_placeholders(tool_name, args):
+            error_msg = "Tool call contains template placeholders instead of live values"
+            logger.warning(f"Rejected templated tool call for '{tool_name}': {args}")
+            self._tool_stats["calls_rejected"] += 1
+            await self._publish_progress_update(
+                "tool_failed",
+                f"Rejected templated call for `{tool_name}`.",
+                detail=error_msg,
+            )
+            return ToolResult(success=False, output="", error=error_msg)
         if execution_target == "remote" and getattr(self._tool_runtime, "remote_executor", None) is None:
             logger.warning("Remote execution requested but remote executor is unavailable; using local target")
             execution_target = "local"
@@ -1956,6 +2604,7 @@ class AgentLoop:
             workspace_path=str(self.workspace),
             timeout_seconds=self.runtime_config.default_tool_timeout_seconds,
             max_retries=self.runtime_config.default_tool_retries,
+            cacheable=cacheable_override,
             execution_target=execution_target,  # type: ignore[arg-type]
             lane=lane,
         )
@@ -1972,31 +2621,126 @@ class AgentLoop:
         
         if result.success:
             # Reset failure count on success
-            if tool_name in self._tool_failures:
-                self._tool_failures[tool_name] = 0
+            if failure_key in self._tool_failures:
+                self._tool_failures[failure_key] = 0
             logger.info(f"Tool {tool_name} succeeded: {result.output[:100]}...")
             await self._publish_progress_update("tool_completed", f"Completed `{tool_name}`.", detail=tool_name)
         else:
             self._tool_stats["calls_failed"] += 1
-            # Increment failure count
-            failures = self._tool_failures.get(tool_name, 0) + 1
-            self._tool_failures[tool_name] = failures
+            result_data = result.data if isinstance(result.data, dict) else {}
+            is_transient_failure = bool(result_data.get("transient")) or "temporarily unavailable" in (
+                (result.error or "").lower()
+            )
+            failures = self._tool_failures.get(failure_key, 0)
+            if is_transient_failure:
+                failures += 1
+                self._tool_failures[failure_key] = failures
             # Increment tool error metric
             get_metrics().inc_tool_errors()
-            logger.warning(f"Tool {tool_name} failed: {result.error} (failures: {failures})")
+            logger.warning(
+                f"Tool {tool_name} failed: {result.error} "
+                f"(bucket={failure_key}, transient={is_transient_failure}, failures: {failures})"
+            )
             await self._publish_progress_update(
                 "tool_failed",
                 f"`{tool_name}` failed.",
                 detail=result.error or result.output[:200],
             )
             
-            if failures >= self._tool_failure_threshold:
+            if is_transient_failure and failures >= self._tool_failure_threshold:
                 # Trip circuit breaker
                 open_until = now + timedelta(seconds=self._tool_circuit_timeout_seconds)
-                self._tool_circuit_open_until[tool_name] = open_until
-                logger.error(f"Circuit breaker tripped for tool '{tool_name}'! Open until {open_until.isoformat()}")
+                self._tool_circuit_open_until[failure_key] = open_until
+                logger.error(
+                    f"Circuit breaker tripped for tool bucket '{failure_key}'! "
+                    f"Open until {open_until.isoformat()}"
+                )
         
         return result
+
+    def _tool_failure_key(self, tool_name: str, args: dict) -> str:
+        if tool_name != "http_request":
+            return tool_name
+        method = str(args.get("method", "GET") or "GET").strip().upper()
+        url = str(args.get("url", "") or "").strip()
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path or "/"
+        return f"{tool_name}:{method}:{host}{path}"
+
+    def _repair_templated_tool_args(self, tool_name: str, args: dict) -> Optional[dict]:
+        if not self._tool_args_contain_template_placeholders(tool_name, args):
+            return None
+        if tool_name != "http_request":
+            return None
+
+        repaired = json.loads(json.dumps(args))
+        changed = False
+        headers = repaired.get("headers")
+        if isinstance(headers, dict):
+            auth_value = str(headers.get("Authorization", "") or "")
+            if auth_value and self._contains_placeholder_artifacts(auth_value):
+                headers.pop("Authorization", None)
+                changed = True
+
+        body = repaired.get("json_body")
+        if isinstance(body, dict):
+            placeholder_keys = [
+                key for key, value in body.items()
+                if isinstance(value, str) and self._contains_placeholder_artifacts(value)
+            ]
+            for key in placeholder_keys:
+                body.pop(key, None)
+                changed = True
+
+        return repaired if changed else None
+
+    def _canonicalize_heartbeat_outcome(
+        self,
+        *,
+        response_text: str,
+        is_error: bool,
+        tool_names: list[str],
+        blockers: list[str],
+        action_summaries: list[str],
+        tool_calls_used: int,
+    ) -> tuple[str, bool]:
+        text = (response_text or "").strip()
+        blocker_text = (blockers[0] if blockers else "").strip()
+        if is_error or blocker_text or self._looks_like_blocker_response(text):
+            detail = blocker_text or text or "heartbeat run failed"
+            detail = detail.splitlines()[0][:220]
+            return f"HEARTBEAT_BLOCKED - {detail}", True
+
+        if text == "HEARTBEAT_OK":
+            return "HEARTBEAT_OK", False
+
+        meaningful_tools = [
+            name for name in tool_names
+            if name not in {"read_file", "fetch_url", "list_dir", "get_context", "recall"}
+        ]
+        if meaningful_tools or action_summaries:
+            summary = next((item for item in action_summaries if item), "")
+            if not summary:
+                summary = text or f"Completed actions using: {', '.join(dict.fromkeys(meaningful_tools))}"
+            if not summary.startswith("HEARTBEAT_ACTION_TAKEN"):
+                summary = f"HEARTBEAT_ACTION_TAKEN - {summary}"
+            return summary, False
+
+        return "HEARTBEAT_OK", False
+
+    def _summarize_heartbeat_tool_result(self, tool_name: str, result: ToolResult) -> str:
+        if not result.success:
+            return ""
+        if tool_name in {"read_file", "fetch_url", "list_dir", "get_context", "recall"}:
+            return ""
+        detail = (result.output or "").strip()
+        if detail:
+            detail = detail.splitlines()[0].strip()
+            if len(detail) > 180:
+                detail = detail[:177].rstrip() + "..."
+            return detail
+        return f"Completed `{tool_name}` successfully."
 
     def _should_parallelize_tool_calls(self, tool_calls: list[ToolCall]) -> bool:
         """Allow safe parallel execution for batches of read-only local tool calls."""
@@ -2085,7 +2829,12 @@ class AgentLoop:
         results = await asyncio.gather(*[_run(tc) for tc in tool_calls])
         return list(zip(tool_calls, results))
     
-    def _build_messages(self, history: list[Message], query_hint: Optional[str] = None) -> list[dict]:
+    def _build_messages(
+        self,
+        history: list[Message],
+        query_hint: Optional[str] = None,
+        is_heartbeat: bool = False,
+    ) -> list[dict]:
         """Build messages list for LLM."""
         messages = []
         
@@ -2096,6 +2845,13 @@ class AgentLoop:
             workspace_path=str(self.workspace)
         )
         messages.append({"role": "system", "content": system_prompt})
+        if is_heartbeat:
+            messages.append({"role": "system", "content": self.HEARTBEAT_ACTION_POLICY})
+            heartbeat_summary = str(self._current_heartbeat_metadata.get("heartbeat_state_summary", "") or "").strip()
+            if not heartbeat_summary:
+                heartbeat_summary = self._heartbeat_state.build_prompt_summary()
+            if heartbeat_summary:
+                messages.append({"role": "system", "content": heartbeat_summary})
 
         query_text = (query_hint or "").strip()
         if not query_text:
@@ -2142,6 +2898,21 @@ class AgentLoop:
             messages.append(msg_dict)
         
         return messages
+
+    def _record_heartbeat_result(self, response_text: str, mapped_tool_names: list[str], blockers: list[str]) -> None:
+        route = {
+            "channel": self._current_channel,
+            "chat_id": self._current_chat_id,
+        }
+        check_types = list(self._current_heartbeat_metadata.get("heartbeat_check_types") or [])
+        self._heartbeat_state.record_cycle_result(
+            now=datetime.now(UTC_TZ),
+            response_text=response_text,
+            tool_names=list(mapped_tool_names),
+            route=route,
+            check_types=check_types,
+            blockers=list(blockers),
+        )
     
     def _trim_history(self, history: list[Message]) -> None:
         """Trim history to prevent unbounded growth."""
@@ -2282,6 +3053,11 @@ class AgentLoop:
         for attempt in range(1, attempts + 1):
             try:
                 await self.bus.publish_outbound(response)
+                if bool((response.metadata or {}).get("heartbeat")) and response.channel != "scheduler":
+                    self._heartbeat_state.record_outreach(
+                        now=datetime.now(UTC_TZ),
+                        response_text=response.content,
+                    )
                 return True
             except Exception as e:
                 failure = classify_error_text(str(e))
@@ -2314,12 +3090,34 @@ class AgentLoop:
         text = (getattr(response, "content", "") or "").strip()
         if not text:
             return True
+        ack_max_chars = int(metadata.get("ack_max_chars", 24) or 24)
         if text == "HEARTBEAT_OK":
             return True
+        if text.startswith("HEARTBEAT_ACTION_TAKEN"):
+            detail = text.partition(" - ")[2].strip()
+            if metadata.get("publish_heartbeat_action") is True:
+                return False
+            if not detail:
+                return True
+            generic_prefixes = (
+                "completed actions using:",
+                "completed `",
+                "completed ",
+                "finished ",
+                "done.",
+            )
+            lowered_detail = detail.lower()
+            if lowered_detail.startswith(generic_prefixes):
+                return True
+            if len(detail) <= ack_max_chars and "\n" not in detail:
+                return True
+            return False
 
-        ack_max_chars = int(metadata.get("ack_max_chars", 24) or 24)
         # Short single-line heartbeat acknowledgements are low signal.
         if len(text) <= ack_max_chars and "\n" not in text:
+            return True
+        lowered = text.lower()
+        if "temporarily unavailable" in lowered or "repeated failures" in lowered:
             return True
         return False
     
@@ -2342,7 +3140,7 @@ class AgentLoop:
 
         # Save long-term memories
         try:
-            self.memory.save_long_term()
+            self.memory.close()
         except Exception as e:
             logger.error(f"Failed to save long-term memory: {e}")
         
