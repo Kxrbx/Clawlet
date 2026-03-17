@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import re
 import time
@@ -255,18 +256,8 @@ class DeterministicToolRuntime:
         use_remote = envelope.execution_target == "remote" and self.remote_executor is not None
         tool = self.registry.get(envelope.tool_name)
         exec_args = dict(args)
-        exec_args["_workspace_path"] = envelope.workspace_path
-        # Inject runtime context only for Plugin SDK tools.
         if tool is not None:
-            try:
-                from clawlet.plugins.sdk import PluginTool
-
-                if isinstance(tool, PluginTool):
-                    exec_args["_run_id"] = envelope.run_id
-                    exec_args["_session_id"] = envelope.session_id
-                    exec_args["_workspace_path"] = envelope.workspace_path
-            except Exception:
-                pass
+            exec_args.update(self._runtime_context_args(tool, envelope))
 
         for attempt in range(max(1, envelope.max_retries + 1)):
             attempts += 1
@@ -294,3 +285,26 @@ class DeterministicToolRuntime:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         metadata = ToolExecutionMetadata(duration_ms=elapsed_ms, attempts=attempts, cached=False)
         return last_result, metadata, use_remote
+
+    def _runtime_context_args(self, tool, envelope: ToolCallEnvelope) -> dict[str, str]:
+        """Inject runtime-only kwargs only when the tool contract can accept them."""
+        extra = {"_workspace_path": envelope.workspace_path}
+        try:
+            from clawlet.plugins.sdk import PluginTool
+
+            if isinstance(tool, PluginTool):
+                extra["_run_id"] = envelope.run_id
+                extra["_session_id"] = envelope.session_id
+        except Exception:
+            pass
+
+        try:
+            params = inspect.signature(tool.execute).parameters.values()
+        except (TypeError, ValueError):
+            return {}
+
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params):
+            return extra
+
+        accepted = {param.name for param in params}
+        return {key: value for key, value in extra.items() if key in accepted}

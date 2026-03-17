@@ -2327,6 +2327,7 @@ class AgentLoop:
         return await self._outbound_publisher.publish(
             response,
             session_id=self._session_id or "session",
+            run_id=self._current_run_id or "",
         )
 
     def _should_suppress_outbound(self, response: "OutboundMessage") -> bool:

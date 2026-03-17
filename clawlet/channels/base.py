@@ -9,6 +9,8 @@ from typing import Optional, TYPE_CHECKING
 from loguru import logger
 
 from clawlet.bus.queue import MessageBus, InboundMessage, OutboundMessage
+from clawlet.runtime.events import EVENT_CHANNEL_FAILED, RuntimeEvent
+from clawlet.runtime.failures import classify_error_text, to_payload
 
 if TYPE_CHECKING:
     from clawlet.agent.loop import AgentLoop
@@ -68,11 +70,72 @@ class BaseChannel(ABC):
                 logger.debug(f"Outbound message received for {msg.channel}: {msg.content[:50]}...")
                 logger.debug(f"Sending message to {self.name} channel")
                 await self.send(msg)
-                    
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
                 logger.error(f"Error in outbound loop for {self.name}: {e}")
+                if 'msg' in locals():
+                    await self._handle_outbound_failure(msg, e)
                 if not self._running:
                     break
                 await asyncio.sleep(1)
+
+    async def _handle_outbound_failure(self, msg: OutboundMessage, error: Exception) -> None:
+        """Emit runtime telemetry and retry bounded channel delivery failures."""
+        metadata = dict(msg.metadata or {})
+        attempt = max(1, int(metadata.get("_delivery_attempt", 1)))
+        self._emit_channel_failure(msg, error, attempt)
+
+        max_attempts = max(1, int(self.config.get("delivery_retries", 2)) + 1)
+        if attempt >= max_attempts or not self._running:
+            return
+
+        retry_metadata = dict(metadata)
+        retry_metadata["_delivery_attempt"] = attempt + 1
+        backoff = max(0.0, float(self.config.get("delivery_retry_backoff_seconds", 0.5)))
+        if backoff > 0:
+            await asyncio.sleep(backoff * attempt)
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=msg.content,
+                metadata=retry_metadata,
+            )
+        )
+        logger.warning(
+            f"Re-queued outbound message for {self.name} {msg.chat_id} "
+            f"(delivery attempt {attempt + 1}/{max_attempts})"
+        )
+
+    def _emit_channel_failure(self, msg: OutboundMessage, error: Exception, attempt: int) -> None:
+        """Persist channel delivery failure telemetry when runtime context is available."""
+        if self.agent is None:
+            return
+        runtime_config = getattr(self.agent, "runtime_config", None)
+        event_store = getattr(self.agent, "_event_store", None)
+        if runtime_config is None or event_store is None or not runtime_config.replay.enabled:
+            return
+
+        metadata = dict(msg.metadata or {})
+        session_id = str(metadata.get("_session_id") or "").strip()
+        run_id = str(metadata.get("_run_id") or "").strip()
+        if not session_id or not run_id:
+            return
+
+        failure = classify_error_text(str(error))
+        event_store.append(
+            RuntimeEvent(
+                event_type=EVENT_CHANNEL_FAILED,
+                run_id=run_id,
+                session_id=session_id,
+                payload={
+                    "channel": msg.channel,
+                    "chat_id": msg.chat_id,
+                    "attempt": attempt,
+                    "error": str(error),
+                    **to_payload(failure),
+                },
+            )
+        )
