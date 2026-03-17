@@ -7,9 +7,10 @@ import hashlib
 import json
 import os
 import re
+import warnings
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from clawlet.context.models import IndexedFile
 
@@ -39,15 +40,18 @@ SUPPORTED_EXTENSIONS = {
 IGNORE_DIR_NAMES = {
     ".git",
     ".runtime",
+    ".skills",
     "node_modules",
     "__pycache__",
     ".venv",
     "venv",
     "dist",
     "build",
+    "memory",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    "skills",
 }
 
 MAX_FILE_SIZE = 300_000
@@ -64,11 +68,12 @@ _PY_ASSIGN_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]{2,})\s*=", re.MULTILINE)
 class RepositoryIndexer:
     """Builds and persists an incremental file/symbol index."""
 
-    def __init__(self, workspace: Path, cache_dir: Path):
+    def __init__(self, workspace: Path, cache_dir: Path, roots: Iterable[Path] | None = None):
         self.workspace = workspace
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.cache_dir / "context_index.json"
+        self.roots = [Path(root) for root in (roots or [workspace])]
 
     def build_index(self) -> tuple[str, dict[str, IndexedFile]]:
         """Build or refresh the repository index and return repo hash + files."""
@@ -120,19 +125,40 @@ class RepositoryIndexer:
         return repo_hash, indexed
 
     def _iter_candidate_files(self):
-        for root, dirs, files in os.walk(self.workspace):
-            dirs[:] = [name for name in dirs if name not in IGNORE_DIR_NAMES]
-            root_path = Path(root)
-            for name in files:
-                path = root_path / name
-                if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                    continue
-                try:
-                    if path.stat().st_size > MAX_FILE_SIZE:
+        seen: set[Path] = set()
+        for candidate_root in self.roots:
+            root = candidate_root.expanduser()
+            if not root.is_absolute():
+                root = self.workspace / root
+            if not root.exists():
+                continue
+            if root.is_file():
+                if self._is_supported_file(root) and root not in seen:
+                    seen.add(root)
+                    yield root
+                continue
+            for walked_root, dirs, files in os.walk(root):
+                dirs[:] = [name for name in dirs if name not in IGNORE_DIR_NAMES]
+                root_path = Path(walked_root)
+                for name in files:
+                    path = root_path / name
+                    if not self._is_supported_file(path):
                         continue
-                except OSError:
-                    continue
-                yield path
+                    if path in seen:
+                        continue
+                    seen.add(path)
+                    yield path
+
+    @staticmethod
+    def _is_supported_file(path: Path) -> bool:
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            return False
+        try:
+            if path.stat().st_size > MAX_FILE_SIZE:
+                return False
+        except OSError:
+            return False
+        return True
 
     def _extract_symbols(self, suffix: str, text: str) -> list[str]:
         if not text:
@@ -158,7 +184,9 @@ class RepositoryIndexer:
     def _extract_python_symbols_ast(self, text: str) -> list[str]:
         """Extract Python symbols using AST for higher-quality indexing."""
         try:
-            tree = ast.parse(text)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(text)
         except SyntaxError:
             return []
 

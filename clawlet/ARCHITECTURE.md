@@ -57,7 +57,8 @@ Simple async queue for decoupling channels from the agent.
 - `publish_inbound(msg)` – called by channels
 - `consume_inbound()` – awaited by AgentLoop
 - `publish_outbound(msg)` – called by agent
-- `consume_outbound()` – used by channels to send replies
+- `consume_outbound_for(channel)` – used by channels to send replies without stealing each other's messages
+- `consume_outbound()` – generic drain API kept for diagnostics/tests; do not use it from competing live channels
 
 **Why queues?** Allows channels to run independently and buffer messages if the agent is busy.
 

@@ -30,12 +30,12 @@ def run_replay_command(
     from clawlet.runtime import (
         RecoveryManager,
         RuntimeEventStore,
+        build_runtime_services,
         build_reliability_report,
         reexecute_run,
         replay_run,
         verify_resume_equivalence,
     )
-    from clawlet.tools import create_default_tool_registry
 
     replay_dir = resolve_replay_dir(workspace_path)
     store = RuntimeEventStore(replay_dir / "events.jsonl")
@@ -110,7 +110,7 @@ def run_replay_command(
             cfg = load_runtime_config(workspace_path)
         except Exception:
             cfg = None
-        registry = create_default_tool_registry(allowed_dir=str(workspace_path), config=cfg)
+        registry = build_runtime_services(workspace_path, cfg).tools
         rex = reexecute_run(
             store=store,
             run_id=run_id,

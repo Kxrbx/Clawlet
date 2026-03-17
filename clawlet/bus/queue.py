@@ -4,6 +4,7 @@ Message bus for handling inbound and outbound messages.
 
 import asyncio
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 from collections import defaultdict, deque
@@ -368,8 +369,12 @@ class MessageBus:
                                         If False (default), log warning but allow message.
         """
         self._inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=max_size)
-        self._outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=max_size)
+        self._outbound: deque[OutboundMessage] = deque()
+        self._outbound_by_channel: dict[str, deque[OutboundMessage]] = defaultdict(deque)
+        self._outbound_available = asyncio.Condition()
         self._running = False
+        self._max_size = max_size
+        self._warned_generic_outbound_consumer = False
         
         # Initialize outbound rate limiter
         self._outbound_rate_limiter: Optional[OutboundRateLimiter] = None
@@ -428,7 +433,12 @@ class MessageBus:
                     )
                     # Still allow the message in non-strict mode
         
-        await self._outbound.put(msg)
+        async with self._outbound_available:
+            if len(self._outbound) >= self._max_size:
+                raise asyncio.QueueFull("Outbound queue is full")
+            self._outbound.append(msg)
+            self._outbound_by_channel[msg.channel].append(msg)
+            self._outbound_available.notify_all()
         logger.debug(f"Published outbound message to {msg.channel}/{msg.chat_id}")
         return True
     
@@ -438,7 +448,37 @@ class MessageBus:
     
     async def consume_outbound(self) -> OutboundMessage:
         """Consume the next outbound message."""
-        return await self._outbound.get()
+        if not self._warned_generic_outbound_consumer:
+            logger.warning(
+                "consume_outbound() is deprecated for live multi-channel routing; "
+                "use consume_outbound_for(channel) instead"
+            )
+            self._warned_generic_outbound_consumer = True
+        async with self._outbound_available:
+            while not self._outbound:
+                await self._outbound_available.wait()
+            msg = self._outbound.popleft()
+            channel_queue = self._outbound_by_channel.get(msg.channel)
+            if channel_queue:
+                with suppress(IndexError):
+                    channel_queue.popleft()
+                if not channel_queue:
+                    self._outbound_by_channel.pop(msg.channel, None)
+            return msg
+
+    async def consume_outbound_for(self, channel: str) -> OutboundMessage:
+        """Consume the next outbound message for a specific channel."""
+        async with self._outbound_available:
+            while not self._outbound_by_channel.get(channel):
+                await self._outbound_available.wait()
+            msg = self._outbound_by_channel[channel].popleft()
+            if not self._outbound_by_channel[channel]:
+                self._outbound_by_channel.pop(channel, None)
+            try:
+                self._outbound.remove(msg)
+            except ValueError:
+                logger.warning(f"Outbound queue desynchronized for channel {channel}")
+            return msg
     
     @property
     def inbound_size(self) -> int:
@@ -448,4 +488,4 @@ class MessageBus:
     @property
     def outbound_size(self) -> int:
         """Get number of pending outbound messages."""
-        return self._outbound.qsize()
+        return len(self._outbound)

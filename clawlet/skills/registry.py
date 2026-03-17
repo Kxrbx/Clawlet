@@ -3,18 +3,24 @@ Skill registry for managing and discovering skills.
 
 Skills are loaded from multiple directories in order of priority:
 1. Bundled skills (clawlet/skills/bundled/)
-2. User skills (~/.clawlet/skills/)
-3. Workspace skills (./skills/)
+2. Installed validated skills (<workspace>/.skills/installed/)
+3. Legacy workspace skills (./skills/) for compatibility only
 """
 
+import asyncio
+import threading
+from queue import Queue
 from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
 
+from clawlet.cli.runtime_paths import get_default_workspace_path
 from clawlet.skills.base import BaseSkill, ToolDefinition
+from clawlet.skills.installer import SkillInstallerService
 from clawlet.skills.loader import SkillLoader, discover_skills
 from clawlet.tools.registry import ToolRegistry, ToolResult
+from clawlet.workspace_layout import get_workspace_layout
 
 
 class SkillRegistry:
@@ -31,19 +37,22 @@ class SkillRegistry:
     
     def __init__(
         self,
-        tool_registry: Optional[ToolRegistry] = None,
         config: Optional[dict[str, Any]] = None,
+        workspace: Optional[Path] = None,
     ):
         """
         Initialize the skill registry.
         
         Args:
-            tool_registry: Optional ToolRegistry to register skill tools with
             config: Optional configuration for skills
         """
         self._skills: dict[str, BaseSkill] = {}
-        self._tool_registry = tool_registry
         self._config = config or {}
+        self._workspace = (
+            workspace.expanduser().resolve()
+            if workspace is not None
+            else get_default_workspace_path()
+        )
         self._disabled_skills: set[str] = set()
         self._skill_directories: list[Path] = []
         
@@ -128,7 +137,7 @@ class SkillRegistry:
         self._skills[skill.name] = skill
         logger.info(f"Registered skill: {skill.name}")
 
-    def install_skill(self, github_url: str) -> tuple[bool, str]:
+    async def install_skill_async(self, github_url: str) -> tuple[bool, str]:
         """
         Install a skill from a GitHub URL.
         
@@ -138,60 +147,43 @@ class SkillRegistry:
         Returns:
             Tuple of (success, message)
         """
-        import re
-        import shutil
-        import subprocess
-        
-        # Parse GitHub URL to extract owner/repo
-        match = re.match(r'https://github\.com/([^/]+)/([^/]+)', github_url)
-        if not match:
-            # Try git@github.com format
-            match = re.match(r'git@github\.com:([^/]+)/([^/]+)', github_url)
-        
-        if not match:
-            return False, f"Invalid GitHub URL format: {github_url}"
-        
-        owner, repo = match.groups()
-        # Remove .git suffix if present
-        repo = repo.replace('.git', '')
-        
-        # Determine target directory
-        user_skills_dir = Path.home() / ".clawlet" / "skills"
-        target_dir = user_skills_dir / repo
-        
-        if target_dir.exists():
-            return True, f"Skill '{repo}' already installed at {target_dir}"
-        
-        # Create skills directory if needed
-        user_skills_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Clone the repository
-        try:
-            logger.info(f"Cloning {github_url} to {target_dir}")
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", github_url, str(target_dir)],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"Git clone failed: {result.stderr}")
-                return False, f"Failed to clone repository: {result.stderr}"
-            
-            # Load the skill from the new directory
-            loaded = self.add_skill_directory(target_dir)
-            
-            if loaded > 0:
-                return True, f"Successfully installed skill '{repo}' from {github_url}"
+        layout = get_workspace_layout(self._workspace)
+        installer = SkillInstallerService(layout)
+        result = await installer.install_from_github(github_url)
+        if not result.success:
+            return False, result.message
+
+        installed_path = Path(result.path or "")
+        if installed_path.exists():
+            skill = SkillLoader.load_from_directory(installed_path)
+            if skill is not None:
+                self.register(skill)
             else:
-                return True, f"Cloned {repo} but no SKILL.md found. Manual registration required."
-                
-        except subprocess.TimeoutExpired:
-            return False, "Git clone timed out"
-        except Exception as e:
-            logger.error(f"Failed to install skill: {e}")
-            return False, str(e)
+                self.add_skill_directory(installed_path)
+        return True, result.message
+
+    def install_skill(self, github_url: str) -> tuple[bool, str]:
+        """Synchronous compatibility wrapper for skill installation."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.install_skill_async(github_url))
+
+        result_queue: Queue[tuple[bool, str] | BaseException] = Queue(maxsize=1)
+
+        def _runner() -> None:
+            try:
+                result_queue.put(asyncio.run(self.install_skill_async(github_url)))
+            except BaseException as exc:
+                result_queue.put(exc)
+
+        thread = threading.Thread(target=_runner, name="skill-install-sync", daemon=True)
+        thread.start()
+        thread.join()
+        result = result_queue.get()
+        if isinstance(result, BaseException):
+            raise result
+        return result
     
     def unregister(self, name: str) -> None:
         """
@@ -323,7 +315,7 @@ class SkillRegistry:
             tools.extend(skill.to_openai_tools())
         return tools
     
-    def register_tools_with_registry(self) -> int:
+    def register_tools_with_registry(self, tool_registry: ToolRegistry) -> int:
         """
         Register all skill tools with the ToolRegistry.
         
@@ -332,10 +324,6 @@ class SkillRegistry:
         Returns:
             Number of tools registered
         """
-        if not self._tool_registry:
-            logger.warning("No ToolRegistry set, cannot register tools")
-            return 0
-        
         registered = 0
         
         for skill in self.enabled_skills():
@@ -388,7 +376,7 @@ class SkillRegistry:
                         return schema
                 
                 tool_instance = SkillTool(skill, tool, namespaced_name)
-                self._tool_registry.register(tool_instance)
+                tool_registry.register(tool_instance)
                 registered += 1
                 logger.debug(f"Registered tool: {namespaced_name}")
         

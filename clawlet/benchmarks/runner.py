@@ -11,7 +11,7 @@ from clawlet.config import BenchmarkGatesSettings
 from clawlet.benchmarks.async_utils import run_async as _run_async
 from clawlet.benchmarks.determinism import run_determinism_trials
 from clawlet.benchmarks.stats_utils import percentile
-from clawlet.tools import create_default_tool_registry
+from clawlet.runtime import build_runtime_services
 
 
 @dataclass(slots=True)
@@ -36,7 +36,7 @@ class BenchmarkSummary:
 
 def run_local_runtime_benchmark(workspace: Path, iterations: int = 25) -> BenchmarkSummary:
     """Run a deterministic local benchmark over a coding-task micro-suite."""
-    registry = create_default_tool_registry(allowed_dir=str(workspace))
+    registry = build_runtime_services(workspace).tools
     list_tool = registry.get("list_dir")
     read_tool = registry.get("read_file")
     edit_tool = registry.get("edit_file")
@@ -112,5 +112,4 @@ def write_report(path: Path, summary: BenchmarkSummary, failures: list[str]) -> 
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-
 

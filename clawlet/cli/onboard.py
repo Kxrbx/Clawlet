@@ -20,6 +20,7 @@ from questionary import Style
 
 from loguru import logger
 
+from clawlet.cli.runtime_paths import get_default_workspace_path
 from clawlet.config import Config, ProviderConfig, OpenRouterConfig, OllamaConfig, LMStudioConfig, OpenAIConfig, AnthropicConfig, MiniMaxConfig, MoonshotConfig, GoogleConfig, QwenConfig, ZAIConfig, CopilotConfig, VercelConfig, OpenCodeZenConfig, XiaomiConfig, SyntheticConfig, VeniceAIConfig, BraveSearchConfig, AgentSettings
 
 
@@ -407,7 +408,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     """
     Run interactive onboarding flow with unique UI.
     """
-    workspace = workspace or Path.home() / ".clawlet"
+    workspace = workspace or get_default_workspace_path()
     
     steps = [
         "Provider",

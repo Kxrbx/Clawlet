@@ -123,11 +123,11 @@ def load_corpus_benchmark_report(path: Path) -> CorpusBenchmarkReport:
 
 def run_matched_corpus(workspace: Path, iterations: int = 10) -> CorpusBenchmarkReport:
     """Run the standard coding-agent scenario corpus."""
-    from clawlet.tools import create_default_tool_registry
+    from clawlet.runtime import build_runtime_services
 
     iterations = max(1, int(iterations))
     workspace = workspace.resolve()
-    registry = create_default_tool_registry(allowed_dir=str(workspace))
+    registry = build_runtime_services(workspace).tools
 
     required_tools = ["list_dir", "read_file", "write_file", "edit_file", "apply_patch", "shell"]
     missing = [name for name in required_tools if registry.get(name) is None]

@@ -255,6 +255,7 @@ class DeterministicToolRuntime:
         use_remote = envelope.execution_target == "remote" and self.remote_executor is not None
         tool = self.registry.get(envelope.tool_name)
         exec_args = dict(args)
+        exec_args["_workspace_path"] = envelope.workspace_path
         # Inject runtime context only for Plugin SDK tools.
         if tool is not None:
             try:

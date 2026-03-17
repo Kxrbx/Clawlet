@@ -19,6 +19,14 @@ class HttpRequestTool(BaseTool):
     """Execute HTTP requests without fragile shell quoting."""
 
     USER_AGENT = "Clawlet/1.0 (+https://github.com/Kxrbx/Clawlet)"
+    BUILTIN_AUTH_PROFILES = {
+        "moltbook": {
+            "bearer_token_path": "~/.config/moltbook/credentials.json",
+            "env_var": "MOLTBOOK_API_KEY",
+            "header_name": "Authorization",
+            "header_prefix": "Bearer ",
+        }
+    }
     AUTH_PLACEHOLDER_PATTERNS = (
         r"\bYOUR_[A-Z0-9_]+\b",
         r"\bVOTRE_[A-Z0-9_]+\b",
@@ -180,8 +188,7 @@ class HttpRequestTool(BaseTool):
         )
 
     def _apply_local_auth(self, url: str, headers: dict[str, str], auth_profile: Optional[str] = None) -> dict[str, str]:
-        _ = url
-        profile = (auth_profile or "").strip()
+        profile = (auth_profile or "").strip() or self._infer_auth_profile(url)
         if not profile:
             return headers
 
@@ -200,6 +207,8 @@ class HttpRequestTool(BaseTool):
     def _load_auth_header(self, profile: str) -> tuple[str, str]:
         settings = dict(self.auth_profiles.get(profile) or {})
         if not settings:
+            settings = dict(self.BUILTIN_AUTH_PROFILES.get(profile) or {})
+        if not settings:
             return "", ""
 
         header_name = str(settings.get("header_name") or "Authorization").strip() or "Authorization"
@@ -217,11 +226,9 @@ class HttpRequestTool(BaseTool):
         if not token_path:
             return "", ""
 
-        path = Path(token_path).expanduser()
-        if not path.is_absolute():
-            if not self.workspace:
-                return "", ""
-            path = self.workspace / token_path
+        path = self._resolve_token_path(token_path)
+        if path is None:
+            return "", ""
 
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -234,6 +241,35 @@ class HttpRequestTool(BaseTool):
                 token = value.strip()
                 return header_name, f"{header_prefix}{token}" if header_prefix else token
         return "", ""
+
+    def _resolve_token_path(self, token_path: str) -> Optional[Path]:
+        candidate = Path(token_path)
+        if candidate.is_absolute():
+            path = candidate.expanduser()
+            return path if path.exists() else None
+
+        if self.workspace:
+            workspace_root = self.workspace.expanduser().resolve()
+            relative = token_path.lstrip("~/")
+            candidates = [
+                workspace_root / relative,
+                workspace_root / "workspace" / relative,
+            ]
+            for path in candidates:
+                if path.exists():
+                    return path
+
+        expanded = candidate.expanduser()
+        if expanded.exists():
+            return expanded
+        return None
+
+    @staticmethod
+    def _infer_auth_profile(url: str) -> str:
+        host = (urlparse(url).netloc or "").lower()
+        if host in {"moltbook.com", "www.moltbook.com"}:
+            return "moltbook"
+        return ""
 
     @classmethod
     def _looks_like_placeholder(cls, value: str) -> bool:

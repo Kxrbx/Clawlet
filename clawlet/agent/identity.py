@@ -10,6 +10,7 @@ from typing import Optional
 from loguru import logger
 
 from clawlet.agent.memory import MemoryManager
+from clawlet.workspace_layout import get_workspace_layout
 
 
 @dataclass
@@ -63,7 +64,7 @@ You are {self.agent_name}, an AI assistant.
 
 Your workspace is located at: {workspace_path}
 - You can read, write, and list files within this directory using the available tools
-- Use the `workspace/` subdirectory for building and creating things
+- Treat this workspace root as the canonical project area unless a task explicitly targets a subdirectory
 - The `memory/` subdirectory stores your long-term memories
 """
         
@@ -111,6 +112,7 @@ class IdentityLoader:
     
     def __init__(self, workspace: Path):
         self.workspace = workspace
+        self.layout = get_workspace_layout(workspace)
         self._identity: Optional[Identity] = None
         
     def load_all(self) -> Identity:
@@ -119,7 +121,7 @@ class IdentityLoader:
         
         
         # Load SOUL.md
-        soul_path = self.workspace / "SOUL.md"
+        soul_path = self.layout.soul_path
         if soul_path.exists():
             identity.soul = soul_path.read_text(encoding="utf-8")
             identity.agent_name = self._extract_name(identity.soul, "Clawlet")
@@ -128,7 +130,7 @@ class IdentityLoader:
             logger.warning(f"SOUL.md not found at {soul_path}")
         
         # Load USER.md
-        user_path = self.workspace / "USER.md"
+        user_path = self.layout.user_path
         if user_path.exists():
             identity.user = self._sanitize_user_content(user_path.read_text(encoding="utf-8"))
             identity.user_name = self._extract_name(identity.user, "Human")
@@ -138,7 +140,7 @@ class IdentityLoader:
             logger.warning(f"USER.md not found at {user_path}")
         
         # Load MEMORY.md
-        memory_path = self.workspace / "MEMORY.md"
+        memory_path = self.layout.memory_markdown_path
         if memory_path.exists():
             identity.memory = MemoryManager(self.workspace).get_identity_memory()
             logger.info("Loaded MEMORY.md")
@@ -146,7 +148,7 @@ class IdentityLoader:
             logger.warning(f"MEMORY.md not found at {memory_path}")
         
         # Load HEARTBEAT.md
-        heartbeat_path = self.workspace / "HEARTBEAT.md"
+        heartbeat_path = self.layout.heartbeat_path
         if heartbeat_path.exists():
             identity.heartbeat = heartbeat_path.read_text(encoding="utf-8")
             logger.info("Loaded HEARTBEAT.md")

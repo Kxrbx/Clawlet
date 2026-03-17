@@ -86,7 +86,7 @@ class HeartbeatRunner:
         logger.info(
             f"Heartbeat runner started (every={self.interval_minutes}m, target={self.target})"
         )
-        next_run = datetime.now(UTC)
+        next_run = self._compute_initial_next_run(datetime.now(UTC))
 
         while self._running:
             now = datetime.now(UTC)
@@ -99,6 +99,17 @@ class HeartbeatRunner:
 
             # Keep stop latency low even for long intervals.
             await asyncio.sleep(1.0)
+
+    def _compute_initial_next_run(self, now: datetime) -> datetime:
+        """Resume cadence from persisted state instead of forcing an immediate boot tick."""
+        state = self.heartbeat_state.load()
+        last_tick = self._parse_state_dt(state.get("last_tick_at", ""))
+        if last_tick is None:
+            return now + timedelta(minutes=self.interval_minutes)
+        next_due = last_tick + timedelta(minutes=self.interval_minutes)
+        if next_due <= now:
+            return now + timedelta(minutes=self.interval_minutes)
+        return next_due
 
     def stop(self) -> None:
         """Stop the heartbeat loop."""
@@ -224,6 +235,19 @@ class HeartbeatRunner:
         if start < end:
             return start <= hour < end
         return hour >= start or hour < end
+
+    @staticmethod
+    def _parse_state_dt(value: str) -> Optional[datetime]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
 
     def _get_heartbeat_context(self) -> str:
         if self.heartbeat_context_provider is not None:

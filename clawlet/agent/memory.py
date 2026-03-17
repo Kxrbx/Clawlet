@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 from loguru import logger
+from clawlet.workspace_layout import get_workspace_layout
 
 
 AUTOGEN_START = "<!-- CLAWLET_MEMORY_AUTOGEN_START -->"
@@ -651,7 +652,7 @@ class MemoryManager:
 
     @property
     def daily_notes_dir(self) -> Path:
-        return self.workspace / "memory"
+        return get_workspace_layout(self.workspace).memory_dir
 
     def append_note(self, text: str, category: str = "notes", source: str = "manual") -> None:
         """Append an unstructured episodic note to today's daily memory file."""

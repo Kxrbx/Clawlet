@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import (
     Application,
@@ -30,22 +30,17 @@ except ImportError:  # pragma: no cover - depends on python-telegram-bot build
     MenuButtonCommands = None
 
 from clawlet.bus.queue import InboundMessage, MessageBus, OutboundMessage
+from clawlet.channels.telegram_actions import dispatch_text_menu_action
+from clawlet.channels.telegram_callbacks import dispatch_callback_query
 from clawlet.channels.base import BaseChannel
+from clawlet.channels.telegram_menu import resolve_text_menu_action
+from clawlet.channels.telegram_ui import build_inline_keyboard, default_reply_keyboard, main_menu_markup, settings_menu_markup
+from clawlet.cli.runtime_paths import get_default_workspace_path
 
 
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_SAFE_HTML_CHUNK = 3500
 STREAM_MODES = {"off", "progress", "verbose_debug"}
-TEXT_MENU_ACTIONS = {
-    "status": "status",
-    "settings": "settings",
-    "memory": "memory",
-    "heartbeat": "heartbeat",
-    "approve": "approve",
-    "cancel": "cancel",
-    "new conversation": "new",
-    "stop updates": "stop",
-}
 
 
 def convert_markdown_to_html(text: str) -> str:
@@ -399,75 +394,10 @@ class TelegramChannel(BaseChannel):
             return
         await query.answer()
 
-        chat_id = str(query.message.chat.id)
         data = (query.data or "").strip()
-
-        if data == "menu:main":
-            await self._edit_callback_message(query, self._render_help_card(), self._main_menu_markup())
-            return
-        if data == "menu:settings":
-            await self._edit_callback_message(query, self._render_settings_card(chat_id), self._settings_menu_markup(chat_id))
-            return
-        if data == "action:status":
-            await self._edit_callback_message(query, self._render_status_card(chat_id), self._main_menu_markup())
-            return
-        if data == "action:new":
-            if self.agent:
-                await self.agent.clear_conversation(self.name, chat_id)
-            await self._edit_callback_message(query, "Conversation reset for this chat.", self._main_menu_markup())
-            return
-        if data == "action:memory":
-            await self._publish_agent_text(
-                chat_id=chat_id,
-                user_id=str(update.effective_user.id),
-                user_name=update.effective_user.first_name,
-                content="Summarize the current memory and relevant context for this conversation.",
-                metadata={"telegram_callback": data},
-            )
-            return
-        if data == "action:heartbeat":
-            await self._edit_callback_message(query, self._render_heartbeat_card(chat_id), self._main_menu_markup())
-            return
-        if data.startswith("settings:stream_mode:"):
-            mode = self._normalize_stream_mode(data.rsplit(":", 1)[-1])
-            state = self._ensure_chat_state(chat_id)
-            state["stream_mode"] = mode
-            self._save_ui_state()
-            await self._edit_callback_message(query, self._render_settings_card(chat_id), self._settings_menu_markup(chat_id))
-            return
-        if data.startswith("approval:approve:"):
-            token = data.rsplit(":", 1)[-1]
-            await self._publish_agent_text(
-                chat_id=chat_id,
-                user_id=str(update.effective_user.id),
-                user_name=update.effective_user.first_name,
-                content=f"confirm {token}",
-                metadata={"telegram_callback": data, "approval_token": token},
-            )
-            self._forget_pending_approval(chat_id, token)
-            await self._edit_callback_message(query, "Approval sent. Waiting for the agent to continue.", None)
-            return
-        if data.startswith("approval:reject:"):
-            await self._publish_agent_text(
-                chat_id=chat_id,
-                user_id=str(update.effective_user.id),
-                user_name=update.effective_user.first_name,
-                content="cancel",
-                metadata={"telegram_callback": data},
-            )
-            self._forget_pending_approval(chat_id)
-            await self._edit_callback_message(query, "Pending action rejected.", None)
-            return
-        if data.startswith("approval:details:"):
-            token = data.rsplit(":", 1)[-1]
-            details = self._pending_approval_details(chat_id, token)
-            if details:
-                await query.answer(details[:180], show_alert=True)
-            else:
-                await query.answer("Approval details are no longer available.", show_alert=True)
-            return
-
-        await query.answer("Unsupported action.", show_alert=False)
+        handled = await dispatch_callback_query(self, update, query, data)
+        if not handled:
+            await query.answer("Unsupported action.", show_alert=False)
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
@@ -492,37 +422,10 @@ class TelegramChannel(BaseChannel):
             raise
 
     async def _maybe_handle_text_menu_action(self, update: Update, content: str) -> bool:
-        action = TEXT_MENU_ACTIONS.get(content.strip().lower())
+        action = resolve_text_menu_action(content)
         if not action:
             return False
-
-        synthetic_update = update
-        context = type("_Context", (), {"args": []})()
-        if action == "status":
-            await self._handle_status(synthetic_update, context)
-            return True
-        if action == "settings":
-            await self._handle_settings(synthetic_update, context)
-            return True
-        if action == "memory":
-            await self._handle_memory(synthetic_update, context)
-            return True
-        if action == "heartbeat":
-            await self._handle_heartbeat(synthetic_update, context)
-            return True
-        if action == "approve":
-            await self._handle_approve(synthetic_update, context)
-            return True
-        if action == "cancel":
-            await self._handle_cancel(synthetic_update, context)
-            return True
-        if action == "new":
-            await self._handle_new(synthetic_update, context)
-            return True
-        if action == "stop":
-            await self._handle_stop(synthetic_update, context)
-            return True
-        return False
+        return await dispatch_text_menu_action(self, update, action)
 
     async def _publish_agent_text(
         self,
@@ -825,74 +728,17 @@ class TelegramChannel(BaseChannel):
         return f"{start:02d}:00-{end:02d}:00 UTC"
 
     def _default_reply_keyboard(self) -> ReplyKeyboardMarkup:
-        return ReplyKeyboardMarkup(
-            [
-                ["Status", "Settings"],
-                ["Memory", "Heartbeat"],
-                ["Approve", "Cancel"],
-                ["New conversation", "Stop updates"],
-            ],
-            resize_keyboard=True,
-        )
+        return default_reply_keyboard()
 
     def _main_menu_markup(self) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("Status", callback_data="action:status"),
-                    InlineKeyboardButton("Settings", callback_data="menu:settings"),
-                ],
-                [
-                    InlineKeyboardButton("Memory", callback_data="action:memory"),
-                    InlineKeyboardButton("Heartbeat", callback_data="action:heartbeat"),
-                ],
-                [
-                    InlineKeyboardButton("New conversation", callback_data="action:new"),
-                ],
-            ]
-        )
+        return main_menu_markup()
 
     def _settings_menu_markup(self, chat_id: str) -> InlineKeyboardMarkup:
         current = self._ensure_chat_state(chat_id).get("stream_mode", self._stream_mode_default)
-
-        def _label(mode: str) -> str:
-            return f"{'• ' if current == mode else ''}{mode}"
-
-        return InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(_label("off"), callback_data="settings:stream_mode:off"),
-                    InlineKeyboardButton(_label("progress"), callback_data="settings:stream_mode:progress"),
-                    InlineKeyboardButton(
-                        _label("verbose_debug"),
-                        callback_data="settings:stream_mode:verbose_debug",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton("Back", callback_data="menu:main"),
-                ],
-            ]
-        )
+        return settings_menu_markup(current)
 
     def _build_inline_keyboard(self, button_rows: Any) -> Optional[InlineKeyboardMarkup]:
-        if not button_rows:
-            return None
-        rows = []
-        for row in button_rows:
-            buttons = []
-            for button in row:
-                text = str(button.get("text", "") or "").strip()
-                if not text:
-                    continue
-                if button.get("url"):
-                    buttons.append(InlineKeyboardButton(text, url=str(button["url"])))
-                    continue
-                callback_data = str(button.get("callback_data", "") or "").strip()
-                if callback_data:
-                    buttons.append(InlineKeyboardButton(text, callback_data=callback_data))
-            if buttons:
-                rows.append(buttons)
-        return InlineKeyboardMarkup(rows) if rows else None
+        return build_inline_keyboard(button_rows)
 
     def _chunk_text(self, text: str) -> list[str]:
         if not text:
@@ -916,7 +762,7 @@ class TelegramChannel(BaseChannel):
     def _resolve_ui_state_path(self) -> Path:
         if self.agent is not None and getattr(self.agent, "workspace", None) is not None:
             return Path(self.agent.workspace) / ".telegram_ui_state.json"
-        return Path.home() / ".clawlet" / "telegram_ui_state.json"
+        return get_default_workspace_path() / ".telegram_ui_state.json"
 
     def _load_ui_state(self) -> dict[str, dict[str, Any]]:
         try:

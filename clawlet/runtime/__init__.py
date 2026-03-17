@@ -46,6 +46,8 @@ __all__ = [
     "RemoteToolExecutor",
     "ToolCallEnvelope",
     "ToolExecutionMetadata",
+    "RuntimeServices",
+    "build_runtime_services",
 ]
 
 _LAZY_IMPORTS = {
@@ -92,6 +94,8 @@ _LAZY_IMPORTS = {
     "RemoteToolExecutor": ("clawlet.runtime.remote", "RemoteToolExecutor"),
     "ToolCallEnvelope": ("clawlet.runtime.types", "ToolCallEnvelope"),
     "ToolExecutionMetadata": ("clawlet.runtime.types", "ToolExecutionMetadata"),
+    "RuntimeServices": ("clawlet.runtime.assembly", "RuntimeServices"),
+    "build_runtime_services": ("clawlet.runtime.assembly", "build_runtime_services"),
 }
 
 
