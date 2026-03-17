@@ -517,11 +517,11 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.2 Highlights
-- **Telegram Rendering Reliability**: fixed leaked internal placeholder markers so inline code and fenced blocks render correctly in Telegram replies
-- **Cleaner Default CLI**: the bare `clawlet` menu now focuses on the stable command surface instead of showing fragile or low-signal commands
-- **Safer Config Inspection**: `clawlet config` now redacts secrets instead of printing live tokens
-- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.2` tree
+### 0.4.3 Highlights
+- **Telegram Delivery Reliability**: outbound Telegram failures now surface as structured runtime `ChannelFailed` events and get a bounded retry path instead of disappearing into channel-only logs
+- **Memory Tool Runtime Compatibility**: deterministic tool execution no longer breaks narrow-signature memory tools like `recall` by blindly injecting runtime-only kwargs
+- **Better Delivery Diagnostics**: outbound messages now retain run/session context all the way to channel delivery so missing replies are diagnosable from runtime replay
+- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.3` tree
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.

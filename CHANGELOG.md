@@ -2,6 +2,18 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.3] - 2026-03-17
+
+### Fixes
+
+- **Telegram Delivery Failure Telemetry**: Channel delivery failures now propagate into runtime `ChannelFailed` events instead of being swallowed as channel-only logs, and outbound delivery gets a bounded retry path at the channel layer.
+- **Runtime Delivery Context**: Outbound messages now carry run/session metadata through the queue so delivery failures can be tied back to the originating runtime turn.
+- **Memory Tool Runtime Compatibility**: Deterministic tool execution now injects runtime-only kwargs only when a tool signature accepts them, fixing `recall`, `search_memory`, `memory_status`, and similar narrow-signature tools under the current runtime contract.
+
+### Verification
+
+- **Regression Coverage Expanded**: Added unit coverage for channel delivery failure telemetry/retry and for narrow-signature memory tool execution under deterministic runtime injection.
+
 ## [0.4.2] - 2026-03-12
 
 ### Fixes

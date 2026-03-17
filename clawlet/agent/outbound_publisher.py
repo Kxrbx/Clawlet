@@ -22,13 +22,18 @@ class OutboundPublisher:
     event_channel_failed: str
     now_fn: Callable[[], Any]
 
-    async def publish(self, response: Any, *, session_id: str) -> bool:
+    async def publish(self, response: Any, *, session_id: str, run_id: str = "") -> bool:
         if self.response_policy.should_suppress_outbound(response):
             self.logger.info(
                 f"Suppressed low-value heartbeat outbound for {response.channel}/{response.chat_id}"
             )
             self.metrics_factory().inc_heartbeat_acks_suppressed()
             return True
+
+        response.metadata = dict(response.metadata or {})
+        response.metadata.setdefault("_session_id", session_id)
+        if run_id:
+            response.metadata.setdefault("_run_id", run_id)
 
         retries = max(0, int(self.runtime_config.outbound_publish_retries))
         backoff = max(0.0, float(self.runtime_config.outbound_publish_backoff_seconds))

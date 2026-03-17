@@ -172,14 +172,12 @@ class TelegramChannel(BaseChannel):
         """Send a message to Telegram with streaming, chunking, and button support."""
         metadata = msg.metadata or {}
         if not self.app:
-            logger.warning("Telegram app not initialized; dropping outbound message")
-            return
+            raise RuntimeError("Telegram app not initialized")
 
         try:
             chat_id = int(msg.chat_id)
         except (TypeError, ValueError):
-            logger.error(f"Invalid chat_id format: {msg.chat_id}")
-            return
+            raise ValueError(f"Invalid chat_id format: {msg.chat_id}")
 
         try:
             content = (msg.content or "").strip()
@@ -193,8 +191,7 @@ class TelegramChannel(BaseChannel):
                 self._remember_pending_approval(str(chat_id), pending)
 
             if not content:
-                logger.warning("Skipping empty Telegram outbound message")
-                return
+                raise ValueError("Skipping empty Telegram outbound message")
             await self._send_final_message(chat_id, content, metadata, buttons)
         except RetryAfter as e:
             logger.warning(f"Telegram rate-limited for {chat_id}, retrying after {e.retry_after}s")
@@ -202,6 +199,7 @@ class TelegramChannel(BaseChannel):
             await self.send(msg)
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
+            raise
         finally:
             if not metadata.get("progress"):
                 await self._stop_typing(msg.chat_id)
