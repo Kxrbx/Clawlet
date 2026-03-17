@@ -63,16 +63,24 @@ class MessageBuilder:
                 self.logger.debug(f"Context engine unavailable for this turn: {e}")
 
         try:
-            memory_context = self.memory.get_context()
+            memory_context = self.memory.get_context(
+                max_entries=max(6, min(12, self.context_window)),
+                query=query_text,
+            )
             if memory_context:
                 messages.append({"role": "system", "content": memory_context})
         except Exception as e:
             self.logger.debug(f"Memory context unavailable for this turn: {e}")
 
+        recent_history = history[-self.context_window :]
+        summary_message = None
         if history and history[0].role == "system" and history[0].metadata.get("summary") is True:
-            messages.append(history[0].to_dict())
+            summary_message = history[0]
+            messages.append(summary_message.to_dict())
 
-        for msg in history[-self.context_window :]:
+        for msg in recent_history:
+            if summary_message is not None and msg is summary_message:
+                continue
             msg_dict = msg.to_dict()
             if msg.role == "tool" and not msg_dict.get("tool_call_id"):
                 self.logger.warning(

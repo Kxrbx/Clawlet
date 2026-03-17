@@ -520,23 +520,20 @@ class MemoryManager:
         """Clear all working memory."""
         self._working.clear()
     
-    def get_context(self, max_entries: int = 20) -> str:
+    def get_context(self, max_entries: int = 20, query: str = "") -> str:
         """
         Build context string from memories.
         
         Args:
             max_entries: Maximum entries to include
+            query: Optional query hint to prioritize relevant memories
             
         Returns:
             Formatted context string
         """
-        all_memories = [
-            m
-            for m in self._all_entries()
-            if m.key != "__file__" and not self._is_low_value_memory(m.value)
-        ]
-        all_memories.sort(key=lambda e: e.importance, reverse=True)
-        top_memories = all_memories[:max_entries]
+        max_entries = max(1, min(int(max_entries or 1), 50))
+        query = (query or "").strip()
+        top_memories = self._context_entries(max_entries=max_entries, query=query)
         if not top_memories:
             return ""
         
@@ -546,6 +543,47 @@ class MemoryManager:
             lines.append(f"- [{entry.category}] {entry.key}: {entry.value[:100]}...")
         
         return "\n".join(lines)
+
+    def _context_entries(self, max_entries: int, query: str = "") -> list[MemoryEntry]:
+        """Select prompt memory with a relevance-first path and recent/high-signal fallback."""
+        query = (query or "").strip()
+        selected: list[MemoryEntry] = []
+        seen: set[str] = set()
+
+        def add(entry: MemoryEntry) -> None:
+            if entry.key == "__file__":
+                return
+            if entry.key in seen:
+                return
+            if self._is_low_value_memory(entry.value):
+                return
+            selected.append(entry)
+            seen.add(entry.key)
+
+        if query:
+            for entry in self.search(query=query, limit=max_entries):
+                add(entry)
+                if len(selected) >= max_entries:
+                    return selected
+
+            recent_limit = max(3, min(max_entries, max_entries // 2 + 2))
+            for entry in self.recent(limit=recent_limit):
+                if int(entry.importance or 0) >= 7:
+                    add(entry)
+                if len(selected) >= max_entries:
+                    return selected
+
+        all_memories = [
+            memory
+            for memory in self._all_entries()
+            if memory.key != "__file__" and not self._is_low_value_memory(memory.value)
+        ]
+        all_memories.sort(key=lambda entry: (entry.importance, entry.updated_at), reverse=True)
+        for entry in all_memories:
+            add(entry)
+            if len(selected) >= max_entries:
+                break
+        return selected
 
     def get_identity_memory(self) -> str:
         """Return only the manual identity memory section, excluding auto-generated memories."""

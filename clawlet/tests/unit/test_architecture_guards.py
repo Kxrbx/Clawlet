@@ -212,8 +212,12 @@ def test_message_builder_adds_context_and_skips_invalid_tool_messages():
             return f"context:{query}"
 
     class _Memory:
-        def get_context(self):
-            return "memory:ctx"
+        def __init__(self):
+            self.calls = []
+
+        def get_context(self, max_entries, query):
+            self.calls.append((max_entries, query))
+            return f"memory:{query}:{max_entries}"
 
     class _HeartbeatState:
         def build_prompt_summary(self):
@@ -232,12 +236,13 @@ def test_message_builder_adds_context_and_skips_invalid_tool_messages():
                 data["tool_call_id"] = self._tool_call_id
             return data
 
+    memory = _Memory()
     builder = MessageBuilder(
         identity=_Identity(),
         tools=_Tools(),
         workspace=Path("/tmp/ws"),
         context_engine=_ContextEngine(),
-        memory=_Memory(),
+        memory=memory,
         heartbeat_state=_HeartbeatState(),
         context_window=10,
         heartbeat_action_policy="hb:policy",
@@ -255,9 +260,11 @@ def test_message_builder_adds_context_and_skips_invalid_tool_messages():
 
     assert "prompt:/tmp/ws" in contents
     assert "context:hello" in contents
-    assert "memory:ctx" in contents
+    assert "memory:hello:10" in contents
     assert "good tool" in contents
     assert "bad tool" not in contents
+    assert contents.count("summary") == 1
+    assert memory.calls == [(10, "hello")]
 
 
 @pytest.mark.asyncio
@@ -424,6 +431,31 @@ def test_history_trimmer_compresses_overflow_into_summary():
     assert history[0].role == "system"
     assert history[0].metadata.get("summary") is True
     assert "Conversation summary (compressed)" in history[0].content
+
+
+def test_history_trimmer_preserves_prior_summary_across_multiple_trims():
+    class _Msg:
+        def __init__(self, role, content, metadata=None):
+            self.role = role
+            self.content = content
+            self.metadata = metadata or {}
+
+    history = [
+        _Msg("system", "Conversation summary (compressed):\nuser: earliest\nassistant: earliest-reply", metadata={"summary": True}),
+        _Msg("user", "two"),
+        _Msg("assistant", "three"),
+        _Msg("user", "four"),
+        _Msg("assistant", "five"),
+    ]
+    trimmer = HistoryTrimmer(
+        max_history=4,
+        logger=type("L", (), {"debug": lambda *a, **k: None})(),
+    )
+    trimmer.trim(history)
+
+    assert history[0].metadata.get("summary") is True
+    assert "user: earliest" in history[0].content
+    assert "assistant: earliest-reply" in history[0].content
 
 
 def test_recovery_checkpoint_service_saves_and_completes():

@@ -5,12 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from clawlet.agent.loop import AgentLoop
 from clawlet.bus.queue import MessageBus, OutboundMessage
 from clawlet.channels.base import BaseChannel
 from clawlet.runtime.events import EVENT_CHANNEL_FAILED, RuntimeEventStore
 from clawlet.runtime.executor import DeterministicToolRuntime
 from clawlet.runtime.policy import RuntimePolicyEngine
 from clawlet.runtime.types import ToolCallEnvelope
+from clawlet.storage.sqlite import SQLiteStorage
 from clawlet.tools.memory import RecallTool
 from clawlet.tools.registry import ToolRegistry
 
@@ -119,3 +121,38 @@ async def test_deterministic_tool_runtime_does_not_break_narrow_memory_tool_sign
     assert result.success is True
     assert "moltbook_test_key" in result.output
     assert metadata.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_storage_returns_latest_messages_in_chronological_order_with_metadata(tmp_path):
+    storage = SQLiteStorage(tmp_path / "clawlet.db")
+    await storage.initialize()
+
+    for idx in range(4):
+        await storage.store_message(
+            session_id="session-1",
+            role="assistant" if idx % 2 else "user",
+            content=f"message-{idx}",
+            metadata={"summary": idx == 2, "index": idx},
+        )
+
+    messages = await storage.get_messages("session-1", limit=2)
+
+    assert [message.content for message in messages] == ["message-2", "message-3"]
+    assert messages[0].metadata == {"summary": True, "index": 2}
+    assert messages[1].metadata == {"summary": False, "index": 3}
+
+
+def test_agent_loop_skips_transient_assistant_persistence():
+    loop = AgentLoop.__new__(AgentLoop)
+
+    assert loop._is_low_value_persisted_message(
+        "assistant",
+        "I'll use tools now",
+        {"persist": False},
+    )
+    assert not loop._is_low_value_persisted_message(
+        "assistant",
+        "Final answer to the user",
+        {"persist": True},
+    )
