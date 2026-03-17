@@ -3,6 +3,7 @@ Web search tool using Brave Search API.
 """
 
 import asyncio
+import time
 from typing import Optional
 from dataclasses import dataclass
 
@@ -34,6 +35,7 @@ class WebSearchTool(BaseTool):
     MIN_RESULTS = 1
     MAX_RESULTS = 20
     MAX_RETRIES = 2
+    MIN_REQUEST_INTERVAL_SECONDS = 1.0
     
     def __init__(
         self,
@@ -53,6 +55,8 @@ class WebSearchTool(BaseTool):
         self.max_results = max_results
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
+        self._request_lock = asyncio.Lock()
+        self._last_request_started_at = 0.0
         
         if api_key:
             logger.info(f"WebSearchTool initialized with API key (max_results={max_results})")
@@ -131,18 +135,23 @@ class WebSearchTool(BaseTool):
         last_network_error: Optional[Exception] = None
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                response = await self._client.get(
-                    self.API_URL,
-                    headers={
-                        "Accept": "application/json",
-                        "Accept-Encoding": "gzip",
-                        "X-Subscription-Token": self.api_key,
-                    },
-                    params={
-                        "q": query,
-                        "count": resolved_count,
-                    },
-                )
+                async with self._request_lock:
+                    wait_time = self.MIN_REQUEST_INTERVAL_SECONDS - (time.monotonic() - self._last_request_started_at)
+                    if wait_time > 0:
+                        await asyncio.sleep(wait_time)
+                    self._last_request_started_at = time.monotonic()
+                    response = await self._client.get(
+                        self.API_URL,
+                        headers={
+                            "Accept": "application/json",
+                            "Accept-Encoding": "gzip",
+                            "X-Subscription-Token": self.api_key,
+                        },
+                        params={
+                            "q": query,
+                            "count": resolved_count,
+                        },
+                    )
 
                 if response.status_code == 401:
                     return ToolResult(

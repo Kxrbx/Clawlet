@@ -92,3 +92,44 @@ class RuntimePolicyEngine:
             return PolicyDecision(False, "Elevated mode is disabled")
 
         return PolicyDecision(True, "")
+
+    def is_destructive_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> bool:
+        """Heuristic risk gate for destructive tool actions."""
+        name = (tool_name or "").lower()
+        args = arguments or {}
+        if name in {"write_file", "edit_file", "apply_patch"}:
+            path = str(args.get("path", "")).lower()
+            if any(path.endswith(x) for x in (".env", "config.yaml", "config.yml", "pyproject.toml")):
+                return True
+            return False
+
+        if name != "shell":
+            return False
+
+        cmd = str(args.get("command", "")).strip().lower()
+        if not cmd:
+            return False
+        destructive_patterns = (
+            " rm ",
+            " rm-",
+            " rm\t",
+            "rm -",
+            "mv ",
+            "chmod ",
+            "chown ",
+            "git reset",
+            "git clean",
+            "dd ",
+            "mkfs",
+        )
+        return any(pat in f" {cmd}" for pat in destructive_patterns)
+
+    def confirmation_reason(self, tool_name: str, arguments: dict[str, Any], *, approved: bool = False) -> str:
+        """Return a non-empty reason if the tool call should require explicit approval."""
+        mode = self.infer_mode(tool_name, arguments or {})
+        decision = self.authorize(mode, approved=approved)
+        if not decision.allowed and "requires explicit approval" in decision.reason.lower():
+            return f"Policy requires approval for {mode} action"
+        if self.is_destructive_tool_call(tool_name, arguments or {}):
+            return "Destructive action blocked by default"
+        return ""

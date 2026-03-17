@@ -11,13 +11,13 @@ Example usage:
     
     # Create registries
     tool_registry = ToolRegistry()
-    skill_registry = SkillRegistry(tool_registry=tool_registry)
+    skill_registry = SkillRegistry()
     
     # Load bundled skills
     skill_registry.load_bundled_skills()
     
-    # Load user skills
-    skill_registry.add_skill_directory(Path.home() / ".clawlet" / "skills")
+    # Load installed validated skills from the active workspace
+    skill_registry.add_skill_directory(Path(".skills") / "installed")
     
     # Configure skills
     skill_registry.configure_all({
@@ -26,7 +26,7 @@ Example usage:
     })
     
     # Register skill tools with the tool registry
-    skill_registry.register_tools_with_registry()
+    skill_registry.register_tools_with_registry(tool_registry)
     
     # Get OpenAI-format tool definitions
     tools = skill_registry.to_openai_tools()
@@ -44,7 +44,9 @@ from clawlet.skills.loader import (
     SkillLoadError,
     discover_skills,
 )
+from clawlet.skills.installer import SkillInstallerService
 from clawlet.skills.registry import SkillRegistry
+from clawlet.skills.runtime import SkillRuntime, build_skill_runtime
 
 __all__ = [
     # Base classes
@@ -57,6 +59,9 @@ __all__ = [
     "SkillLoader",
     "SkillLoadError",
     "discover_skills",
+    "SkillInstallerService",
     # Registry
     "SkillRegistry",
+    "SkillRuntime",
+    "build_skill_runtime",
 ]

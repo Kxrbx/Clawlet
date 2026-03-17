@@ -62,15 +62,12 @@ class BaseChannel(ABC):
         while self._running:
             try:
                 msg = await asyncio.wait_for(
-                    self.bus.consume_outbound(),
+                    self.bus.consume_outbound_for(self.name),
                     timeout=1.0
                 )
                 logger.debug(f"Outbound message received for {msg.channel}: {msg.content[:50]}...")
-                
-                # Only handle messages for this channel
-                if msg.channel == self.name:
-                    logger.debug(f"Sending message to {self.name} channel")
-                    await self.send(msg)
+                logger.debug(f"Sending message to {self.name} channel")
+                await self.send(msg)
                     
             except asyncio.TimeoutError:
                 continue

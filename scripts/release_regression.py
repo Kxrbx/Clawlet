@@ -61,6 +61,31 @@ def main() -> int:
         if "Authorization" in implicit_headers:
             raise SystemExit("http_request injected credentials without an explicit auth_profile")
 
+        moltbook_creds_dir = Path.home() / ".config" / "moltbook"
+        moltbook_creds_dir.mkdir(parents=True, exist_ok=True)
+        moltbook_creds_path = moltbook_creds_dir / "credentials.json"
+        previous_moltbook_creds = moltbook_creds_path.read_text(encoding="utf-8") if moltbook_creds_path.exists() else None
+        previous_moltbook_env = os.environ.get("MOLTBOOK_API_KEY")
+        try:
+            moltbook_creds_path.write_text('{"api_key":"moltbook-test-token"}', encoding="utf-8")
+            os.environ.pop("MOLTBOOK_API_KEY", None)
+            moltbook_headers = tool._apply_local_auth(
+                "https://www.moltbook.com/api/v1/home",
+                {},
+                auth_profile="moltbook",
+            )
+            if moltbook_headers.get("Authorization") != "Bearer moltbook-test-token":
+                raise SystemExit("Built-in Moltbook auth_profile did not load credentials.json fallback")
+        finally:
+            if previous_moltbook_creds is None:
+                moltbook_creds_path.unlink(missing_ok=True)
+            else:
+                moltbook_creds_path.write_text(previous_moltbook_creds, encoding="utf-8")
+            if previous_moltbook_env is None:
+                os.environ.pop("MOLTBOOK_API_KEY", None)
+            else:
+                os.environ["MOLTBOOK_API_KEY"] = previous_moltbook_env
+
     finally:
         shutil.rmtree(workspace_dir, ignore_errors=True)
 

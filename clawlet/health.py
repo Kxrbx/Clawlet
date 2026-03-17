@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from loguru import logger
+from clawlet.cli.runtime_paths import get_default_workspace_path, get_workspace_layout_for
 
 
 class HealthStatus(str, Enum):
@@ -282,7 +283,7 @@ async def quick_health_check() -> dict:
     ]
     overall = "healthy"
 
-    workspace = Path.home() / ".clawlet"
+    workspace = get_default_workspace_path()
     config_path = workspace / "config.yaml"
     if config_path.exists():
         try:
@@ -292,7 +293,10 @@ async def quick_health_check() -> dict:
             heartbeat = raw.get("heartbeat") or {}
             tasks = (scheduler.get("tasks") or {}) if isinstance(scheduler, dict) else {}
 
-            runs_dir = Path(str(scheduler.get("runs_dir") or "~/.clawlet/cron/runs")).expanduser()
+            layout = get_workspace_layout_for(workspace)
+            runs_dir = Path(str(scheduler.get("runs_dir") or (layout.root / "cron" / "runs"))).expanduser()
+            if not runs_dir.is_absolute():
+                runs_dir = layout.root / runs_dir
             failed_recent = 0
             total_recent = 0
             if runs_dir.exists():

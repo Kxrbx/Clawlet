@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import typer
@@ -22,6 +24,43 @@ def _heartbeat_state_path(workspace_path: Path) -> Path:
 
 def _heartbeat_memory_state_path(workspace_path: Path) -> Path:
     return workspace_path / "memory" / "heartbeat-state.json"
+
+
+def _agent_pid_path(workspace_path: Path) -> Path:
+    return workspace_path / ".runtime" / "agent.pid"
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _read_agent_pid(workspace_path: Path) -> int | None:
+    path = _agent_pid_path(workspace_path)
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _load_raw_config(workspace_path: Path) -> dict:
@@ -49,14 +88,29 @@ def run_heartbeat_status_command(workspace_path: Path) -> None:
     console.print(f"|  Ack limit: {hb.ack_max_chars}")
     quiet = "disabled" if hb.quiet_hours_start == hb.quiet_hours_end else f"{hb.quiet_hours_start}:00-{hb.quiet_hours_end}:00 UTC"
     console.print(f"|  Quiet hours: {quiet}")
+    pid = _read_agent_pid(workspace_path)
+    runtime_running = bool(pid and _pid_is_running(pid))
+    runtime_status = f"running (pid {pid})" if runtime_running else "not running"
+    console.print(f"|  Runtime: {runtime_status}")
     state_path = _heartbeat_state_path(workspace_path)
+    last_tick_at = None
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         console.print(f"|  Last tick: {state.get('timestamp', 'unknown')}")
         console.print(f"|  Last status: {state.get('status', 'unknown')}")
         console.print(f"|  Last reason: {state.get('reason', 'unknown')}")
+        last_tick_at = _parse_timestamp(state.get("timestamp", ""))
     else:
         console.print("|  Last tick: none recorded")
+    if hb.enabled:
+        stale_after = timedelta(minutes=max(int(hb.interval_minutes or 30) * 2, 5))
+        now = datetime.now(timezone.utc)
+        if not runtime_running:
+            console.print("|  [yellow]! Heartbeat cannot trigger while the agent runtime is stopped[/yellow]")
+        elif last_tick_at is None:
+            console.print("|  [yellow]! No heartbeat tick has been recorded yet[/yellow]")
+        elif now - last_tick_at > stale_after:
+            console.print("|  [yellow]! Heartbeat looks stale compared to configured interval[/yellow]")
     memory_state_path = _heartbeat_memory_state_path(workspace_path)
     if memory_state_path.exists():
         memory_state = json.loads(memory_state_path.read_text(encoding="utf-8"))

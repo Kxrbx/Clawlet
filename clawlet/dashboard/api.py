@@ -29,6 +29,7 @@ from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
 from clawlet.providers.models_cache import get_models_cache
 from clawlet.metrics import format_prometheus
+from clawlet.cli.runtime_paths import get_default_workspace_path, get_workspace_layout_for
 
 
 # Pydantic models
@@ -187,7 +188,7 @@ def _resolve_log_file() -> Path:
     configured = os.environ.get("CLAWLET_LOG_FILE", "").strip()
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".clawlet" / "clawlet.log"
+    return get_default_workspace_path() / "clawlet.log"
 
 
 def _tail_lines(path: Path, limit: int) -> list[str]:
@@ -242,7 +243,7 @@ async def lifespan(app: FastAPI):
     global config, health_checker
 
     try:
-        config = load_config()
+        config = load_config(get_default_workspace_path())
         health_checker = HealthChecker()
 
         # Initialize dashboard token on startup
@@ -286,10 +287,8 @@ async def get_health():
         result = await quick_health_check()
         # Record to history file
         try:
-            from pathlib import Path
-            history_file = Path.home() / ".clawlet" / "health_history.jsonl"
+            history_file = get_workspace_layout_for().health_history_path
             history_file.parent.mkdir(parents=True, exist_ok=True)
-            import json
             with open(history_file, "a") as f:
                 f.write(json.dumps(result) + "\n")
         except Exception as e:
@@ -304,9 +303,7 @@ async def get_health():
 async def get_health_history(limit: int = 50, token: str = Depends(verify_api_token)):
     """Get recent health history."""
     try:
-        from pathlib import Path
-        import json
-        history_file = Path.home() / ".clawlet" / "health_history.jsonl"
+        history_file = get_workspace_layout_for().health_history_path
         if not history_file.exists():
             return {"history": []}
         lines = history_file.read_text().strip().split("\n")[-limit:]
@@ -349,6 +346,7 @@ async def start_agent(token: str = Depends(verify_api_token)):
     
     # Load config to get workspace
     config = load_config()
+    workspace = get_default_workspace_path()
     
     # Start agent as subprocess
     import subprocess
@@ -357,7 +355,7 @@ async def start_agent(token: str = Depends(verify_api_token)):
         # Use sys.executable to ensure we use the same Python interpreter
         agent_process = subprocess.Popen(
             [sys.executable, "-m", "clawlet"],
-            cwd=config.workspace if hasattr(config, 'workspace') else Path.home() / ".clawlet",
+            cwd=workspace,
             env={**os.environ, "CLAWLET_CONFIG": str(config.config_path) if hasattr(config, 'config_path') else ""}
         )
         agent_status["running"] = True
@@ -655,7 +653,7 @@ def _read_automation_status(workspace: Path) -> dict:
 @app.get("/automation/status")
 async def get_automation_status(token: str = Depends(verify_api_token)):
     """Get heartbeat/scheduler operational status for dashboard operators."""
-    workspace = Path.home() / ".clawlet"
+    workspace = get_default_workspace_path()
     try:
         return _read_automation_status(workspace)
     except FileNotFoundError as e:

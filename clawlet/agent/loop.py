@@ -25,6 +25,20 @@ if TYPE_CHECKING:
 
 from clawlet.agent.identity import Identity
 from clawlet.agent.memory import MemoryManager
+from clawlet.agent.approval_service import ApprovalService
+from clawlet.agent.heartbeat_reporter import HeartbeatReporter
+from clawlet.agent.heartbeat_turn import HeartbeatTurnHandler
+from clawlet.agent.history_trimmer import HistoryTrimmer
+from clawlet.agent.message_builder import MessageBuilder
+from clawlet.agent.models import ConversationState, Message, ToolCall
+from clawlet.agent.outbound_publisher import OutboundPublisher
+from clawlet.agent.recovery_checkpoint import RecoveryCheckpointService
+from clawlet.agent.run_context import RunContext
+from clawlet.agent.run_lifecycle import RunLifecycle
+from clawlet.agent.run_prelude import RunPrelude
+from clawlet.agent.run_orchestrator import RunOrchestrator
+from clawlet.agent.response_policy import ResponsePolicy
+from clawlet.agent.turn_executor import TurnExecutor
 from clawlet.heartbeat.state import HeartbeatStateStore
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult, validate_tool_params
@@ -32,7 +46,9 @@ from clawlet.agent.memory import MemoryManager
 from clawlet.storage.sqlite import SQLiteStorage
 from clawlet.config import RuntimeSettings, StorageConfig
 from clawlet.context import ContextEngine
+from clawlet.workspace_layout import get_workspace_layout
 from clawlet.metrics import get_metrics
+from clawlet.utils.security import mask_secrets
 from clawlet.runtime import (
     EVENT_CHANNEL_FAILED,
     EVENT_PROVIDER_FAILED,
@@ -52,53 +68,12 @@ from clawlet.runtime import (
     RuntimeEvent,
     RuntimeEventStore,
     RuntimePolicyEngine,
-    RunCheckpoint,
     ToolCallEnvelope,
 )
 from clawlet.runtime.failures import classify_error_text, classify_exception, to_payload as failure_payload
 
 
 UTC_TZ = timezone.utc
-
-
-
-@dataclass
-class Message:
-    """Represents a message."""
-    role: str  # "user", "assistant", "system"
-    content: str
-    metadata: dict = field(default_factory=dict)
-    tool_calls: list = field(default_factory=list)
-    
-    def to_dict(self) -> dict:
-        d = {"role": self.role, "content": self.content}
-        if self.tool_calls:
-            d["tool_calls"] = self.tool_calls
-        if self.role == "tool":
-            tool_call_id = self.metadata.get("tool_call_id")
-            if tool_call_id:
-                d["tool_call_id"] = tool_call_id
-            tool_name = self.metadata.get("tool_name")
-            if tool_name:
-                d["name"] = tool_name
-        return d
-
-
-@dataclass
-class ToolCall:
-    """Represents a tool call from the LLM."""
-    id: str
-    name: str
-    arguments: dict
-
-
-@dataclass
-class ConversationState:
-    """Per-conversation runtime state."""
-
-    session_id: str
-    history: list[Message] = field(default_factory=list)
-    summary: str = ""
 
 
 class AgentLoop:
@@ -316,8 +291,10 @@ class AgentLoop:
         self._current_source = ""
         self._last_route: dict[str, str] = {}
         self._conversations: dict[str, ConversationState] = {}
-        self._pending_confirmations: dict[str, dict] = {}
-        self._heartbeat_state = HeartbeatStateStore(self.workspace / "memory" / "heartbeat-state.json")
+        self._approval_service = ApprovalService()
+        workspace_layout = get_workspace_layout(self.workspace)
+        workspace_layout.ensure_directories()
+        self._heartbeat_state = HeartbeatStateStore(workspace_layout.heartbeat_state_path)
         self._current_heartbeat_metadata: dict = {}
         
         # Circuit breaker for provider failures
@@ -348,6 +325,8 @@ class AgentLoop:
         # Event to signal that storage initialization is complete
         self._storage_ready = asyncio.Event()
         self._persist_tasks: set[asyncio.Task] = set()
+        self._active_message_task: Optional[asyncio.Task] = None
+        self._active_run_context: Optional[RunContext] = None
 
         # Deterministic runtime + replay infrastructure
         self.runtime_config = runtime_config or RuntimeSettings()
@@ -381,8 +360,82 @@ class AgentLoop:
             remote_executor=self._build_remote_executor(),
             lane_defaults=dict(self.runtime_config.policy.lanes),
         )
-        self._context_engine = ContextEngine(workspace=self.workspace, cache_dir=replay_dir / "context")
+        self._context_engine = ContextEngine(
+            workspace=self.workspace,
+            cache_dir=replay_dir / "context",
+            roots=workspace_layout.context_roots(),
+        )
         self._recovery_manager = RecoveryManager(replay_dir / "checkpoints")
+        self._run_orchestrator = RunOrchestrator(self)
+        self._run_lifecycle = RunLifecycle(
+            emit_runtime_event=self._emit_runtime_event,
+            save_checkpoint=self._save_checkpoint,
+            complete_checkpoint=self._complete_checkpoint,
+            metrics_factory=get_metrics,
+            event_run_started=EVENT_RUN_STARTED,
+            event_run_completed=EVENT_RUN_COMPLETED,
+            event_scheduled_run_started=EVENT_SCHEDULED_RUN_STARTED,
+            event_scheduled_run_completed=EVENT_SCHEDULED_RUN_COMPLETED,
+            event_scheduled_run_failed=EVENT_SCHEDULED_RUN_FAILED,
+            sched_payload_job_id=SCHED_PAYLOAD_JOB_ID,
+            sched_payload_run_id=SCHED_PAYLOAD_RUN_ID,
+            sched_payload_session_target=SCHED_PAYLOAD_SESSION_TARGET,
+            sched_payload_wake_mode=SCHED_PAYLOAD_WAKE_MODE,
+        )
+        self._run_prelude = RunPrelude(
+            run_lifecycle=self._run_lifecycle,
+            maybe_handle_confirmation_reply=self._maybe_handle_confirmation_reply,
+            maybe_handle_direct_skill_install=self._maybe_handle_direct_skill_install,
+            queue_persist=self._queue_persist,
+            logger=logger,
+            message_cls=Message,
+        )
+        self._response_policy = ResponsePolicy(
+            continuation_split=self.FINAL_RESPONSE_CONTINUATION_SPLIT,
+            looks_like_incomplete_followthrough=self._looks_like_incomplete_followthrough,
+            sanitize_template_placeholders=self._sanitize_template_placeholders,
+            looks_like_blocker_response=self._looks_like_blocker_response,
+        )
+        self._message_builder = MessageBuilder(
+            identity=self.identity,
+            tools=self.tools,
+            workspace=self.workspace,
+            context_engine=self._context_engine,
+            memory=self.memory,
+            heartbeat_state=self._heartbeat_state,
+            context_window=self.CONTEXT_WINDOW,
+            heartbeat_action_policy=self.HEARTBEAT_ACTION_POLICY,
+            logger=logger,
+        )
+        self._outbound_publisher = OutboundPublisher(
+            bus=self.bus,
+            runtime_config=self.runtime_config,
+            response_policy=self._response_policy,
+            heartbeat_state=self._heartbeat_state,
+            logger=logger,
+            metrics_factory=get_metrics,
+            classify_error_text=classify_error_text,
+            failure_payload=failure_payload,
+            emit_runtime_event=self._emit_runtime_event,
+            event_channel_failed=EVENT_CHANNEL_FAILED,
+            now_fn=lambda: datetime.now(UTC_TZ),
+        )
+        self._heartbeat_reporter = HeartbeatReporter(
+            heartbeat_state=self._heartbeat_state,
+            now_fn=lambda: datetime.now(UTC_TZ),
+        )
+        self._heartbeat_turn_handler = HeartbeatTurnHandler(self)
+        self._history_trimmer = HistoryTrimmer(
+            max_history=self.MAX_HISTORY,
+            logger=logger,
+        )
+        self._recovery_checkpoint = RecoveryCheckpointService(
+            recovery_manager=self._recovery_manager,
+        )
+        self._turn_executor = TurnExecutor(
+            agent=self,
+            heartbeat_handler=self._heartbeat_turn_handler,
+        )
         
         logger.info(
             "AgentLoop initialized with provider=%s, model=%s, tools=%s, max_tool_calls_per_message=%s"
@@ -442,30 +495,26 @@ class AgentLoop:
 
     def _save_checkpoint(self, stage: str, iteration: int = 0, notes: str = "") -> None:
         """Persist checkpoint for interrupted-run recovery."""
-        if not self._current_run_id or not self._session_id:
-            return
-        pending = self._pending_confirmations.get(f"{self._current_channel}:{self._current_chat_id}") or {}
-        checkpoint = RunCheckpoint(
+        self._recovery_checkpoint.save(
             run_id=self._current_run_id,
             session_id=self._session_id,
             channel=self._current_channel,
             chat_id=self._current_chat_id,
             stage=stage,
             iteration=iteration,
-            user_message=self._history[-1].content if self._history and self._history[-1].role == "user" else "",
+            history=self._history,
             user_id=self._current_user_id,
             user_name=self._current_user_name,
-            tool_stats=dict(self._tool_stats),
-            pending_confirmation=pending,
+            tool_stats=self._tool_stats,
+            pending_confirmation=self._approval_service.snapshot(
+                f"{self._current_channel}:{self._current_chat_id}"
+            ),
             notes=notes,
         )
-        self._recovery_manager.save(checkpoint)
 
     def _complete_checkpoint(self) -> None:
         """Mark current run as completed."""
-        if not self._current_run_id:
-            return
-        self._recovery_manager.mark_completed(self._current_run_id)
+        self._recovery_checkpoint.complete(self._current_run_id)
 
     def _snapshot_tool_stats(self) -> dict[str, int]:
         return {key: int(self._tool_stats.get(key, 0) or 0) for key in self._tool_stats}
@@ -511,10 +560,16 @@ class AgentLoop:
                 
                 # Process it
                 try:
-                    response = await self._process_message(msg)
+                    self._active_message_task = asyncio.create_task(self._process_message(msg))
+                    response = await self._active_message_task
                     if response:
                         logger.info(f"Sending response: {response.content[:50]}...")
                         await self._publish_outbound_with_retry(response)
+                except asyncio.CancelledError:
+                    logger.info("Active message processing was cancelled")
+                    if self._running:
+                        raise
+                    break
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
                     # Send error response
@@ -524,6 +579,8 @@ class AgentLoop:
                         chat_id=msg.chat_id,
                         content=self._format_user_facing_error(e)
                     ))
+                finally:
+                    self._active_message_task = None
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
@@ -533,6 +590,8 @@ class AgentLoop:
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
+        if self._active_message_task is not None and not self._active_message_task.done():
+            self._active_message_task.cancel()
         logger.info("Agent loop stopping")
 
     async def clear_conversation(self, channel: str, chat_id: str) -> bool:
@@ -587,7 +646,7 @@ class AgentLoop:
         """Expose lightweight per-chat runtime state for channel UX surfaces."""
         key = f"{channel}:{chat_id}"
         state = self._conversations.get(key)
-        pending = self._pending_confirmations.get(key) or {}
+        pending = self._approval_service.snapshot(key)
         return {
             "channel": channel,
             "chat_id": chat_id,
@@ -602,15 +661,7 @@ class AgentLoop:
 
     def peek_pending_confirmation(self, channel: str, chat_id: str) -> Optional[dict]:
         """Return pending confirmation details for the given route if one exists."""
-        pending = self._pending_confirmations.get(f"{channel}:{chat_id}")
-        if not pending:
-            return None
-        tool_call = pending.get("tool_call")
-        return {
-            "token": pending.get("token", ""),
-            "tool_name": getattr(tool_call, "name", ""),
-            "arguments": dict(getattr(tool_call, "arguments", {}) or {}),
-        }
+        return self._approval_service.peek(channel, chat_id)
 
     def _build_outbound_metadata(
         self,
@@ -621,18 +672,13 @@ class AgentLoop:
         scheduled_payload: Optional[dict],
         extra: Optional[dict] = None,
     ) -> dict:
-        metadata = {
-            "source": source,
-            "heartbeat": is_heartbeat,
-            "ack_max_chars": heartbeat_ack_max_chars,
-            SCHED_PAYLOAD_JOB_ID: scheduled_payload.get(SCHED_PAYLOAD_JOB_ID) if scheduled_payload else "",
-            SCHED_PAYLOAD_RUN_ID: scheduled_payload.get(SCHED_PAYLOAD_RUN_ID) if scheduled_payload else "",
-            SCHED_PAYLOAD_SESSION_TARGET: scheduled_payload.get(SCHED_PAYLOAD_SESSION_TARGET) if scheduled_payload else "",
-            SCHED_PAYLOAD_WAKE_MODE: scheduled_payload.get(SCHED_PAYLOAD_WAKE_MODE) if scheduled_payload else "",
-        }
-        if extra:
-            metadata.update(extra)
-        return metadata
+        return self._run_lifecycle.build_outbound_metadata(
+            source=source,
+            is_heartbeat=is_heartbeat,
+            heartbeat_ack_max_chars=heartbeat_ack_max_chars,
+            scheduled_payload=scheduled_payload,
+            extra=extra,
+        )
 
     async def _publish_progress_update(
         self,
@@ -846,15 +892,23 @@ class AgentLoop:
                 logger.warning(
                     f"Provider call failed (attempt {attempt}/{max_retries}, code={failure.code}): {e}"
                 )
+                payload = {
+                    "provider": self.provider.name,
+                    "attempt": attempt,
+                    "error": str(e),
+                    **failure_payload(failure),
+                }
+                if isinstance(e, httpx.HTTPStatusError):
+                    payload["status_code"] = int(getattr(e.response, "status_code", 0) or 0)
+                    error_body = mask_secrets(getattr(e.response, "text", "") or "") or ""
+                    if error_body:
+                        if len(error_body) > 2000:
+                            error_body = error_body[:2000] + "... [truncated]"
+                        payload["response_body"] = error_body
                 self._emit_runtime_event(
                     EVENT_PROVIDER_FAILED,
                     session_id=self._session_id or "session",
-                    payload={
-                        "provider": self.provider.name,
-                        "attempt": attempt,
-                        "error": str(e),
-                        **failure_payload(failure),
-                    },
+                    payload=payload,
                 )
                 self._save_checkpoint(
                     stage="provider_retry",
@@ -898,7 +952,42 @@ class AgentLoop:
             )
         return f"Sorry, I encountered an error: {str(exc)}"
 
+    def _activate_run_context(self, run_ctx: RunContext) -> None:
+        self._active_run_context = run_ctx
+        self._session_id = run_ctx.session_id
+        self._current_run_id = run_ctx.run_id
+        self._current_channel = run_ctx.channel
+        self._current_chat_id = run_ctx.chat_id
+        self._current_user_id = run_ctx.user_id
+        self._current_user_name = run_ctx.user_name
+        self._current_source = run_ctx.source
+        self._current_heartbeat_metadata = run_ctx.metadata if run_ctx.is_heartbeat else {}
+        self._last_route = {
+            "channel": run_ctx.channel,
+            "chat_id": run_ctx.chat_id,
+            "user_id": run_ctx.user_id,
+            "user_name": run_ctx.user_name,
+        }
+
+    def _clear_run_context(self) -> None:
+        self._active_run_context = None
+        self._current_run_id = ""
+        self._current_channel = ""
+        self._current_chat_id = ""
+        self._current_user_id = ""
+        self._current_user_name = ""
+        self._current_source = ""
+        self._current_heartbeat_metadata = {}
+
     async def _process_message(self, msg: "InboundMessage") -> Optional["OutboundMessage"]:
+        return await self._run_orchestrator.process_message(msg)
+
+    async def _process_message_core(
+        self,
+        msg: "InboundMessage",
+        convo: ConversationState,
+        run_ctx: RunContext,
+    ) -> Optional["OutboundMessage"]:
         """
         Process a single inbound message with tool calling support.
         
@@ -911,88 +1000,40 @@ class AgentLoop:
         user_message = msg.content
         channel = msg.channel
         chat_id = msg.chat_id
-        metadata = msg.metadata or {}
-        source = str(metadata.get("source", "") or "")
-        is_heartbeat = bool(metadata.get("heartbeat")) or source == "heartbeat"
-        heartbeat_ack_max_chars = int(metadata.get("ack_max_chars", 24) or 24)
-        scheduled_payload = self._scheduled_payload_from_metadata(metadata, source, is_heartbeat)
+        metadata = run_ctx.metadata or {}
+        source = run_ctx.source
+        is_heartbeat = run_ctx.is_heartbeat
+        heartbeat_ack_max_chars = int(run_ctx.mode.heartbeat_ack_max_chars if run_ctx.mode else 24)
+        scheduled_payload = run_ctx.scheduled_payload
         is_internal_autonomous = bool(metadata.get("internal_autonomous_followup"))
         autonomous_depth = int(metadata.get("autonomous_followup_depth", 0))
-        convo = await self._get_conversation_state(channel, chat_id)
         convo_key = f"{channel}:{chat_id}"
         self._run_tool_stats_snapshot = self._snapshot_tool_stats()
-        self._session_id = convo.session_id
         self._history = convo.history
-        self._current_channel = channel
-        self._current_chat_id = chat_id
-        self._current_user_id = str(msg.user_id or "")
-        self._current_user_name = str(msg.user_name or "")
-        self._current_source = source
-        self._current_heartbeat_metadata = metadata if is_heartbeat else {}
-        self._last_route = {
-            "channel": channel,
-            "chat_id": chat_id,
-            "user_id": self._current_user_id,
-            "user_name": self._current_user_name,
-        }
-        self._current_run_id = self._next_run_id(convo.session_id)
-        self._save_checkpoint(stage="run_started", iteration=0, notes="Inbound message accepted")
-        self._emit_runtime_event(
-            EVENT_RUN_STARTED,
+        prelude = await self._run_prelude.prepare(
             session_id=convo.session_id,
-            payload={
-                "channel": channel,
-                "chat_id": chat_id,
-                "engine": self.runtime_config.engine,
-                "engine_resolved": self._runtime_engine,
-                "recovery_resume_from": metadata.get("recovery_run_id", ""),
-                "recovery_resume": bool(metadata.get("recovery_resume")),
-                "source": source,
-                "heartbeat": is_heartbeat,
-                "message_preview": user_message[:200],
-            },
-        )
-        if scheduled_payload is not None:
-            self._emit_runtime_event(
-                EVENT_SCHEDULED_RUN_STARTED,
-                session_id=convo.session_id,
-                payload=scheduled_payload,
-            )
-        
-        # Get metrics instance
-        metrics = get_metrics()
-        
-        # Validate input size (max 10k chars)
-        if len(user_message) > 10000:
-            logger.warning(f"Message from {chat_id} exceeds 10k chars, truncating")
-            user_message = user_message[:10000]
-        
-        logger.info(f"Processing message from {channel}/{chat_id}: {user_message[:50]}...")
-
-        approval_response = await self._maybe_handle_confirmation_reply(
-            convo_key=convo_key,
-            session_id=convo.session_id,
-            user_message=user_message,
+            channel=channel,
+            chat_id=chat_id,
+            metadata=metadata,
+            source=source,
+            is_heartbeat=is_heartbeat,
+            scheduled_payload=scheduled_payload,
+            heartbeat_ack_max_chars=heartbeat_ack_max_chars,
             history=convo.history,
+            convo_key=convo_key,
+            is_internal_autonomous=is_internal_autonomous,
+            engine=self.runtime_config.engine,
+            engine_resolved=self._runtime_engine,
+            user_message=user_message,
         )
-        if approval_response is not None:
+        user_message = prelude.user_message
+        persist_metadata = prelude.persist_metadata
+        if prelude.short_response is not None:
             from clawlet.bus.queue import OutboundMessage
-            self._emit_runtime_event(
-                EVENT_RUN_COMPLETED,
-                session_id=convo.session_id,
-                payload={"iterations": 0, "is_error": False, "response_preview": approval_response[:200]},
-            )
-            if scheduled_payload is not None:
-                self._emit_runtime_event(
-                    EVENT_SCHEDULED_RUN_COMPLETED,
-                    session_id=convo.session_id,
-                    payload={**scheduled_payload, "is_error": False, "response_preview": approval_response[:200]},
-                )
-            self._complete_checkpoint()
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
-                content=approval_response,
+                content=prelude.short_response,
                 metadata=self._build_outbound_metadata(
                     source=source,
                     is_heartbeat=is_heartbeat,
@@ -1000,550 +1041,21 @@ class AgentLoop:
                     scheduled_payload=scheduled_payload,
                 ),
             )
-        
-        # Add to history. Internal autonomous prompts are system context, not user content.
-        persist_metadata = {"heartbeat": is_heartbeat, "source": source}
-        if is_internal_autonomous:
-            convo.history.append(Message(role="system", content=user_message))
-        else:
-            convo.history.append(Message(role="user", content=user_message))
-            self._queue_persist(convo.session_id, "user", user_message, persist_metadata)
-
-        direct_install_response = await self._maybe_handle_direct_skill_install(user_message, convo.history)
-        if direct_install_response is not None:
-            convo.history.append(Message(role="assistant", content=direct_install_response))
-            self._queue_persist(convo.session_id, "assistant", direct_install_response, persist_metadata)
-            from clawlet.bus.queue import OutboundMessage
-            self._emit_runtime_event(
-                EVENT_RUN_COMPLETED,
-                session_id=convo.session_id,
-                payload={"iterations": 0, "is_error": False, "response_preview": direct_install_response[:200]},
-            )
-            if scheduled_payload is not None:
-                self._emit_runtime_event(
-                    EVENT_SCHEDULED_RUN_COMPLETED,
-                    session_id=convo.session_id,
-                    payload={**scheduled_payload, "is_error": False, "response_preview": direct_install_response[:200]},
-                )
-            self._complete_checkpoint()
-            return OutboundMessage(
-                channel=channel,
-                chat_id=chat_id,
-                content=direct_install_response,
-                metadata=self._build_outbound_metadata(
-                    source=source,
-                    is_heartbeat=is_heartbeat,
-                    heartbeat_ack_max_chars=heartbeat_ack_max_chars,
-                    scheduled_payload=scheduled_payload,
-                ),
-            )
-        
-        # Trim history periodically
-        self._trim_history(convo.history)
-        self._sanitize_conversation_history(convo.history)
-        
-        # Iterative tool calling loop
-        iteration = 0
-        final_response = None
-        is_error = False
-        no_progress_count = 0
-        last_signature: Optional[str] = None
-        enable_tools = self._should_enable_tools(user_message)
-        tool_gate_promoted = False
-        action_nudge_used = False
-        commitment_followthrough_used = False
-        post_tool_finalization_used = False
-        tool_calls_used = 0
-        final_metadata_extra: dict = {}
-        executed_tool_signatures: set[str] = set()
-        heartbeat_tool_names: list[str] = []
-        heartbeat_blockers: list[str] = []
-        heartbeat_action_summaries: list[str] = []
-        explicit_urls = self._extract_explicit_urls(user_message)
-        explicit_github_url = self._extract_github_url(user_message)
-        install_skill_intent = self._is_skill_install_intent(user_message)
-        followup_action_context = self._has_recent_incomplete_action_context(convo.history)
-        action_intent = self._is_action_intent(user_message) or followup_action_context
-        if followup_action_context and not enable_tools:
-            logger.info("Promoting follow-up turn to tools-enabled due to recent unfinished action context")
-            enable_tools = True
-        iteration_limit = self.MAX_HEARTBEAT_ITERATIONS if is_heartbeat else self.max_iterations
-        tool_call_limit = self.MAX_HEARTBEAT_TOOL_CALLS if is_heartbeat else self.max_tool_calls_per_message
-        no_progress_limit = self.HEARTBEAT_NO_PROGRESS_LIMIT if is_heartbeat else self.NO_PROGRESS_LIMIT
-
-        await self._publish_progress_update("started", "Starting work on your request.")
-        
-        while iteration < iteration_limit:
-            iteration += 1
-            self._save_checkpoint(stage="iteration", iteration=iteration, notes="Starting model iteration")
-            
-            # Build messages for LLM
-            messages = self._build_messages(
-                convo.history,
-                query_hint=user_message,
-                is_heartbeat=is_heartbeat,
-            )
-            
-            try:
-                # Call LLM provider with retry and circuit breaker
-                await self._publish_progress_update("provider_started", "Thinking about the next step.")
-                response: LLMResponse = await self._call_provider_with_retry(messages, enable_tools=enable_tools)
-                self._save_checkpoint(stage="provider_response", iteration=iteration, notes="Model response received")
-                
-                response_content = response.content
-                
-                # Prefer provider-native tool calls; fallback to text parser.
-                tool_calls = self._extract_provider_tool_calls(response)
-                if not tool_calls:
-                    tool_calls = self._extract_tool_calls(response_content)
-                tool_calls = self._dedupe_tool_calls(tool_calls)
-                if (
-                    not tool_calls
-                    and install_skill_intent
-                    and explicit_github_url
-                    and tool_calls_used == 0
-                    and self.tools.get("install_skill") is not None
-                ):
-                    forced = ToolCall(
-                        id="forced_install_skill_missing_tool_call",
-                        name="install_skill",
-                        arguments={"github_url": explicit_github_url},
-                    )
-                    logger.info(
-                        "Applying install-first policy: model returned no tool call, "
-                        f"forcing install_skill for {explicit_github_url}"
-                    )
-                    tool_calls = [forced]
-                if (
-                    not tool_calls
-                    and explicit_urls
-                    and tool_calls_used == 0
-                    and self.tools.get("fetch_url") is not None
-                    and not self._is_authenticated_api_url(explicit_urls[0])
-                ):
-                    forced = ToolCall(
-                        id="forced_fetch_url_missing_tool_call",
-                        name="fetch_url",
-                        arguments={"url": explicit_urls[0]},
-                    )
-                    logger.info(
-                        "Applying URL-first policy: model returned no tool call, "
-                        f"forcing fetch_url for {explicit_urls[0]}"
-                    )
-                    tool_calls = [forced]
-                tool_calls = self._prioritize_explicit_url_fetch(
-                    tool_calls=tool_calls,
-                    explicit_urls=explicit_urls,
-                    tool_calls_used=tool_calls_used,
-                )
-                repeated_tool_calls: list[ToolCall] = []
-                novel_tool_calls: list[ToolCall] = []
-                for tc in tool_calls:
-                    signature = self._tool_call_signature(tc)
-                    if signature in executed_tool_signatures:
-                        repeated_tool_calls.append(tc)
-                        continue
-                    novel_tool_calls.append(tc)
-                if repeated_tool_calls:
-                    logger.warning(
-                        "Skipping repeated tool call(s) in same turn: "
-                        f"{[t.name for t in repeated_tool_calls]}"
-                    )
-                    if not novel_tool_calls:
-                        convo.history.append(
-                            Message(
-                                role="system",
-                                content=(
-                                    "You already executed that exact tool call in this turn. "
-                                    "Reuse previous tool outputs from conversation history and do not repeat identical calls."
-                                ),
-                            )
-                        )
-                        continue
-                tool_calls = novel_tool_calls
-                if tool_calls:
-                    filtered_tool_calls: list[ToolCall] = []
-                    blocked_exploration = False
-                    for tc in tool_calls:
-                        if self._is_low_value_exploration_tool(
-                            tool_call=tc,
-                            user_message=user_message,
-                            is_heartbeat=is_heartbeat,
-                            tool_calls_used=tool_calls_used,
-                        ):
-                            blocked_exploration = True
-                            logger.info(
-                                "Blocked low-value exploration tool call during action-oriented task: "
-                                f"{tc.name} {tc.arguments}"
-                            )
-                            continue
-                        filtered_tool_calls.append(tc)
-                    if blocked_exploration and not filtered_tool_calls:
-                        convo.history.append(
-                            Message(
-                                role="system",
-                                content=(
-                                    "Do not inspect config files, list installed skills, or browse workspace roots "
-                                    "before attempting the requested external action. Use the minimum direct tool step needed. "
-                                    "Do not read credentials files manually; authenticated HTTP tools resolve saved credentials automatically."
-                                ),
-                            )
-                        )
-                        continue
-                    tool_calls = filtered_tool_calls
-
-                # Detect repeated no-progress loop signatures.
-                signature = json.dumps(
-                    {
-                        "content": response_content[:500],
-                        "tool_calls": [{"name": t.name, "args": t.arguments} for t in tool_calls],
-                    },
-                    sort_keys=True,
-                )
-                if signature == last_signature:
-                    no_progress_count += 1
-                else:
-                    no_progress_count = 0
-                last_signature = signature
-
-                if no_progress_count >= no_progress_limit and not tool_calls:
-                    logger.warning("Stopping loop due to repeated no-progress model responses")
-                    final_response = "I am stuck repeating the same step. Please refine your request."
-                    is_error = True
-                    break
-                
-                if tool_calls:
-                    tool_names = ", ".join(tc.name for tc in tool_calls[:4])
-                    if len(tool_calls) > 4:
-                        tool_names += ", ..."
-                    await self._publish_progress_update(
-                        "tool_requested",
-                        f"Preparing {len(tool_calls)} tool call(s).",
-                        detail=tool_names,
-                    )
-                    if not enable_tools:
-                        if (
-                            not tool_gate_promoted
-                            and self._should_promote_tools_for_parsed_calls(
-                                user_message,
-                                tool_calls,
-                                history=convo.history,
-                            )
-                        ):
-                            logger.info(
-                                "Parsed tool calls while tools were disabled; "
-                                "promoting this request to tools-enabled and retrying"
-                            )
-                            tool_gate_promoted = True
-                            enable_tools = True
-                            continue
-                        logger.warning("Ignoring tool calls because tools are disabled for this request")
-                        cleaned = self._strip_tool_call_markup(response_content)
-                        if not cleaned and "<tool_call" in (response_content or "").lower():
-                            cleaned = (
-                                "I detected an action-style tool call but tools are disabled for this turn. "
-                                "Please ask with an explicit action request."
-                            )
-                        if cleaned and cleaned != response_content:
-                            convo.history.append(Message(role="assistant", content=cleaned))
-                            self._queue_persist(convo.session_id, "assistant", cleaned, persist_metadata)
-                            final_response = cleaned
-                            break
-                        tool_calls = []
-
-                if tool_calls:
-                    if tool_calls_used + len(tool_calls) > tool_call_limit:
-                        logger.warning(
-                            "Stopping loop due to tool-call budget exceeded: "
-                            f"{tool_calls_used + len(tool_calls)} > {tool_call_limit}"
-                        )
-                        final_response = (
-                            "I stopped to avoid excessive tool calls. "
-                            "Please narrow the request and I will run only the minimum needed actions."
-                        )
-                        is_error = True
-                        break
-
-                    tool_calls_used += len(tool_calls)
-                    self._tool_stats["calls_requested"] += len(tool_calls)
-                    # Add assistant message with tool calls
-                    convo.history.append(Message(
-                        role="assistant",
-                        content=response_content,
-                        tool_calls=[
-                            {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.name,
-                                    "arguments": json.dumps(tc.arguments),
-                                },
-                            }
-                            for tc in tool_calls
-                        ]
-                    ))
-                    self._queue_persist(convo.session_id, "assistant", response_content, persist_metadata)
-
-                    mapped_calls: list[ToolCall] = []
-                    for tc in tool_calls:
-                        requested_tool_name = tc.name
-                        mapped_tool_name = self._tool_aliases.get(requested_tool_name, requested_tool_name)
-                        if mapped_tool_name != requested_tool_name:
-                            logger.info(f"Mapping tool alias '{requested_tool_name}' -> '{mapped_tool_name}'")
-                        tc.name = mapped_tool_name
-                        mapped_calls.append(self._rewrite_specialized_tool_call(tc))
-                    if is_heartbeat:
-                        heartbeat_tool_names.extend([tc.name for tc in mapped_calls])
-                    for tc in mapped_calls:
-                        executed_tool_signatures.add(self._tool_call_signature(tc))
-
-                    # Confirmation checks remain serial and explicit before any execution.
-                    for tc in mapped_calls:
-                        confirm_reason = self._requires_confirmation(tc)
-                        if confirm_reason:
-                            token = str(int(time.time()))[-6:]
-                            self._pending_confirmations[convo_key] = {
-                                "token": token,
-                                "tool_call": tc,
-                            }
-                            final_response = (
-                                f"{confirm_reason}: `{tc.name}`.\n"
-                                f"Reply with `confirm {token}` to continue or `cancel`."
-                            )
-                            final_metadata_extra = self._build_confirmation_outbound_metadata(
-                                token=token,
-                                tool_call=tc,
-                                reason=confirm_reason,
-                            )
-                            is_error = False
-                            break
-
-                    if final_response is not None:
-                        break
-
-                    executed = await self._execute_tool_calls_optimized(mapped_calls)
-
-                    for tc, result in executed:
-                        rendered_tool_output = self._render_tool_result(result)
-                        if is_heartbeat and not result.success and (result.error or result.output):
-                            heartbeat_blockers.append((result.error or result.output)[:280])
-                        if is_heartbeat:
-                            action_summary = self._summarize_heartbeat_tool_result(tc.name, result)
-                            if action_summary:
-                                heartbeat_action_summaries.append(action_summary)
-                        self._save_checkpoint(
-                            stage="tool_executed",
-                            iteration=iteration,
-                            notes=f"tool={tc.name} success={result.success}",
-                        )
-                        convo.history.append(
-                            Message(
-                                role="tool",
-                                content=rendered_tool_output,
-                                metadata={"tool_call_id": tc.id, "tool_name": tc.name},
-                            )
-                        )
-                        self._queue_persist(convo.session_id, "tool", rendered_tool_output)
-                    
-                    if final_response is not None:
-                        break
-
-                    # Continue loop to get next response
-                    continue
-                
-                # If this looks actionable but the model skipped tools, nudge once and retry.
-                if not tool_calls and is_heartbeat:
-                    final_text = self._sanitize_final_response(response_content, tool_calls_used).strip()
-                    if (
-                        final_text == "HEARTBEAT_OK"
-                        or final_text.startswith("HEARTBEAT_")
-                        or self._looks_like_blocker_response(final_text)
-                    ):
-                        convo.history.append(Message(role="assistant", content=final_text or response_content))
-                        self._queue_persist(convo.session_id, "assistant", final_text or response_content, persist_metadata)
-                        final_response = final_text or response_content
-                        break
-
-                if enable_tools and action_intent and tool_calls_used == 0 and not action_nudge_used:
-                    logger.info("Action intent detected with no tool calls; nudging model to use tools")
-                    action_nudge_used = True
-                    convo.history.append(
-                        Message(
-                            role="system",
-                            content=(
-                                "This request is actionable. Use available tools when needed, "
-                                "then provide the final answer. Do not output tool-call markup."
-                            ),
-                        )
-                    )
-                    continue
-
-                if (
-                    not tool_calls
-                    and enable_tools
-                    and self._looks_like_incomplete_followthrough(response_content, tool_calls_used)
-                ):
-                    if not commitment_followthrough_used:
-                        logger.info(
-                            "Model returned mid-task narration without action; forcing same-turn follow-through"
-                        )
-                        commitment_followthrough_used = True
-                        convo.history.append(
-                            Message(
-                                role="system",
-                                content=self.COMMITMENT_FOLLOWTHROUGH_NUDGE,
-                            )
-                        )
-                        continue
-
-                    if is_internal_autonomous:
-                        logger.warning(
-                            "Internal autonomous follow-up still returned mid-task narration after forced follow-through"
-                        )
-                        final_response = (
-                            "I could not complete the promised action automatically because no executable step was taken. "
-                            "Please retry the request or ask me to perform one concrete action."
-                        )
-                        is_error = True
-                        break
-
-                    logger.warning(
-                        "Model still returned mid-task narration after forced follow-through; refusing to send partial status"
-                    )
-                    final_response = (
-                        "I did not execute the promised action. Please retry with one concrete action, "
-                        "or I can try again with a more specific next step."
-                    )
-                    is_error = True
-                    break
-
-                if (
-                    not tool_calls
-                    and enable_tools
-                    and tool_calls_used > 0
-                    and not post_tool_finalization_used
-                    and not self._looks_like_blocker_response(response_content)
-                ):
-                    logger.info(
-                        "Suppressing post-tool intermediate narration; forcing one finalization pass"
-                    )
-                    await self._publish_progress_update("finalizing", "Finalizing the response.")
-                    post_tool_finalization_used = True
-                    convo.history.append(
-                        Message(
-                            role="system",
-                            content=self.POST_TOOL_FINALIZATION_NUDGE,
-                        )
-                    )
-                    continue
-
-                if (
-                    is_internal_autonomous
-                    and enable_tools
-                    and not tool_calls
-                    and self.AUTONOMOUS_COMMITMENT_PATTERN.search(response_content or "")
-                ):
-                    if not action_nudge_used:
-                        logger.info(
-                            "Internal autonomous follow-up returned another commitment without tool calls; "
-                            "nudging model to execute now or report blocker"
-                        )
-                        action_nudge_used = True
-                        convo.history.append(
-                            Message(
-                                role="system",
-                                content=self.AUTONOMOUS_EXECUTION_NUDGE,
-                            )
-                        )
-                        continue
-
-                    logger.warning(
-                        "Internal autonomous follow-up still returned a commitment with no tool calls after nudge"
-                    )
-                    final_response = (
-                        "I could not complete the promised action automatically because no executable step was taken. "
-                        "Please retry the request or ask me to perform one concrete action."
-                    )
-                    is_error = True
-                    break
-
-                # No tool calls - this is the final response
-                final_text = self._sanitize_final_response(response_content, tool_calls_used)
-                convo.history.append(Message(role="assistant", content=final_text or response_content))
-                self._queue_persist(convo.session_id, "assistant", final_text or response_content, persist_metadata)
-                final_response = final_text or response_content
-                break
-                
-            except Exception as e:
-                logger.error(f"Error in agent loop iteration {iteration}: {e}")
-                self._save_checkpoint(stage="error", iteration=iteration, notes=str(e))
-                final_response = self._format_user_facing_error(e)
-                is_error = True
-                break
-        
-        if final_response is None:
-            if tool_calls_used > 0:
-                logger.info("Iteration cap reached after tool use; attempting one finalization-only pass")
-                try:
-                    await self._publish_progress_update("finalizing", "Summarizing completed work and any blockers.")
-                    convo.history.append(
-                        Message(
-                            role="system",
-                            content=(
-                                "This is the final response pass for this turn. "
-                                "Do not call more tools. Summarize what was completed and any concrete blocker that remains."
-                            ),
-                        )
-                    )
-                    messages = self._build_messages(
-                        convo.history,
-                        query_hint=user_message,
-                        is_heartbeat=is_heartbeat,
-                    )
-                    response = await self._call_provider_with_retry(messages, enable_tools=False)
-                    response_content = self._sanitize_final_response(response.content or "", tool_calls_used).strip()
-                    if response_content:
-                        convo.history.append(Message(role="assistant", content=response_content))
-                        self._queue_persist(convo.session_id, "assistant", response_content, persist_metadata)
-                        final_response = response_content
-                        is_error = self._looks_like_blocker_response(response_content)
-                except Exception as e:
-                    logger.error(f"Error in finalization-only pass: {e}")
-
-        if final_response is None:
-            final_response = "I reached my maximum number of iterations. Please try again."
-            is_error = True
-        elif not str(final_response).strip():
-            final_response = self._fallback_empty_response(
-                action_intent=action_intent,
-                is_heartbeat=is_heartbeat,
-            )
-            is_error = True
-
-        if not (final_response or "").strip():
-            if action_intent:
-                final_response = (
-                    "I could not complete that action in this turn. "
-                    "I hit an execution failure before producing a usable result."
-                )
-            else:
-                final_response = "I couldn't produce a usable reply for that message."
-            is_error = True
-
-        if is_heartbeat:
-            final_response, is_error = self._canonicalize_heartbeat_outcome(
-                response_text=final_response,
-                is_error=is_error,
-                tool_names=heartbeat_tool_names,
-                blockers=heartbeat_blockers,
-                action_summaries=heartbeat_action_summaries,
-                tool_calls_used=tool_calls_used,
-            )
-            self._record_heartbeat_result(
-                final_response,
-                mapped_tool_names=heartbeat_tool_names,
-                blockers=heartbeat_blockers,
-            )
+        turn_outcome = await self._turn_executor.execute(
+            convo=convo,
+            user_message=user_message,
+            persist_metadata=persist_metadata,
+            run_ctx=run_ctx,
+            convo_key=convo_key,
+            is_internal_autonomous=is_internal_autonomous,
+            autonomous_depth=autonomous_depth,
+        )
+        final_response = turn_outcome.final_response
+        is_error = turn_outcome.is_error
+        iteration = turn_outcome.iterations
+        tool_calls_used = turn_outcome.tool_calls_used
+        action_intent = turn_outcome.action_intent
+        final_metadata_extra = turn_outcome.final_metadata_extra
 
         if self._should_schedule_autonomous_followup(
             assistant_response=final_response,
@@ -1577,39 +1089,16 @@ class AgentLoop:
             )
 
         logger.info(f"Final response: {len(final_response)} chars (iterations: {iteration})")
-        
-        # Update metrics
-        if is_error:
-            metrics.inc_errors()
-        else:
-            metrics.inc_messages()
-        
+
         from clawlet.bus.queue import OutboundMessage
-        self._emit_runtime_event(
-            EVENT_RUN_COMPLETED,
+        self._run_lifecycle.complete_run(
             session_id=convo.session_id,
-            payload={
-                "iterations": iteration,
-                "is_error": is_error,
-                "tool_stats": self._current_run_tool_stats(),
-                "response_preview": final_response[:200],
-            },
+            iterations=iteration,
+            is_error=is_error,
+            response_text=final_response,
+            scheduled_payload=scheduled_payload,
+            extra_payload={"tool_stats": self._current_run_tool_stats()},
         )
-        if scheduled_payload is not None:
-            self._emit_runtime_event(
-                EVENT_SCHEDULED_RUN_FAILED if is_error else EVENT_SCHEDULED_RUN_COMPLETED,
-                session_id=convo.session_id,
-                payload={
-                    **scheduled_payload,
-                    "iterations": iteration,
-                    "is_error": is_error,
-                    "response_preview": final_response[:200],
-                },
-            )
-        if is_error:
-            self._save_checkpoint(stage="interrupted", iteration=iteration, notes=final_response[:400])
-        else:
-            self._complete_checkpoint()
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -1905,33 +1394,9 @@ class AgentLoop:
             out.append(tc)
         return out
 
-    def _strip_tool_call_markup(self, content: str) -> str:
-        """Remove tool-call markup blocks from plain text model responses."""
-        text = content or ""
-        text = re.sub(r"<tool_call>[\s\S]*?</tool_call>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
-        return text
-
     def _sanitize_final_response(self, content: str, tool_calls_used: int) -> str:
         """Sanitize final user-facing text when no further tool execution should happen."""
-        cleaned = self._strip_tool_call_markup(content or "")
-        if not cleaned:
-            return ""
-
-        has_pending_language = bool(self.FINAL_RESPONSE_CONTINUATION_SPLIT.search(cleaned))
-        if has_pending_language or self._looks_like_incomplete_followthrough(cleaned, tool_calls_used):
-            head = self.FINAL_RESPONSE_CONTINUATION_SPLIT.split(cleaned, maxsplit=1)[0].strip()
-            if head:
-                cleaned = (
-                    "Partial progress:\n\n"
-                    f"{head}\n\n"
-                    "I did not execute the remaining step in this turn."
-                )
-            else:
-                cleaned = "I made partial progress, but I did not execute the remaining step in this turn."
-
-        cleaned = self._sanitize_template_placeholders(cleaned)
-        return cleaned
+        return self._response_policy.sanitize_final_response(content, tool_calls_used)
 
     def _rewrite_specialized_tool_call(self, tool_call: ToolCall) -> ToolCall:
         """Convert brittle shell-based HTTP calls into structured tool calls when possible."""
@@ -1964,7 +1429,7 @@ class AgentLoop:
         if not normalized.endswith("/heartbeat.md") and normalized != "heartbeat.md":
             return tool_call
 
-        candidate = self.workspace / "HEARTBEAT.md"
+        candidate = get_workspace_layout(self.workspace).heartbeat_path
         if not candidate.exists():
             return tool_call
 
@@ -2705,42 +2170,16 @@ class AgentLoop:
         action_summaries: list[str],
         tool_calls_used: int,
     ) -> tuple[str, bool]:
-        text = (response_text or "").strip()
-        blocker_text = (blockers[0] if blockers else "").strip()
-        if is_error or blocker_text or self._looks_like_blocker_response(text):
-            detail = blocker_text or text or "heartbeat run failed"
-            detail = detail.splitlines()[0][:220]
-            return f"HEARTBEAT_BLOCKED - {detail}", True
-
-        if text == "HEARTBEAT_OK":
-            return "HEARTBEAT_OK", False
-
-        meaningful_tools = [
-            name for name in tool_names
-            if name not in {"read_file", "fetch_url", "list_dir", "get_context", "recall"}
-        ]
-        if meaningful_tools or action_summaries:
-            summary = next((item for item in action_summaries if item), "")
-            if not summary:
-                summary = text or f"Completed actions using: {', '.join(dict.fromkeys(meaningful_tools))}"
-            if not summary.startswith("HEARTBEAT_ACTION_TAKEN"):
-                summary = f"HEARTBEAT_ACTION_TAKEN - {summary}"
-            return summary, False
-
-        return "HEARTBEAT_OK", False
+        return self._response_policy.canonicalize_heartbeat_outcome(
+            response_text=response_text,
+            is_error=is_error,
+            tool_names=tool_names,
+            blockers=blockers,
+            action_summaries=action_summaries,
+        )
 
     def _summarize_heartbeat_tool_result(self, tool_name: str, result: ToolResult) -> str:
-        if not result.success:
-            return ""
-        if tool_name in {"read_file", "fetch_url", "list_dir", "get_context", "recall"}:
-            return ""
-        detail = (result.output or "").strip()
-        if detail:
-            detail = detail.splitlines()[0].strip()
-            if len(detail) > 180:
-                detail = detail[:177].rstrip() + "..."
-            return detail
-        return f"Completed `{tool_name}` successfully."
+        return self._response_policy.summarize_heartbeat_tool_result(tool_name, result)
 
     def _should_parallelize_tool_calls(self, tool_calls: list[ToolCall]) -> bool:
         """Allow safe parallel execution for batches of read-only local tool calls."""
@@ -2836,131 +2275,26 @@ class AgentLoop:
         is_heartbeat: bool = False,
     ) -> list[dict]:
         """Build messages list for LLM."""
-        messages = []
-        
-        # System prompt from identity (include tools)
-        tools_list = self.tools.all_tools() if self.tools else None
-        system_prompt = self.identity.build_system_prompt(
-            tools=tools_list,
-            workspace_path=str(self.workspace)
+        return self._message_builder.build_messages(
+            history,
+            query_hint=query_hint,
+            is_heartbeat=is_heartbeat,
+            heartbeat_metadata=self._current_heartbeat_metadata,
         )
-        messages.append({"role": "system", "content": system_prompt})
-        if is_heartbeat:
-            messages.append({"role": "system", "content": self.HEARTBEAT_ACTION_POLICY})
-            heartbeat_summary = str(self._current_heartbeat_metadata.get("heartbeat_state_summary", "") or "").strip()
-            if not heartbeat_summary:
-                heartbeat_summary = self._heartbeat_state.build_prompt_summary()
-            if heartbeat_summary:
-                messages.append({"role": "system", "content": heartbeat_summary})
-
-        query_text = (query_hint or "").strip()
-        if not query_text:
-            for msg in reversed(history):
-                if msg.role == "user" and msg.content:
-                    query_text = msg.content
-                    break
-        if query_text:
-            try:
-                repo_context = self._context_engine.render_for_prompt(
-                    query=query_text,
-                    max_files=5,
-                    char_budget=3000,
-                )
-                if repo_context:
-                    messages.append({"role": "system", "content": repo_context})
-            except Exception as e:
-                logger.debug(f"Context engine unavailable for this turn: {e}")
-
-        try:
-            memory_context = self.memory.get_context()
-            if memory_context:
-                messages.append({"role": "system", "content": memory_context})
-        except Exception as e:
-            logger.debug(f"Memory context unavailable for this turn: {e}")
-        
-        if history and history[0].role == "system" and history[0].metadata.get("summary") is True:
-            messages.append(history[0].to_dict())
-
-        # Add recent history (limited by CONTEXT_WINDOW only). Do not drop large
-        # tool/document messages here; that can discard the exact instructions the
-        # model needs to finish the task.
-        recent = history[-self.CONTEXT_WINDOW:]
-        
-        for msg in recent:
-            msg_dict = msg.to_dict()
-            # Skip tool messages without tool_call_id (they cause API errors)
-            # This can happen when messages are loaded from storage without metadata
-            if msg.role == "tool" and not msg_dict.get("tool_call_id"):
-                logger.warning(
-                    f"Skipping tool message without tool_call_id: {msg.content[:50]}..."
-                )
-                continue
-            messages.append(msg_dict)
-        
-        return messages
 
     def _record_heartbeat_result(self, response_text: str, mapped_tool_names: list[str], blockers: list[str]) -> None:
-        route = {
-            "channel": self._current_channel,
-            "chat_id": self._current_chat_id,
-        }
-        check_types = list(self._current_heartbeat_metadata.get("heartbeat_check_types") or [])
-        self._heartbeat_state.record_cycle_result(
-            now=datetime.now(UTC_TZ),
+        self._heartbeat_reporter.record_result(
             response_text=response_text,
-            tool_names=list(mapped_tool_names),
-            route=route,
-            check_types=check_types,
-            blockers=list(blockers),
+            channel=self._current_channel,
+            chat_id=self._current_chat_id,
+            heartbeat_metadata=self._current_heartbeat_metadata,
+            mapped_tool_names=mapped_tool_names,
+            blockers=blockers,
         )
     
     def _trim_history(self, history: list[Message]) -> None:
         """Trim history to prevent unbounded growth."""
-        if len(history) > self.MAX_HISTORY:
-            overflow = len(history) - self.MAX_HISTORY + 1
-            dropped = history[:overflow]
-            summary_lines = []
-            for msg in dropped:
-                if msg.role in {"user", "assistant"}:
-                    excerpt = (msg.content or "").strip().replace("\n", " ")
-                    if excerpt:
-                        summary_lines.append(f"{msg.role}: {excerpt[:180]}")
-            if summary_lines:
-                summary_text = "Conversation summary (compressed):\n" + "\n".join(summary_lines[-20:])
-                summary_msg = Message(role="system", content=summary_text, metadata={"summary": True})
-                history[:] = [summary_msg] + history[overflow:]
-            else:
-                del history[:-self.MAX_HISTORY]
-            logger.debug(f"Trimmed history to {len(history)} messages")
-
-    def _format_tool_call_details(self, tool_call: ToolCall) -> str:
-        """Render a compact approval summary safe for user-facing channels."""
-        try:
-            args = json.dumps(tool_call.arguments or {}, indent=2, ensure_ascii=True, sort_keys=True)
-        except Exception:
-            args = str(tool_call.arguments or {})
-        return f"Tool: {tool_call.name}\nArguments:\n{args}"
-
-    def _build_confirmation_outbound_metadata(self, token: str, tool_call: ToolCall, reason: str) -> dict:
-        details = self._format_tool_call_details(tool_call)
-        return {
-            "telegram_buttons": [
-                [
-                    {"text": "Approve", "callback_data": f"approval:approve:{token}"},
-                    {"text": "Reject", "callback_data": f"approval:reject:{token}"},
-                ],
-                [
-                    {"text": "Show details", "callback_data": f"approval:details:{token}"},
-                ],
-            ],
-            "telegram_pending_approval": {
-                "token": token,
-                "tool_name": tool_call.name,
-                "reason": reason,
-                "arguments": dict(tool_call.arguments or {}),
-                "details": details,
-            },
-        }
+        self._history_trimmer.trim(history)
 
     async def _maybe_handle_confirmation_reply(
         self,
@@ -2969,157 +2303,35 @@ class AgentLoop:
         user_message: str,
         history: list[Message],
     ) -> Optional[str]:
-        pending = self._pending_confirmations.get(convo_key)
-        if not pending:
-            return None
+        async def _execute(tc: ToolCall):
+            return await self._execute_tool(tc, approved=True)
 
-        text = user_message.strip().lower()
-        if text in {"cancel", "cancel it", "abort"}:
-            self._pending_confirmations.pop(convo_key, None)
-            return "Cancelled the pending action."
+        def _append(rendered: str, tc: ToolCall) -> None:
+            history.append(Message(role="tool", content=rendered, metadata={"tool_name": tc.name, "tool_call_id": tc.id}))
+            self._queue_persist(session_id, "tool", rendered)
 
-        m = re.match(r"confirm\s+(\d{4,8})$", text)
-        if not m:
-            return None
-
-        token = m.group(1)
-        if token != pending.get("token"):
-            return "Confirmation token does not match the pending action."
-
-        tc: ToolCall = pending["tool_call"]
-        result = await self._execute_tool(tc, approved=True)
-        rendered = self._render_tool_result(result)
-        history.append(Message(role="tool", content=rendered, metadata={"tool_name": tc.name, "tool_call_id": tc.id}))
-        self._queue_persist(session_id, "tool", rendered)
-        self._pending_confirmations.pop(convo_key, None)
-
-        if result.success:
-            return f"Confirmed and executed `{tc.name}`.\n\n{result.output}"
-        return f"Confirmed but `{tc.name}` failed: {result.error or result.output}"
-
-    def _is_destructive_tool_call(self, tool_call: ToolCall) -> bool:
-        """Heuristic risk gate for destructive tool actions."""
-        name = (tool_call.name or "").lower()
-        args = tool_call.arguments or {}
-        if name in {"write_file", "edit_file", "apply_patch"}:
-            path = str(args.get("path", "")).lower()
-            if any(path.endswith(x) for x in (".env", "config.yaml", "config.yml", "pyproject.toml")):
-                return True
-            return False
-
-        if name != "shell":
-            return False
-
-        cmd = str(args.get("command", "")).strip().lower()
-        if not cmd:
-            return False
-        destructive_patterns = (
-            " rm ",
-            " rm-",
-            " rm\t",
-            "rm -",
-            "mv ",
-            "chmod ",
-            "chown ",
-            "git reset",
-            "git clean",
-            "dd ",
-            "mkfs",
+        return await self._approval_service.maybe_handle_confirmation_reply(
+            convo_key=convo_key,
+            user_message=user_message,
+            execute_tool=_execute,
+            render_tool_result=self._render_tool_result,
+            append_tool_message=_append,
         )
-        return any(pat in f" {cmd}" for pat in destructive_patterns)
 
     def _requires_confirmation(self, tool_call: ToolCall) -> str:
         """Return a non-empty reason if the tool call should require explicit user confirmation."""
-        mode = self._runtime_policy.infer_mode(tool_call.name, tool_call.arguments or {})
-        decision = self._runtime_policy.authorize(mode, approved=False)
-        if not decision.allowed and "requires explicit approval" in decision.reason.lower():
-            return f"Policy requires approval for {mode} action"
-        if self._is_destructive_tool_call(tool_call):
-            return "Destructive action blocked by default"
-        return ""
+        return self._runtime_policy.confirmation_reason(tool_call.name, tool_call.arguments or {}, approved=False)
 
     async def _publish_outbound_with_retry(self, response: "OutboundMessage") -> bool:
         """Publish outbound messages with bounded retries and structured failure telemetry."""
-        if self._should_suppress_outbound(response):
-            logger.info(
-                f"Suppressed low-value heartbeat outbound for {response.channel}/{response.chat_id}"
-            )
-            get_metrics().inc_heartbeat_acks_suppressed()
-            return True
-
-        retries = max(0, int(self.runtime_config.outbound_publish_retries))
-        backoff = max(0.0, float(self.runtime_config.outbound_publish_backoff_seconds))
-        attempts = retries + 1
-        for attempt in range(1, attempts + 1):
-            try:
-                await self.bus.publish_outbound(response)
-                if bool((response.metadata or {}).get("heartbeat")) and response.channel != "scheduler":
-                    self._heartbeat_state.record_outreach(
-                        now=datetime.now(UTC_TZ),
-                        response_text=response.content,
-                    )
-                return True
-            except Exception as e:
-                failure = classify_error_text(str(e))
-                logger.error(
-                    f"Failed to publish outbound response (attempt {attempt}/{attempts}, code={failure.code}): {e}"
-                )
-                self._emit_runtime_event(
-                    EVENT_CHANNEL_FAILED,
-                    session_id=self._session_id or "session",
-                    payload={
-                        "channel": getattr(response, "channel", ""),
-                        "chat_id": getattr(response, "chat_id", ""),
-                        "attempt": attempt,
-                        "error": str(e),
-                        **failure_payload(failure),
-                    },
-                )
-                if attempt >= attempts:
-                    return False
-                if backoff > 0:
-                    await asyncio.sleep(backoff * attempt)
-        return False
+        return await self._outbound_publisher.publish(
+            response,
+            session_id=self._session_id or "session",
+        )
 
     def _should_suppress_outbound(self, response: "OutboundMessage") -> bool:
-        """Suppress trivial heartbeat acknowledgements."""
-        metadata = getattr(response, "metadata", {}) or {}
-        if not bool(metadata.get("heartbeat")):
-            return False
-
-        text = (getattr(response, "content", "") or "").strip()
-        if not text:
-            return True
-        ack_max_chars = int(metadata.get("ack_max_chars", 24) or 24)
-        if text == "HEARTBEAT_OK":
-            return True
-        if text.startswith("HEARTBEAT_ACTION_TAKEN"):
-            detail = text.partition(" - ")[2].strip()
-            if metadata.get("publish_heartbeat_action") is True:
-                return False
-            if not detail:
-                return True
-            generic_prefixes = (
-                "completed actions using:",
-                "completed `",
-                "completed ",
-                "finished ",
-                "done.",
-            )
-            lowered_detail = detail.lower()
-            if lowered_detail.startswith(generic_prefixes):
-                return True
-            if len(detail) <= ack_max_chars and "\n" not in detail:
-                return True
-            return False
-
-        # Short single-line heartbeat acknowledgements are low signal.
-        if len(text) <= ack_max_chars and "\n" not in text:
-            return True
-        lowered = text.lower()
-        if "temporarily unavailable" in lowered or "repeated failures" in lowered:
-            return True
-        return False
+        """Suppress only empty heartbeat outputs and scheduler-only noise."""
+        return self._response_policy.should_suppress_outbound(response)
     
     def clear_history(self) -> None:
         """Clear all history."""

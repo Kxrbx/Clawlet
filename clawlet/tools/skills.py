@@ -1,31 +1,39 @@
-"""
-Skill management tools.
-"""
+"""Skill management tools."""
 
-import asyncio
-import re
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
 
-from loguru import logger
-
+from clawlet.cli.runtime_paths import get_default_workspace_path
+from clawlet.skills.installer import SkillInstallerService
 from clawlet.tools.registry import BaseTool, ToolResult
+from clawlet.workspace_layout import WorkspaceLayout, get_workspace_layout
+
+
+def _workspace_layout_from_kwargs(kwargs: dict) -> WorkspaceLayout:
+    workspace_path = kwargs.get("_workspace_path") or get_default_workspace_path()
+    layout = get_workspace_layout(workspace_path)
+    layout.ensure_directories()
+    return layout
 
 
 class InstallSkillTool(BaseTool):
-    """Tool to install a skill from a GitHub URL."""
-    
+    """Tool to install a skill from a GitHub repository root URL."""
+
     def __init__(self, skill_registry=None):
         self._skill_registry = skill_registry
-    
+
     @property
     def name(self) -> str:
         return "install_skill"
-    
+
     @property
     def description(self) -> str:
-        return "Install a skill from a GitHub URL. Downloads and registers the skill for use."
-    
+        return (
+            "Install a skill from a GitHub repository root URL. "
+            "Rejects repository subpaths and only installs validated skill directories."
+        )
+
     @property
     def parameters_schema(self) -> dict:
         return {
@@ -33,202 +41,84 @@ class InstallSkillTool(BaseTool):
             "properties": {
                 "github_url": {
                     "type": "string",
-                    "description": "GitHub repository URL (e.g., https://github.com/owner/repo)"
+                    "description": "GitHub repository root URL (e.g., https://github.com/owner/repo)",
                 }
             },
-            "required": ["github_url"]
+            "required": ["github_url"],
         }
-    
+
     async def execute(self, github_url: str, **kwargs) -> ToolResult:
-        """Install a skill from GitHub URL."""
-        try:
-            # Validate URL format
-            if not re.match(r'https://github\.com/[^/]+/[^/]+', github_url):
-                if not re.match(r'git@github\.com:[^/]+/[^/]+', github_url):
-                    return ToolResult(
-                        success=False,
-                        output="",
-                        error=f"Invalid GitHub URL format: {github_url}"
-                    )
-            
-            # Parse owner/repo from URL
-            match = re.match(r'https://github\.com/([^/]+)/([^/]+)', github_url)
-            if not match:
-                match = re.match(r'git@github\.com:([^/]+)/([^/]+)', github_url)
-            
-            if not match:
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Could not parse owner/repo from URL: {github_url}"
-                )
-            
-            owner, repo = match.groups()
-            repo = repo.replace('.git', '')
-            
-            # Determine target directory
-            user_skills_dir = Path.home() / ".clawlet" / "skills"
-            target_dir = user_skills_dir / repo
-            
-            if target_dir.exists():
-                return ToolResult(
-                    success=True,
-                    output=f"Skill '{repo}' already installed at {target_dir}",
-                    data={"path": str(target_dir), "skill_name": repo}
-                )
-            
-            # Create skills directory if needed
-            user_skills_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Clone the repository
-            logger.info(f"Cloning {github_url} to {target_dir}")
-            
-            proc = await asyncio.create_subprocess_exec(
-                "git", "clone", "--depth", "1", github_url, str(target_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error="Git clone timed out (120s limit)"
-                )
-            
-            if proc.returncode != 0:
-                stderr_text = stderr.decode("utf-8", errors="replace")
-                logger.error(f"Git clone failed: {stderr_text}")
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Failed to clone repository: {stderr_text}"
-                )
-            
-            # Check if SKILL.md exists
-            skill_md = target_dir / "SKILL.md"
-            if not skill_md.exists():
-                return ToolResult(
-                    success=True,
-                    output=f"Cloned {repo} to {target_dir}, but no SKILL.md found. Please ensure the repository contains a valid SKILL.md file.",
-                    data={"path": str(target_dir), "skill_name": repo}
-                )
-            
-            # Read skill metadata
-            skill_content = skill_md.read_text(encoding="utf-8")
-            
-            # Try to parse skill name from frontmatter
-            skill_name = repo
-            import yaml
-            try:
-                if skill_content.startswith('---'):
-                    frontmatter_end = skill_content.find('---', 3)
-                    if frontmatter_end > 0:
-                        frontmatter = skill_content[3:frontmatter_end]
-                        metadata = yaml.safe_load(frontmatter)
-                        if metadata and 'name' in metadata:
-                            skill_name = metadata['name']
-            except Exception:
-                pass
-            
-            return ToolResult(
-                success=True,
-                output=f"Successfully installed skill '{skill_name}' from {github_url}",
-                data={
-                    "path": str(target_dir),
-                    "skill_name": skill_name,
-                    "github_url": github_url
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to install skill: {e}")
-            return ToolResult(
-                success=False,
-                output="",
-                error=str(e)
-            )
+        layout = _workspace_layout_from_kwargs(kwargs)
+        installer = SkillInstallerService(layout)
+        result = await installer.install_from_github(github_url)
+        if not result.success:
+            return ToolResult(success=False, output="", error=result.message)
+        return ToolResult(
+            success=True,
+            output=result.message,
+            data={"path": result.path, "skill_name": result.skill_name, "github_url": result.github_url},
+        )
 
 
 class ListSkillsTool(BaseTool):
     """Tool to list installed skills."""
-    
+
     def __init__(self, skill_registry=None):
         self._skill_registry = skill_registry
-    
+
     @property
     def name(self) -> str:
         return "list_skills"
-    
+
     @property
     def description(self) -> str:
-        return "List all installed skills."
-    
+        return "List all validated installed skills."
+
     @property
     def parameters_schema(self) -> dict:
-        return {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    
+        return {"type": "object", "properties": {}, "required": []}
+
     async def execute(self, **kwargs) -> ToolResult:
-        """List all installed skills."""
         try:
-            # Check user skills directory
-            user_skills_dir = Path.home() / ".clawlet" / "skills"
-            
-            if not user_skills_dir.exists():
-                return ToolResult(
-                    success=True,
-                    output="No user skills installed",
-                    data={"skills": []}
-                )
-            
+            layout = _workspace_layout_from_kwargs(kwargs)
+            installed_dir = layout.installed_skills_dir
+            if not installed_dir.exists():
+                return ToolResult(success=True, output="No installed skills", data={"skills": []})
+
             skills = []
-            for item in user_skills_dir.iterdir():
-                if item.is_dir():
-                    skill_md = item / "SKILL.md"
-                    if skill_md.exists():
-                        skills.append({
-                            "name": item.name,
-                            "path": str(item),
-                            "has_skill_md": True
-                        })
-                    else:
-                        skills.append({
-                            "name": item.name,
-                            "path": str(item),
-                            "has_skill_md": False
-                        })
-            
+            for item in sorted(installed_dir.iterdir()):
+                if not item.is_dir():
+                    continue
+                skill_md = item / "SKILL.md"
+                if not skill_md.exists():
+                    continue
+                metadata_path = item / SKILL_METADATA_FILENAME
+                source = {}
+                if metadata_path.exists():
+                    try:
+                        source = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        source = {}
+                skills.append(
+                    {
+                        "name": _skill_name_from_dir(item),
+                        "slug": item.name,
+                        "path": str(item),
+                        "github_url": str(source.get("github_url", "") or ""),
+                    }
+                )
+
             if not skills:
                 return ToolResult(
                     success=True,
-                    output="No skills found in ~/.clawlet/skills/",
-                    data={"skills": []}
+                    output=f"No skills found in {installed_dir}",
+                    data={"skills": []},
                 )
-            
+
             output_lines = [f"Installed skills ({len(skills)}):"]
             for skill in skills:
-                status = "✓" if skill["has_skill_md"] else "?"
-                output_lines.append(f"  {status} {skill['name']}")
-            
-            return ToolResult(
-                success=True,
-                output="\n".join(output_lines),
-                data={"skills": skills}
-            )
-            
+                suffix = f" - {skill['github_url']}" if skill["github_url"] else ""
+                output_lines.append(f"  ✓ {skill['slug']}{suffix}")
+            return ToolResult(success=True, output="\n".join(output_lines), data={"skills": skills})
         except Exception as e:
-            return ToolResult(
-                success=False,
-                output="",
-                error=str(e)
-            )
+            return ToolResult(success=False, output="", error=str(e))

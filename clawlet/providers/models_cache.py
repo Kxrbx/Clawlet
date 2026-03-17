@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 import httpx
 from loguru import logger
+from clawlet.cli.runtime_paths import get_default_workspace_path
 
-CACHE_FILE = Path.home() / ".clawlet" / "models_cache.json"
+CACHE_FILE = get_default_workspace_path() / "models_cache.json"
 CACHE_DURATION = timedelta(days=1)
 
 

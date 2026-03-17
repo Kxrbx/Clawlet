@@ -14,6 +14,7 @@ Available tools:
 """
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clawlet.tools.registry import (
     BaseTool,
@@ -33,7 +34,15 @@ from clawlet.tools.http_request import HttpRequestTool
 from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
-from clawlet.skills.registry import SkillRegistry
+from clawlet.tools.assembly import (
+    register_file_and_shell_tools,
+    register_memory_tools,
+    register_network_tools,
+    register_plugin_tools,
+    register_skill_tools,
+)
+if TYPE_CHECKING:
+    from clawlet.skills.registry import SkillRegistry
 
 
 FULL_EXEC_COMMANDS = [
@@ -65,7 +74,12 @@ class FileTool:
         """Get all file tools."""
         return [self.read, self.write, self.edit, self.patch, self.list]
 
-def create_default_tool_registry(allowed_dir: str = None, config=None, memory_manager=None, skill_registry: SkillRegistry = None) -> ToolRegistry:
+def create_default_tool_registry(
+    allowed_dir: str = None,
+    config=None,
+    memory_manager=None,
+    skill_registry: "SkillRegistry" = None,
+) -> ToolRegistry:
     """Create a default tool registry with all standard tools.
     
     Args:
@@ -74,110 +88,12 @@ def create_default_tool_registry(allowed_dir: str = None, config=None, memory_ma
         memory_manager: Optional MemoryManager instance for memory tools
         skill_registry: Optional SkillRegistry to register skill tools with
     """
-    import logging
-    logger = logging.getLogger("clawlet")
-    
     registry = ToolRegistry()
-    
-    agent_mode = getattr(getattr(config, "agent", None), "mode", "safe") if config is not None else "safe"
-    allow_dangerous = bool(getattr(getattr(config, "agent", None), "shell_allow_dangerous", False)) if config is not None else False
-    file_allowed_dir = allowed_dir
-    effective_allowed_dir = None if agent_mode == "full_exec" else allowed_dir
-
-    # Add file tools
-    use_rust_core = False
-
-    # Keep file operations anchored to the workspace even in full_exec so
-    # relative paths like HEARTBEAT.md resolve where the agent expects.
-    file_tool = FileTool(allowed_dir=file_allowed_dir, use_rust_core=use_rust_core)
-    for tool in file_tool.tools:
-        registry.register(tool)
-    
-    # Add shell tool (uses 'workspace' parameter, not 'allowed_dir')
-    shell_workspace = effective_allowed_dir
-    shell_tool = ShellTool(
-        workspace=shell_workspace,
-        allow_dangerous=allow_dangerous,
-        use_rust_core=use_rust_core,
-    )
-    if agent_mode == "full_exec":
-        shell_tool.add_allowed(*FULL_EXEC_COMMANDS)
-        logger.warning("Agent mode is full_exec: expanded shell command capabilities enabled")
-    registry.register(shell_tool)
-
-    # Add direct URL fetch tool
-    registry.register(FetchUrlTool())
-    auth_profiles = {}
-    if config is not None:
-        raw_profiles = getattr(config, "http_auth_profiles", {}) or {}
-        for name, profile in raw_profiles.items():
-            if hasattr(profile, "model_dump"):
-                auth_profiles[str(name)] = profile.model_dump(mode="python")
-            else:
-                auth_profiles[str(name)] = dict(profile or {})
-    registry.register(HttpRequestTool(workspace=file_allowed_dir, auth_profiles=auth_profiles))
-
-    # Add web search tool (uses Brave Search API)
-    # Get API key from config, or check both WEB_SEARCH_API_KEY and BRAVE_SEARCH_API_KEY env vars
-    import os
-    api_key = None
-    web_search_cfg = getattr(config, "web_search", None) if config is not None else None
-    if web_search_cfg:
-        api_key = web_search_cfg.api_key or os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
-    else:
-        api_key = os.environ.get("WEB_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
-    
-    if not api_key:
-        logger.warning("WebSearchTool: No API key found. Set WEB_SEARCH_API_KEY or BRAVE_SEARCH_API_KEY environment variable.")
-    
-    registry.register(WebSearchTool(api_key=api_key))
-    registry.register_alias("search_web", "web_search")
-    registry.register_alias("websearch", "web_search")
-    registry.register_alias("brave_search", "web_search")
-    
-    # Add skill management tools
-    registry.register(InstallSkillTool())
-    registry.register(ListSkillsTool())
-    
-    # Add memory tools if memory_manager is provided
-    if memory_manager is not None:
-        memory_tools = MemoryTools(memory_manager)
-        for tool in memory_tools.all_tools():
-            registry.register(tool)
-        registry.register_alias("recall_memory", "recall")
-        registry.register_alias("search_memories", "search_memory")
-        registry.register_alias("recent_memory", "recent_memories")
-        registry.register_alias("daily_notes", "review_daily_notes")
-        registry.register_alias("memory_maintenance", "curate_memory")
-        registry.register_alias("memory_overview", "memory_status")
-        logger.info(f"Registered {len(memory_tools.all_tools())} memory tools")
-    
-    # Register skill tools if skill_registry is provided
-    if skill_registry is not None:
-        # Set the tool registry on the skill registry
-        skill_registry._tool_registry = registry
-        # Register all skill tools
-        registered_count = skill_registry.register_tools_with_registry()
-        logger.info(f"Registered {registered_count} skill tools from SkillRegistry")
-
-    # Load plugin tools (stable SDK v2)
-    plugin_cfg = getattr(config, "plugins", None) if config is not None else None
-    if plugin_cfg and plugin_cfg.auto_load:
-        base_dir = Path(allowed_dir).expanduser() if allowed_dir else Path.cwd()
-        plugin_dirs = []
-        for raw_dir in plugin_cfg.directories:
-            candidate = Path(raw_dir).expanduser()
-            if not candidate.is_absolute():
-                candidate = base_dir / candidate
-            plugin_dirs.append(candidate)
-        from clawlet.plugins.loader import PluginLoader
-        loader = PluginLoader(plugin_dirs)
-        plugin_tools = loader.load_tools()
-        for tool in plugin_tools:
-            registry.register(tool)
-        if plugin_tools:
-            logger.info(f"Registered {len(plugin_tools)} plugin tool(s)")
-    
+    register_file_and_shell_tools(registry, allowed_dir=allowed_dir, config=config)
+    register_network_tools(registry, allowed_dir=allowed_dir, config=config)
+    register_skill_tools(registry, skill_registry=skill_registry)
+    register_memory_tools(registry, memory_manager=memory_manager)
+    register_plugin_tools(registry, allowed_dir=allowed_dir, config=config)
     return registry
 
 __all__ = [

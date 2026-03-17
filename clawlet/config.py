@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
 from loguru import logger
+from clawlet.cli.runtime_paths import get_default_workspace_path
 
 
 def _validate_api_key_strict(api_key: str, provider_name: str = "") -> str:
@@ -305,7 +306,7 @@ class DiscordConfig(BaseModel):
 
 class SQLiteConfig(BaseModel):
     """SQLite storage configuration."""
-    path: str = "~/.clawlet/clawlet.db"
+    path: str = Field(default_factory=lambda: str(get_default_workspace_path() / "clawlet.db"))
 
 
 class PostgresConfig(BaseModel):
@@ -508,9 +509,9 @@ class SchedulerSettings(BaseModel):
     timezone: str = "UTC"
     max_concurrent: int = Field(default=3, ge=1, le=64)
     check_interval: int = Field(default=60, ge=1, le=3600)
-    state_file: str = "~/.clawlet/scheduler_state.json"
-    jobs_file: str = "~/.clawlet/cron/jobs.json"
-    runs_dir: str = "~/.clawlet/cron/runs"
+    state_file: str = Field(default_factory=lambda: str(get_default_workspace_path() / "scheduler_state.json"))
+    jobs_file: str = Field(default_factory=lambda: str(get_default_workspace_path() / "cron" / "jobs.json"))
+    runs_dir: str = Field(default_factory=lambda: str(get_default_workspace_path() / "cron" / "runs"))
     tasks: dict[str, SchedulerTaskConfig] = Field(default_factory=dict)
 
 
@@ -626,7 +627,7 @@ class PluginSettings(BaseModel):
     """Plugin SDK settings."""
 
     auto_load: bool = True
-    directories: list[str] = Field(default_factory=lambda: ["~/.clawlet/plugins"])
+    directories: list[str] = Field(default_factory=lambda: [str(get_default_workspace_path() / "plugins")])
     sdk_version: str = "2.0.0"
 
 
@@ -788,7 +789,7 @@ def load_config(workspace: Optional[Path] = None) -> Config:
     Returns:
         Config object
     """
-    workspace = workspace or Path.home() / ".clawlet"
+    workspace = workspace or get_default_workspace_path()
     config_path = workspace / "config.yaml"
     
     if config_path.exists():
@@ -851,4 +852,4 @@ def load_config(workspace: Optional[Path] = None) -> Config:
 
 def get_default_config_path() -> Path:
     """Get the default config path."""
-    return Path.home() / ".clawlet" / "config.yaml"
+    return get_default_workspace_path() / "config.yaml"

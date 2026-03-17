@@ -7,6 +7,8 @@ import os
 import re
 import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +16,60 @@ import typer
 from loguru import logger
 from rich.console import Console
 
+from clawlet.workspace_layout import get_workspace_layout
+
 console = Console()
+
+
+def _agent_pid_path(workspace: Path) -> Path:
+    return get_workspace_layout(workspace).agent_pid_path
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    proc_stat = Path(f"/proc/{pid}/stat")
+    if proc_stat.exists():
+        try:
+            stat_text = proc_stat.read_text(encoding="utf-8").strip()
+            stat_fields = stat_text.split()
+            if len(stat_fields) >= 3 and stat_fields[2] == "Z":
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _read_agent_pid(workspace: Path) -> Optional[int]:
+    path = _agent_pid_path(workspace)
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+
+def _write_agent_pid(workspace: Path) -> None:
+    path = _agent_pid_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+
+def _remove_agent_pid(workspace: Path) -> None:
+    path = _agent_pid_path(workspace)
+    if not path.exists():
+        return
+    try:
+        recorded = int(path.read_text(encoding="utf-8").strip())
+    except Exception:
+        recorded = None
+    if recorded == os.getpid():
+        path.unlink(missing_ok=True)
 
 
 def _build_effective_heartbeat_context(raw_context: str, hb_cfg) -> str:
@@ -50,7 +105,7 @@ def _build_effective_heartbeat_context(raw_context: str, hb_cfg) -> str:
 
 def _make_heartbeat_context_loader(workspace: Path, hb_cfg):
     """Read HEARTBEAT.md lazily with a small mtime cache instead of reloading full identity."""
-    heartbeat_path = workspace / "HEARTBEAT.md"
+    heartbeat_path = get_workspace_layout(workspace).heartbeat_path
     cache = {"mtime_ns": None, "value": ""}
 
     def _load() -> str:
@@ -80,6 +135,7 @@ def run_agent_command(
     channel: str,
     log_file: Optional[Path],
     log_level: str,
+    daemon: bool,
     get_workspace_path_fn,
     print_sakura_banner_fn,
     sakura_light: str,
@@ -91,6 +147,48 @@ def run_agent_command(
         console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
         raise typer.Exit(1)
 
+    existing_pid = _read_agent_pid(workspace_path)
+    if existing_pid and _pid_is_running(existing_pid):
+        console.print(f"[red]Error: Agent already running with PID {existing_pid}[/red]")
+        raise typer.Exit(1)
+
+    effective_log_file = log_file or (workspace_path / "agent.log")
+
+    if daemon and os.environ.get("CLAWLET_AGENT_DAEMON_CHILD") != "1":
+        cmd = [
+            sys.executable,
+            "-m",
+            "clawlet",
+            "agent",
+            "--workspace",
+            str(workspace_path),
+            "--channel",
+            channel,
+            "--log-level",
+            log_level,
+            "--log-file",
+            str(effective_log_file),
+        ]
+        if model:
+            cmd.extend(["--model", model])
+
+        env = os.environ.copy()
+        env["CLAWLET_AGENT_DAEMON_CHILD"] = "1"
+        with open(os.devnull, "wb") as devnull:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(Path(__file__).resolve().parents[2]),
+                env=env,
+                stdin=devnull,
+                stdout=devnull,
+                stderr=devnull,
+                start_new_session=True,
+            )
+        console.print(f"[green]Agent started in background[/green] (PID {proc.pid})")
+        console.print(f"[dim]Log file: {effective_log_file}[/dim]")
+        console.print(f"[dim]PID file: {_agent_pid_path(workspace_path)}[/dim]")
+        return
+
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         logger.add(
@@ -101,10 +199,23 @@ def run_agent_command(
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
         )
         logger.info(f"Logging to file: {log_file}")
+    elif daemon:
+        effective_log_file.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(effective_log_file),
+            rotation="10 MB",
+            retention="7 days",
+            level=log_level.upper(),
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+        )
+        logger.info(f"Logging to file: {effective_log_file}")
 
-    print_sakura_banner_fn()
-    console.print(f"\n[{sakura_light}]Starting agent with {channel} channel...[/{sakura_light}]")
-    console.print("[dim]Press Ctrl+C to stop[/dim]")
+    if os.environ.get("CLAWLET_AGENT_DAEMON_CHILD") != "1":
+        print_sakura_banner_fn()
+        console.print(f"\n[{sakura_light}]Starting agent with {channel} channel...[/{sakura_light}]")
+        console.print("[dim]Press Ctrl+C to stop[/dim]")
+
+    _write_agent_pid(workspace_path)
 
     try:
         asyncio.run(run_agent(workspace_path, model, channel))
@@ -113,6 +224,83 @@ def run_agent_command(
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+    finally:
+        _remove_agent_pid(workspace_path)
+
+
+def run_agent_stop_command(workspace: Optional[Path], get_workspace_path_fn, timeout_seconds: float = 10.0) -> None:
+    """Stop a running background agent."""
+    workspace_path = workspace or get_workspace_path_fn()
+    pid = _read_agent_pid(workspace_path)
+    if pid is None:
+        console.print("[yellow]Agent is not running (no PID file found).[/yellow]")
+        return
+    if not _pid_is_running(pid):
+        _agent_pid_path(workspace_path).unlink(missing_ok=True)
+        console.print(f"[yellow]Removed stale agent PID file for PID {pid}.[/yellow]")
+        return
+
+    console.print(f"[dim]Stopping agent PID {pid}...[/dim]")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        console.print(f"[red]Error stopping agent: {e}[/red]")
+        raise typer.Exit(1)
+
+    deadline = time.monotonic() + timeout_seconds
+    while _pid_is_running(pid) and time.monotonic() < deadline:
+        time.sleep(0.2)
+
+    if _pid_is_running(pid):
+        console.print(
+            f"[yellow]Agent PID {pid} did not stop after {timeout_seconds:.0f}s. Sending SIGKILL...[/yellow]"
+        )
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError as e:
+            console.print(f"[red]Error force-stopping agent: {e}[/red]")
+            raise typer.Exit(1)
+
+        kill_deadline = time.monotonic() + 5.0
+        while _pid_is_running(pid) and time.monotonic() < kill_deadline:
+            time.sleep(0.1)
+
+        if _pid_is_running(pid):
+            console.print(f"[red]Agent PID {pid} is still running after SIGKILL.[/red]")
+            raise typer.Exit(1)
+
+        _agent_pid_path(workspace_path).unlink(missing_ok=True)
+        console.print(f"[green]Agent force-stopped[/green] (PID {pid})")
+        return
+
+    _agent_pid_path(workspace_path).unlink(missing_ok=True)
+    console.print(f"[green]Agent stopped[/green] (PID {pid})")
+
+
+def run_agent_restart_command(
+    workspace: Optional[Path],
+    model: Optional[str],
+    channel: str,
+    log_file: Optional[Path],
+    log_level: str,
+    daemon: bool,
+    get_workspace_path_fn,
+    print_sakura_banner_fn,
+    sakura_light: str,
+) -> None:
+    """Restart the agent runtime."""
+    run_agent_stop_command(workspace=workspace, get_workspace_path_fn=get_workspace_path_fn)
+    run_agent_command(
+        workspace=workspace,
+        model=model,
+        channel=channel,
+        log_file=log_file,
+        log_level=log_level,
+        daemon=daemon,
+        get_workspace_path_fn=get_workspace_path_fn,
+        print_sakura_banner_fn=print_sakura_banner_fn,
+        sakura_light=sakura_light,
+    )
 
 
 def run_chat_command(workspace: Optional[Path], model: Optional[str], get_workspace_path_fn) -> None:
@@ -232,6 +420,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
     from clawlet.heartbeat.proactive_queue import ProactiveQueueWorker
     from clawlet.heartbeat import Scheduler, create_task_from_config
     from clawlet.heartbeat.runner import HeartbeatRunner
+    from clawlet.runtime import build_runtime_services
 
     identity_loader = IdentityLoader(workspace)
     identity = identity_loader.load_all()
@@ -240,11 +429,9 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
 
     provider, effective_model = _create_provider(config, model)
 
-    from clawlet.tools import create_default_tool_registry
-    from clawlet.agent.memory import MemoryManager
-
-    memory_manager = MemoryManager(workspace)
-    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config, memory_manager=memory_manager)
+    services = build_runtime_services(workspace, config)
+    memory_manager = services.memory_manager
+    tools = services.tools
     logger.info(f"Created tool registry with {len(tools.all_tools())} tools")
 
     agent = AgentLoop(
@@ -302,6 +489,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             await proactive_worker.on_heartbeat_tick(now)
 
     heartbeat_loader = _make_heartbeat_context_loader(workspace, hb_cfg)
+    workspace_layout = get_workspace_layout(workspace)
 
     if getattr(hb_cfg, "enabled", False):
         heartbeat_runner = HeartbeatRunner(
@@ -313,8 +501,8 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             ack_max_chars=hb_cfg.ack_max_chars,
             route_provider=agent.get_last_route,
             heartbeat_context_provider=heartbeat_loader,
-            state_path=workspace / ".runtime" / "heartbeat_last.json",
-            heartbeat_state_path=workspace / "memory" / "heartbeat-state.json",
+            state_path=workspace_layout.runtime_dir / "heartbeat_last.json",
+            heartbeat_state_path=workspace_layout.heartbeat_state_path,
             on_tick=_heartbeat_tick_hook,
         )
         heartbeat_task = asyncio.create_task(heartbeat_runner.start())
@@ -402,6 +590,8 @@ async def shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_tas
     """Shutdown agent gracefully on signal."""
     logger.info(f"Received signal {signum}, shutting down...")
 
+    agent.stop()
+
     if heartbeat_runner is not None:
         heartbeat_runner.stop()
     if heartbeat_task is not None:
@@ -419,7 +609,6 @@ async def shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_tas
         except Exception as e:
             logger.error(f"Error stopping Telegram channel: {e}")
 
-    agent.stop()
     await agent.close()
     logger.info("Agent shutdown complete")
 
@@ -430,16 +619,15 @@ async def run_chat(workspace: Path, model: Optional[str]) -> None:
     from clawlet.agent.loop import AgentLoop
     from clawlet.bus.queue import InboundMessage, MessageBus
     from clawlet.config import load_config
-    from clawlet.tools import create_default_tool_registry
+    from clawlet.runtime import build_runtime_services
 
     identity = IdentityLoader(workspace).load_all()
     bus = MessageBus()
     config = load_config(workspace)
     provider, effective_model = _create_provider(config, model)
-    from clawlet.agent.memory import MemoryManager
-
-    memory_manager = MemoryManager(workspace)
-    tools = create_default_tool_registry(allowed_dir=str(workspace), config=config, memory_manager=memory_manager)
+    services = build_runtime_services(workspace, config)
+    memory_manager = services.memory_manager
+    tools = services.tools
 
     agent = AgentLoop(
         bus=bus,
@@ -464,8 +652,8 @@ async def run_chat(workspace: Path, model: Optional[str]) -> None:
                 break
             await bus.publish_inbound(InboundMessage(channel="cli", chat_id="local", content=user_text))
             while True:
-                out = await bus.consume_outbound()
-                if out.channel == "cli" and out.chat_id == "local":
+                out = await bus.consume_outbound_for("cli")
+                if out.chat_id == "local":
                     console.print(f"Clawlet> {out.content}")
                     break
     finally:

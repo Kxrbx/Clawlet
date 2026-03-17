@@ -21,6 +21,7 @@ from loguru import logger
 from clawlet.config import Config, load_config
 from clawlet.agent.identity import Identity, IdentityLoader
 from clawlet.agent.router import AgentConfig
+from clawlet.workspace_layout import get_workspace_layout
 
 if TYPE_CHECKING:
     from clawlet.agent.loop import AgentLoop
@@ -111,7 +112,7 @@ class Workspace:
     - Separate tool registry
     
     Example:
-        workspace = Workspace("personal", Path("~/.clawlet/workspaces/personal"))
+        workspace = Workspace("personal", Path("./workspaces/personal"))
         await workspace.start(bus, provider)
         # ... use workspace
         await workspace.stop()
@@ -127,6 +128,7 @@ class Workspace:
         """
         self.name = name
         self.path = path.expanduser().resolve()
+        self.layout = get_workspace_layout(self.path)
         
         self.config: Optional[Config] = None
         self.identity: Optional[Identity] = None
@@ -136,27 +138,27 @@ class Workspace:
     @property
     def config_path(self) -> Path:
         """Path to workspace config file."""
-        return self.path / "config.yaml"
+        return self.layout.config_path
     
     @property
     def soul_path(self) -> Path:
         """Path to SOUL.md."""
-        return self.path / "SOUL.md"
+        return self.layout.soul_path
     
     @property
     def user_path(self) -> Path:
         """Path to USER.md."""
-        return self.path / "USER.md"
+        return self.layout.user_path
     
     @property
     def memory_path(self) -> Path:
         """Path to MEMORY.md."""
-        return self.path / "MEMORY.md"
+        return self.layout.memory_markdown_path
     
     @property
     def heartbeat_path(self) -> Path:
         """Path to HEARTBEAT.md."""
-        return self.path / "HEARTBEAT.md"
+        return self.layout.heartbeat_path
     
     @property
     def db_path(self) -> Path:
@@ -222,7 +224,7 @@ class Workspace:
             },
             "skills": {
                 "enabled": True,
-                "directories": ["~/.clawlet/skills", "./skills"],
+                "directories": ["./.skills/installed", "./skills"],
             },
         }
         
@@ -279,10 +281,10 @@ class Workspace:
             # Don't inherit parent config directly - use defaults for workspace
             # This ensures each workspace has isolated configuration
             logger.info(f"Using defaults for workspace '{self.name}' (no config found)")
-            self.config = load_config(Path.home() / ".clawlet")
+            self.config = load_config(self.path)
         else:
             logger.warning(f"No config found for workspace '{self.name}', using defaults")
-            self.config = load_config(Path.home() / ".clawlet")
+            self.config = load_config(self.path)
         
         return self.config
     
@@ -347,38 +349,19 @@ class Workspace:
         
         # Import here to avoid circular imports
         from clawlet.agent.loop import AgentLoop
-        from clawlet.agent.memory import MemoryManager
         from clawlet.tools.registry import ToolRegistry
-        
-        # Create memory manager for this workspace
-        memory_manager = MemoryManager(workspace=self.path)
-        
-        # Create skill registry and load skills
-        from clawlet.skills.registry import SkillRegistry
-        skill_registry = SkillRegistry()
-        
-        # Load bundled skills
-        skill_registry.load_bundled_skills()
-        
-        # Load skill directories from config
-        if self.config and self.config.skills:
-            skill_dirs = self.config.skills.directories
-            for skill_dir in skill_dirs:
-                expanded_dir = Path(skill_dir).expanduser()
-                skill_registry.add_skill_directory(expanded_dir)
+        from clawlet.runtime import build_runtime_services
+
+        services = build_runtime_services(self.path, self.config)
+        memory_manager = services.memory_manager
+        skill_runtime = services.skill_runtime
+        skill_registry = skill_runtime.registry
         
         logger.info(f"Loaded {len(skill_registry.skills)} skills with {len(skill_registry.get_all_tools())} tools")
         
         # Create tool registry if not provided
         if tools is None:
-            from clawlet.tools import create_default_tool_registry
-            
-            tools = create_default_tool_registry(
-                allowed_dir=str(self.path),
-                config=self.config,
-                memory_manager=memory_manager,
-                skill_registry=skill_registry
-            )
+            tools = services.tools
             logger.info(f"Created default tool registry with {len(tools.all_tools())} tools for workspace '{self.name}'")
             logger.debug(f"Registered tools: {[t.name for t in tools.all_tools()]}")
         
@@ -472,7 +455,7 @@ class WorkspaceManager:
     - Listing available workspaces
     
     Example:
-        manager = WorkspaceManager(Path("~/.clawlet/workspaces"))
+        manager = WorkspaceManager(Path("./workspaces"))
         
         # Create a new workspace
         workspace = manager.create_workspace("personal")

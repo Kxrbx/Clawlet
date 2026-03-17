@@ -9,7 +9,7 @@ from pathlib import Path
 
 from clawlet.benchmarks.async_utils import run_async as _run_async
 from clawlet.benchmarks.stats_utils import mean, percentile
-from clawlet.tools import create_default_tool_registry
+from clawlet.runtime import build_runtime_services
 
 
 @dataclass(slots=True)
@@ -28,7 +28,7 @@ class CodingLoopBenchmarkReport:
 def run_coding_loop_benchmark(workspace: Path, iterations: int = 10) -> CodingLoopBenchmarkReport:
     workspace = workspace.resolve()
     iterations = max(1, int(iterations))
-    registry = create_default_tool_registry(allowed_dir=str(workspace))
+    registry = build_runtime_services(workspace).tools
     list_tool = registry.get("list_dir")
     read_tool = registry.get("read_file")
     edit_tool = registry.get("edit_file")
@@ -118,4 +118,3 @@ def write_coding_loop_report(path: Path, report: CodingLoopBenchmarkReport) -> N
     payload = {"report": asdict(report)}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
