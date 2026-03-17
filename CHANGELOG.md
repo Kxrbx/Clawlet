@@ -2,6 +2,21 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.4] - 2026-03-17
+
+### Fixes
+
+- **Recent Conversation Reload**: SQLite-backed conversation reload now restores the most recent messages for a session instead of the oldest slice, preserving recent short-term context after restart.
+- **Conversation Metadata Persistence**: SQLite conversation storage now persists message metadata, allowing compressed summary messages and other structured context markers to survive reloads.
+- **Short-Term Context Pollution Reduction**: Intermediate assistant narration used during tool execution is no longer persisted by default, reducing how quickly short-term context fills with internal chatter.
+- **Summary Continuity Across Trims**: Repeated history compression now carries forward prior summary content instead of silently discarding older compressed context.
+- **Query-Aware Memory Injection**: Prompt memory selection now prioritizes query-relevant and recent high-signal memories instead of injecting a blunt top-importance slice every turn.
+- **Prompt Summary Deduplication**: Provider message assembly no longer duplicates the compressed summary message when it already appears inside the active context window.
+
+### Verification
+
+- **Regression Coverage Expanded**: Added/updated unit coverage for recent-first SQLite reload, metadata round-trip, transient-assistant persistence filtering, query-aware memory injection, summary deduplication, and repeated-trim summary preservation.
+
 ## [0.4.3] - 2026-03-17
 
 ### Fixes

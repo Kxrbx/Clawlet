@@ -517,11 +517,11 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.3 Highlights
-- **Telegram Delivery Reliability**: outbound Telegram failures now surface as structured runtime `ChannelFailed` events and get a bounded retry path instead of disappearing into channel-only logs
-- **Memory Tool Runtime Compatibility**: deterministic tool execution no longer breaks narrow-signature memory tools like `recall` by blindly injecting runtime-only kwargs
-- **Better Delivery Diagnostics**: outbound messages now retain run/session context all the way to channel delivery so missing replies are diagnosable from runtime replay
-- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.3` tree
+### 0.4.4 Highlights
+- **Short-Term Memory Continuity**: recent conversation reload now restores the latest session slice, not the oldest one, so restart behavior matches real chat continuity
+- **Less Context Pollution**: transient assistant narration from tool-heavy turns is no longer persisted by default, which slows short-term context bloat
+- **Smarter Prompt Memory**: memory injected into the model is now query-aware and summary handling avoids duplicated compressed context
+- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.4` tree
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.

@@ -2,7 +2,7 @@
 
 Runtime v2 introduces deterministic tool execution with append-only event logs and replay signatures.
 Clawlet now runs the runtime on the Python execution path by default and in practice.
-Release `0.4.3` also hardens outbound delivery telemetry so Telegram send failures emit structured `ChannelFailed` events, and narrows runtime-only kwarg injection so memory tools with strict signatures continue to execute correctly.
+Release `0.4.4` also improves conversation continuity by restoring recent SQLite-backed session history, persisting summary metadata across reloads, and making prompt memory injection more query-aware.
 
 Recent runtime changes also align the autonomous path around a stricter, quieter autonomous runtime:
 - heartbeat work is stateful and quieter by default

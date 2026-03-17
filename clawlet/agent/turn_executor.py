@@ -498,7 +498,9 @@ class TurnExecutor:
                 ],
             )
         )
-        self.agent._queue_persist(convo.session_id, "assistant", response_content, persist_metadata)
+        transient_metadata = dict(persist_metadata or {})
+        transient_metadata["persist"] = False
+        self.agent._queue_persist(convo.session_id, "assistant", response_content, transient_metadata)
 
         mapped_calls: list[ToolCall] = []
         for tc in tool_calls:

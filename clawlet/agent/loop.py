@@ -727,6 +727,8 @@ class AgentLoop:
             return True
         if not text:
             return True
+        if metadata.get("persist") is False:
+            return True
         if is_heartbeat:
             return True
         if (
@@ -764,9 +766,16 @@ class AgentLoop:
         if self.storage.is_initialized():
             stored_messages = await self.storage.get_messages(session_id, limit=self.MAX_HISTORY)
             for msg in stored_messages:
-                if self._is_low_value_persisted_message(msg.role, msg.content):
+                if self._is_low_value_persisted_message(msg.role, msg.content, getattr(msg, "metadata", {})):
                     continue
-                state.history.append(Message(role=msg.role, content=msg.content, metadata={}, tool_calls=[]))
+                state.history.append(
+                    Message(
+                        role=msg.role,
+                        content=msg.content,
+                        metadata=dict(getattr(msg, "metadata", {}) or {}),
+                        tool_calls=[],
+                    )
+                )
             if stored_messages:
                 logger.info(f"Loaded {len(state.history)} sanitized messages for conversation {key}")
 
@@ -799,7 +808,8 @@ class AgentLoop:
                 await self.storage.store_message(
                     session_id=session_id,
                     role=role,
-                    content=content
+                    content=content,
+                    metadata=metadata or {},
                 )
                 # Reset failure count on success
                 self._persist_failures = 0

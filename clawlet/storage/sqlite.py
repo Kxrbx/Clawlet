@@ -1,8 +1,9 @@
 """Storage backend interfaces and SQLite implementation."""
 
+import json
 import sqlite3
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -18,6 +19,7 @@ class Message:
     role: str
     content: str
     created_at: datetime
+    metadata: dict = field(default_factory=dict)
 
 
 class StorageBackend(ABC):
@@ -29,7 +31,13 @@ class StorageBackend(ABC):
         pass
     
     @abstractmethod
-    async def store_message(self, session_id: str, role: str, content: str) -> int:
+    async def store_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> int:
         """Store a message and return its ID."""
         pass
     
@@ -74,10 +82,12 @@ class SQLiteStorage(StorageBackend):
                 session_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        self._ensure_metadata_column()
         self._db.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_messages_session
@@ -87,14 +97,20 @@ class SQLiteStorage(StorageBackend):
         self._db.commit()
         logger.info(f"SQLite storage initialized at {self.db_path}")
     
-    async def store_message(self, session_id: str, role: str, content: str) -> int:
+    async def store_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> int:
         """Store a message."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
 
         cursor = self._db.execute(
-            "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-            (session_id, role, content),
+            "INSERT INTO messages (session_id, role, content, metadata) VALUES (?, ?, ?, ?)",
+            (session_id, role, content, json.dumps(metadata or {}, ensure_ascii=True, sort_keys=True)),
         )
         self._db.commit()
         return int(cursor.lastrowid)
@@ -106,11 +122,15 @@ class SQLiteStorage(StorageBackend):
 
         cursor = self._db.execute(
             """
-            SELECT id, session_id, role, content, created_at
-            FROM messages
-            WHERE session_id = ?
+            SELECT id, session_id, role, content, metadata, created_at
+            FROM (
+                SELECT id, session_id, role, content, metadata, created_at
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+            )
             ORDER BY created_at ASC, id ASC
-            LIMIT ?
             """,
             (session_id, limit),
         )
@@ -124,7 +144,8 @@ class SQLiteStorage(StorageBackend):
                     session_id=row[1],
                     role=row[2],
                     content=row[3],
-                    created_at=datetime.fromisoformat(row[4]),
+                    created_at=datetime.fromisoformat(row[5]),
+                    metadata=self._decode_metadata(row[4]),
                 )
             )
         return messages
@@ -161,3 +182,25 @@ class SQLiteStorage(StorageBackend):
             self._db.execute("SELECT 1")
         except Exception as e:
             raise RuntimeError(f"DB health check failed: {e}")
+
+    def _ensure_metadata_column(self) -> None:
+        """Backfill metadata storage on older databases."""
+        assert self._db is not None
+        columns = {
+            str(row[1]).lower()
+            for row in self._db.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "metadata" in columns:
+            return
+        self._db.execute("ALTER TABLE messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+        self._db.commit()
+
+    @staticmethod
+    def _decode_metadata(raw: Optional[str]) -> dict:
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except Exception:
+            return {}
+        return value if isinstance(value, dict) else {}
