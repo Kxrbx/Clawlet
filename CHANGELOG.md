@@ -2,6 +2,20 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.5] - 2026-03-18
+
+### Fixes
+
+- **Heartbeat Cadence and State Repair**: heartbeat state now records successful cycles against the actual tick time, blocked runs no longer incorrectly mark checks as completed, and malformed heartbeat summaries no longer get accepted as valid success results.
+- **Moltbook Auth Recovery**: structured HTTP auth now retries alternate Moltbook credential sources on `401`, persists validated bearers locally, and normalizes placeholder-like auth profile values back to the real Moltbook profile.
+- **Heartbeat Tool Call Repair**: Moltbook heartbeat HTTP calls now repair templated `post_id`, `comment_id`, and related placeholders from live context gathered earlier in the same run.
+- **Durable and Episodic Memory Capture**: useful conversational continuity now lands in episodic daily notes by default while explicit durable facts and preferences still promote into curated durable memory.
+- **Notes Capability Implementation**: the notes surface is now backed by a real workspace-local SQLite notes store, with create/list/get/update/delete note tools and reminder persistence instead of placeholder skill failures.
+
+### Verification
+
+- **Regression Coverage Expanded**: added or extended unit coverage for heartbeat timestamping, malformed heartbeat result rejection, Moltbook auth fallback and persistence, live placeholder repair, episodic memory capture, and real notes tool behavior.
+
 ## [0.4.4] - 2026-03-17
 
 ### Fixes

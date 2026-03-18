@@ -2,7 +2,7 @@
 
 Runtime v2 introduces deterministic tool execution with append-only event logs and replay signatures.
 Clawlet now runs the runtime on the Python execution path by default and in practice.
-Release `0.4.4` also improves conversation continuity by restoring recent SQLite-backed session history, persisting summary metadata across reloads, and making prompt memory injection more query-aware.
+Release `0.4.5` also hardens heartbeat execution and runtime continuity by preserving real heartbeat cadence, repairing Moltbook auth fallbacks and templated heartbeat HTTP calls, capturing useful episodic conversation context, and backing notes with a real workspace-local store.
 
 Recent runtime changes also align the autonomous path around a stricter, quieter autonomous runtime:
 - heartbeat work is stateful and quieter by default

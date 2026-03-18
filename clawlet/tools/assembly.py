@@ -11,6 +11,7 @@ from clawlet.tools.patch import ApplyPatchTool
 from clawlet.tools.fetch_url import FetchUrlTool
 from clawlet.tools.http_request import HttpRequestTool
 from clawlet.tools.memory import MemoryTools
+from clawlet.tools.notes import NotesTools
 from clawlet.tools.registry import ToolRegistry
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
@@ -112,6 +113,18 @@ def register_memory_tools(
     registry.register_alias("daily_notes", "review_daily_notes")
     registry.register_alias("memory_maintenance", "curate_memory")
     registry.register_alias("memory_overview", "memory_status")
+
+
+def register_notes_tools(
+    registry: ToolRegistry,
+    *,
+    workspace: str | None,
+) -> None:
+    if not workspace:
+        return
+    notes_tools = NotesTools(workspace)
+    for tool in notes_tools.all_tools():
+        registry.register(tool)
 
 
 def register_plugin_tools(

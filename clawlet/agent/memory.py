@@ -578,8 +578,18 @@ class MemoryManager:
             for memory in self._all_entries()
             if memory.key != "__file__" and not self._is_low_value_memory(memory.value)
         ]
-        all_memories.sort(key=lambda entry: (entry.importance, entry.updated_at), reverse=True)
-        for entry in all_memories:
+        durable_memories = [
+            entry for entry in all_memories
+            if str((entry.metadata or {}).get("scope", "")).strip() != "daily_note"
+        ]
+        episodic_memories = [
+            entry for entry in all_memories
+            if str((entry.metadata or {}).get("scope", "")).strip() == "daily_note"
+        ]
+        durable_memories.sort(key=lambda entry: (entry.importance, entry.updated_at), reverse=True)
+        episodic_memories.sort(key=lambda entry: (entry.updated_at, entry.importance), reverse=True)
+
+        for entry in durable_memories + episodic_memories:
             add(entry)
             if len(selected) >= max_entries:
                 break
