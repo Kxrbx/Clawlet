@@ -20,8 +20,16 @@ class WorkspaceLayout:
         return self.root / "memory"
 
     @property
+    def notes_dir(self) -> Path:
+        return self.root / "notes"
+
+    @property
     def project_dir(self) -> Path:
         return self.root / "workspace"
+
+    @property
+    def notes_db_path(self) -> Path:
+        return self.root / "notes.db"
 
     @property
     def config_path(self) -> Path:
@@ -74,6 +82,7 @@ class WorkspaceLayout:
     def ensure_directories(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.notes_dir.mkdir(parents=True, exist_ok=True)
         self.installed_skills_dir.mkdir(parents=True, exist_ok=True)
         self.skill_sources_dir.mkdir(parents=True, exist_ok=True)
 

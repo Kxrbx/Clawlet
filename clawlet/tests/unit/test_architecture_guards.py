@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 
@@ -11,6 +12,7 @@ from clawlet.agent.history_trimmer import HistoryTrimmer
 from clawlet.agent.recovery_checkpoint import RecoveryCheckpointService
 from clawlet.agent.run_lifecycle import RunLifecycle
 from clawlet.agent.run_prelude import RunPrelude
+from clawlet.agent.response_policy import ResponsePolicy
 from clawlet.runtime import build_runtime_services
 from clawlet.runtime.policy import RuntimePolicyEngine
 from clawlet.agent.approval_service import ApprovalService
@@ -126,6 +128,7 @@ def test_runtime_services_assemble_workspace_scoped_memory_skills_and_tools(tmp_
     assert services.tools.get("install_skill") is not None
     assert services.tools.get("list_skills") is not None
     assert services.tools.get("search_memory") is not None
+    assert services.tools.get("notes_create_note") is not None
 
 
 def test_runtime_policy_engine_owns_confirmation_heuristics():
@@ -406,6 +409,52 @@ def test_heartbeat_reporter_records_route_and_check_types():
     assert captured["route"] == {"channel": "telegram", "chat_id": "123"}
     assert captured["check_types"] == ["notifications"]
     assert captured["tool_names"] == ["http_request"]
+
+
+def test_heartbeat_reporter_uses_tick_timestamp_when_present():
+    captured = {}
+
+    class _HeartbeatState:
+        def record_cycle_result(self, **kwargs):
+            captured.update(kwargs)
+
+    reporter = HeartbeatReporter(
+        heartbeat_state=_HeartbeatState(),
+        now_fn=lambda: datetime(2026, 3, 18, 1, 0, tzinfo=timezone.utc),
+    )
+    reporter.record_result(
+        response_text="HEARTBEAT_OK",
+        channel="telegram",
+        chat_id="123",
+        heartbeat_metadata={
+            "heartbeat_check_types": ["notifications"],
+            "heartbeat_tick_at": "2026-03-18T00:26:07.312297+00:00",
+        },
+        mapped_tool_names=["http_request"],
+        blockers=[],
+    )
+
+    assert captured["now"] == datetime(2026, 3, 18, 0, 26, 7, 312297, tzinfo=timezone.utc)
+
+
+def test_response_policy_rejects_unusable_heartbeat_action_summary():
+    policy = ResponsePolicy(
+        continuation_split=__import__("re").compile(r"$^"),
+        looks_like_incomplete_followthrough=lambda text, n: False,
+        sanitize_template_placeholders=lambda text: text,
+        looks_like_blocker_response=lambda text: False,
+    )
+
+    text, is_error = policy.canonicalize_heartbeat_outcome(
+        response_text="HEARTBEAT_ACTION_TAKEN - {",
+        is_error=False,
+        tool_names=["http_request"],
+        blockers=[],
+        action_summaries=["{"],
+    )
+
+    assert is_error is True
+    assert text.startswith("HEARTBEAT_BLOCKED - ")
 
 
 def test_history_trimmer_compresses_overflow_into_summary():

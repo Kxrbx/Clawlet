@@ -327,6 +327,7 @@ class AgentLoop:
         self._persist_tasks: set[asyncio.Task] = set()
         self._active_message_task: Optional[asyncio.Task] = None
         self._active_run_context: Optional[RunContext] = None
+        self._recent_http_context: dict[str, dict] = {}
 
         # Deterministic runtime + replay infrastructure
         self.runtime_config = runtime_config or RuntimeSettings()
@@ -834,32 +835,20 @@ class AgentLoop:
                 logger.error("Too many storage failures, aborting persistence.")
                 raise
         
-        # Save to long-term memory (MEMORY.md) only for memory-worthy messages.
-        if role in ("assistant", "user") and self._should_persist_message_to_memory(role, content):
-            importance = 5
-            if role == "assistant":
-                importance = 7
-            if len(content) > 200:
-                importance += 1
-            keywords = ["important", "remember", "todo", "task", "remind", "note", "save", "key", "critical"]
-            if any(k in content.lower() for k in keywords):
-                importance += 2
-
-            key = f"{role}_{session_id}_{int(datetime.now(UTC_TZ).timestamp())}"
-            try:
-                self.memory.remember(
-                    key=key,
-                    value=content,
-                    category="conversation",
-                    importance=importance,
-                    metadata={
-                        "source": f"{role}:{session_id}",
-                        "role": role,
-                        "session_id": session_id,
-                    },
-                )
-            except Exception as e:
-                logger.warning(f"Failed to save to memory: {e}")
+        if role in ("assistant", "user"):
+            capture = self._memory_capture_plan(role, content, metadata or {})
+            if capture is not None:
+                try:
+                    self.memory.remember(
+                        key=f"{role}_{session_id}_{int(datetime.now(UTC_TZ).timestamp())}",
+                        value=content,
+                        category=capture["category"],
+                        importance=capture["importance"],
+                        metadata=capture["metadata"],
+                        write_daily_note=bool(capture["write_daily_note"]),
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save to memory: {e}")
     
     async def _call_provider_with_retry(self, messages: list[dict], enable_tools: bool = True) -> LLMResponse:
         """Call LLM provider with retry, exponential backoff, and circuit breaker."""
@@ -964,6 +953,7 @@ class AgentLoop:
 
     def _activate_run_context(self, run_ctx: RunContext) -> None:
         self._active_run_context = run_ctx
+        self._recent_http_context = {}
         self._session_id = run_ctx.session_id
         self._current_run_id = run_ctx.run_id
         self._current_channel = run_ctx.channel
@@ -981,6 +971,7 @@ class AgentLoop:
 
     def _clear_run_context(self) -> None:
         self._active_run_context = None
+        self._recent_http_context = {}
         self._current_run_id = ""
         self._current_channel = ""
         self._current_chat_id = ""
@@ -1701,6 +1692,90 @@ class AgentLoop:
         )
         return role == "user" and any(keyword in lowered for keyword in durable_keywords)
 
+    def _should_capture_message_as_episode(
+        self,
+        role: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> bool:
+        """Capture useful continuity into episodic memory without promoting it to curated durable memory."""
+        metadata = metadata or {}
+        if self._is_low_value_persisted_message(role, content, metadata):
+            return False
+
+        lowered = (content or "").strip().lower()
+        if len(lowered) < 18:
+            return False
+        if self.memory._is_low_value_memory(lowered):
+            return False
+
+        if role == "user":
+            return True
+
+        assistant_outcome_markers = (
+            "i've prepared",
+            "i have prepared",
+            "i've created",
+            "i have created",
+            "i updated",
+            "i've updated",
+            "i attempted",
+            "i found",
+            "i checked",
+            "here's",
+            "here is",
+            "the draft",
+            "the post",
+            "the latest",
+            "status:",
+        )
+        return len(lowered) >= 40 and any(marker in lowered for marker in assistant_outcome_markers)
+
+    def _memory_capture_plan(
+        self,
+        role: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> Optional[dict[str, object]]:
+        """Return the memory capture strategy for a persisted conversation message."""
+        metadata = dict(metadata or {})
+        if not content or self._is_low_value_persisted_message(role, content, metadata):
+            return None
+
+        importance = 5
+        lowered = content.lower()
+        if len(content) > 200:
+            importance += 1
+        if role == "assistant":
+            importance += 1
+        keywords = ("important", "remember", "todo", "task", "remind", "note", "save", "key", "critical")
+        if any(keyword in lowered for keyword in keywords):
+            importance += 2
+
+        durable = self._should_persist_message_to_memory(role, content)
+        episodic = self._should_capture_message_as_episode(role, content, metadata)
+        if not durable and not episodic:
+            return None
+
+        memory_metadata = {
+            "source": f"{role}:{metadata.get('session_id') or metadata.get('_session_id') or ''}".rstrip(":"),
+            "role": role,
+            "session_id": metadata.get("session_id") or metadata.get("_session_id") or "",
+            "curated": durable,
+        }
+        if durable:
+            memory_metadata["scope"] = "durable"
+        else:
+            memory_metadata["scope"] = "daily_note"
+            importance = min(importance, 6)
+
+        return {
+            "category": "conversation",
+            "importance": max(1, min(int(importance), 10)),
+            "metadata": memory_metadata,
+            "write_daily_note": episodic,
+        }
+
     def _extract_explicit_urls(self, user_message: str) -> list[str]:
         """Extract normalized explicit URLs from user message."""
         urls: list[str] = []
@@ -2098,6 +2173,8 @@ class AgentLoop:
             # Reset failure count on success
             if failure_key in self._tool_failures:
                 self._tool_failures[failure_key] = 0
+            if tool_name == "http_request":
+                self._remember_http_request_context(args, result)
             logger.info(f"Tool {tool_name} succeeded: {result.output[:100]}...")
             await self._publish_progress_update("tool_completed", f"Completed `{tool_name}`.", detail=tool_name)
         else:
@@ -2143,6 +2220,127 @@ class AgentLoop:
         path = parsed.path or "/"
         return f"{tool_name}:{method}:{host}{path}"
 
+    def _remember_http_request_context(self, args: dict, result: ToolResult) -> None:
+        if not result.success:
+            return
+        url = str(args.get("url", "") or "").strip()
+        if not url:
+            return
+        parsed = urlparse(url)
+        if (parsed.hostname or "").lower() != "www.moltbook.com":
+            return
+
+        bucket = self._recent_http_context.setdefault("moltbook", {})
+        path = parsed.path or "/"
+
+        def _remember(key: str, value) -> None:
+            if isinstance(value, str) and value.strip():
+                bucket[key] = value.strip()
+
+        match = re.search(r"/posts/([^/]+)", path)
+        if match:
+            _remember("last_post_id", match.group(1))
+
+        try:
+            payload = json.loads(result.output or "{}")
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+
+        _remember("last_post_id", payload.get("post_id"))
+        _remember("last_comment_id", payload.get("comment_id"))
+        _remember("last_content_id", payload.get("content_id"))
+        _remember("last_molty_name", payload.get("molty_name"))
+
+        post = payload.get("post")
+        if isinstance(post, dict):
+            _remember("last_post_id", post.get("id"))
+
+        activities = payload.get("activity_on_your_posts")
+        if isinstance(activities, list):
+            for activity in activities:
+                if not isinstance(activity, dict):
+                    continue
+                _remember("last_post_id", activity.get("post_id"))
+                commenters = activity.get("latest_commenters")
+                if isinstance(commenters, list):
+                    for commenter in commenters:
+                        if isinstance(commenter, str) and commenter.strip():
+                            _remember("last_molty_name", commenter)
+                            break
+                break
+
+        comments = payload.get("comments")
+        if isinstance(comments, list):
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+                _remember("last_comment_id", comment.get("id"))
+                _remember("last_post_id", comment.get("post_id"))
+                author = comment.get("author")
+                if isinstance(author, dict):
+                    _remember("last_molty_name", author.get("name"))
+                break
+
+    def _repair_moltbook_http_request(self, repaired: dict) -> bool:
+        changed = False
+        bucket = self._recent_http_context.get("moltbook", {})
+
+        auth_profile = repaired.get("auth_profile")
+        if isinstance(auth_profile, str):
+            lowered = auth_profile.strip().lower()
+            if lowered in {"moltbook_api_key", "moltbook-key", "moltbook_token"}:
+                repaired["auth_profile"] = "moltbook"
+                changed = True
+            elif self._contains_placeholder_artifacts(auth_profile):
+                repaired["auth_profile"] = "moltbook"
+                changed = True
+
+        url = str(repaired.get("url", "") or "")
+        if url:
+            replacements = {
+                ":postId": bucket.get("last_post_id"),
+                ":post_id": bucket.get("last_post_id"),
+                "POST_ID": bucket.get("last_post_id"),
+                "/:id": f"/{bucket['last_post_id']}" if bucket.get("last_post_id") else None,
+                ":commentId": bucket.get("last_comment_id"),
+                ":comment_id": bucket.get("last_comment_id"),
+                "COMMENT_ID": bucket.get("last_comment_id"),
+                "MOLTY_NAME": bucket.get("last_molty_name"),
+            }
+            fixed_url = url
+            for needle, replacement in replacements.items():
+                if replacement and needle in fixed_url:
+                    fixed_url = fixed_url.replace(needle, replacement)
+            if fixed_url != url:
+                repaired["url"] = fixed_url
+                changed = True
+
+        body = repaired.get("json_body")
+        if isinstance(body, dict):
+            field_replacements = {
+                "postId": bucket.get("last_post_id"),
+                "post_id": bucket.get("last_post_id"),
+                "parentId": bucket.get("last_comment_id"),
+                "parent_id": bucket.get("last_comment_id"),
+                "commentId": bucket.get("last_comment_id"),
+                "comment_id": bucket.get("last_comment_id"),
+                "molty": bucket.get("last_molty_name"),
+                "molty_name": bucket.get("last_molty_name"),
+            }
+            for key, replacement in field_replacements.items():
+                value = body.get(key)
+                if (
+                    replacement
+                    and isinstance(value, str)
+                    and (self._contains_placeholder_artifacts(value) or value in {"POST_ID", "COMMENT_ID", "MOLTY_NAME"})
+                ):
+                    body[key] = replacement
+                    changed = True
+
+        return changed
+
     def _repair_templated_tool_args(self, tool_name: str, args: dict) -> Optional[dict]:
         if not self._tool_args_contain_template_placeholders(tool_name, args):
             return None
@@ -2157,6 +2355,11 @@ class AgentLoop:
             if auth_value and self._contains_placeholder_artifacts(auth_value):
                 headers.pop("Authorization", None)
                 changed = True
+
+        url = str(repaired.get("url", "") or "")
+        parsed = urlparse(url)
+        if (parsed.hostname or "").lower() == "www.moltbook.com":
+            changed = self._repair_moltbook_http_request(repaired) or changed
 
         body = repaired.get("json_body")
         if isinstance(body, dict):

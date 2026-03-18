@@ -108,11 +108,14 @@ class HeartbeatStateStore:
         check_types = self.infer_check_types(context)
         due_checks = self._due_checks(now, state, check_types, interval_minutes)
         last_outreach = _parse_dt(state.get("last_outreach_at", ""))
+        last_result_at = _parse_dt(state.get("last_result_at", ""))
         active_blockers = list(state.get("last_blockers") or [])
         if not route:
             return HeartbeatDecision(False, "no_route", check_types, due_checks, {})
         if due_checks:
             return HeartbeatDecision(True, "checks_due", check_types, due_checks, dict(route))
+        if active_blockers and last_result_at is not None and now - last_result_at >= timedelta(minutes=max(1, int(interval_minutes))):
+            return HeartbeatDecision(True, "blocker_recheck_due", check_types, due_checks, dict(route))
         if active_blockers and (last_outreach is None or now - last_outreach >= self.OUTREACH_COOLDOWN):
             return HeartbeatDecision(True, "blocker_attention_due", check_types, due_checks, dict(route))
         return HeartbeatDecision(False, "no_due_checks_no_delta", check_types, due_checks, dict(route))
@@ -156,14 +159,16 @@ class HeartbeatStateStore:
         state["last_result"] = (response_text or "").strip()
         if route:
             state["last_route"] = dict(route)
-        if check_types:
-            for name in check_types:
-                state.setdefault("last_checks", {})[name] = _iso(now)
-        if tool_names:
-            for inferred in self.infer_check_types(" ".join(tool_names)):
-                state.setdefault("last_checks", {})[inferred] = _iso(now)
         text = (response_text or "").strip()
         lowered = text.lower()
+        checks_completed = not lowered.startswith("heartbeat_blocked")
+        if checks_completed:
+            if check_types:
+                for name in check_types:
+                    state.setdefault("last_checks", {})[name] = _iso(now)
+            if tool_names:
+                for inferred in self.infer_check_types(" ".join(tool_names)):
+                    state.setdefault("last_checks", {})[inferred] = _iso(now)
         if blockers:
             state["last_blockers"] = [str(x) for x in blockers[:5]]
         elif "needs_attention" in lowered or "could not" in lowered or "failed" in lowered:

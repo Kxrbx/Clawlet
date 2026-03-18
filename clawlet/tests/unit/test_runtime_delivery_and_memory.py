@@ -13,6 +13,7 @@ from clawlet.runtime.executor import DeterministicToolRuntime
 from clawlet.runtime.policy import RuntimePolicyEngine
 from clawlet.runtime.types import ToolCallEnvelope
 from clawlet.storage.sqlite import SQLiteStorage
+from clawlet.tools.registry import ToolResult
 from clawlet.tools.memory import RecallTool
 from clawlet.tools.registry import ToolRegistry
 
@@ -145,6 +146,7 @@ async def test_sqlite_storage_returns_latest_messages_in_chronological_order_wit
 
 def test_agent_loop_skips_transient_assistant_persistence():
     loop = AgentLoop.__new__(AgentLoop)
+    loop.memory = _LoopMemoryStub()
 
     assert loop._is_low_value_persisted_message(
         "assistant",
@@ -156,3 +158,113 @@ def test_agent_loop_skips_transient_assistant_persistence():
         "Final answer to the user",
         {"persist": True},
     )
+
+
+class _LoopMemoryStub:
+    @staticmethod
+    def _is_low_value_memory(value: str) -> bool:
+        lowered = (value or "").strip().lower()
+        return lowered in {"", "hello", "hi", "hey"}
+
+
+def test_agent_loop_captures_useful_user_turns_as_episodic_memory():
+    loop = AgentLoop.__new__(AgentLoop)
+    loop.memory = _LoopMemoryStub()
+
+    capture = loop._memory_capture_plan(
+        "user",
+        "Mix this with the other post idea you had",
+        {"session_id": "session-1"},
+    )
+
+    assert capture is not None
+    assert capture["metadata"]["scope"] == "daily_note"
+    assert capture["write_daily_note"] is True
+    assert capture["metadata"]["curated"] is False
+
+
+def test_agent_loop_promotes_explicit_user_preferences_to_durable_memory():
+    loop = AgentLoop.__new__(AgentLoop)
+    loop.memory = _LoopMemoryStub()
+
+    capture = loop._memory_capture_plan(
+        "user",
+        "Please remember that I prefer concise answers for project updates.",
+        {"session_id": "session-1"},
+    )
+
+    assert capture is not None
+    assert capture["metadata"]["scope"] == "durable"
+    assert capture["metadata"]["curated"] is True
+
+
+def test_agent_loop_captures_meaningful_assistant_outcomes_as_episode_only():
+    loop = AgentLoop.__new__(AgentLoop)
+    loop.memory = _LoopMemoryStub()
+
+    capture = loop._memory_capture_plan(
+        "assistant",
+        "I've prepared a combined post draft that shares the update and asks the community for ideas.",
+        {"session_id": "session-1", "persist": True},
+    )
+
+    assert capture is not None
+    assert capture["metadata"]["scope"] == "daily_note"
+    assert capture["metadata"]["curated"] is False
+
+
+def test_agent_loop_repairs_templated_moltbook_comment_call_from_live_context():
+    loop = AgentLoop.__new__(AgentLoop)
+    loop._recent_http_context = {
+        "moltbook": {
+            "last_post_id": "post-live-123",
+            "last_comment_id": "comment-live-456",
+            "last_molty_name": "ami-from-ami",
+        }
+    }
+
+    repaired = loop._repair_templated_tool_args(
+        "http_request",
+        {
+            "method": "POST",
+            "url": "https://www.moltbook.com/api/v1/posts/:postId/comments",
+            "auth_profile": "moltbook_api_key",
+            "json_body": {
+                "content": "Thanks for the question.",
+                "parentId": "COMMENT_ID",
+            },
+        },
+    )
+
+    assert repaired is not None
+    assert repaired["auth_profile"] == "moltbook"
+    assert repaired["url"] == "https://www.moltbook.com/api/v1/posts/post-live-123/comments"
+    assert repaired["json_body"]["parentId"] == "comment-live-456"
+
+
+def test_agent_loop_remembers_live_moltbook_ids_from_http_results():
+    loop = AgentLoop.__new__(AgentLoop)
+    loop._recent_http_context = {}
+
+    loop._remember_http_request_context(
+        {"url": "https://www.moltbook.com/api/v1/home"},
+        ToolResult(
+            success=True,
+            output=(
+                '{"activity_on_your_posts":[{"post_id":"post-home-1","latest_commenters":["ulagent"]}]}'
+            ),
+        ),
+    )
+    loop._remember_http_request_context(
+        {"url": "https://www.moltbook.com/api/v1/posts/post-home-1/comments?sort=new&limit=20"},
+        ToolResult(
+            success=True,
+            output=(
+                '{"comments":[{"id":"comment-new-1","post_id":"post-home-1","author":{"name":"ami-from-ami"}}]}'
+            ),
+        ),
+    )
+
+    assert loop._recent_http_context["moltbook"]["last_post_id"] == "post-home-1"
+    assert loop._recent_http_context["moltbook"]["last_comment_id"] == "comment-new-1"
+    assert loop._recent_http_context["moltbook"]["last_molty_name"] == "ami-from-ami"

@@ -517,11 +517,12 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.4 Highlights
-- **Short-Term Memory Continuity**: recent conversation reload now restores the latest session slice, not the oldest one, so restart behavior matches real chat continuity
-- **Less Context Pollution**: transient assistant narration from tool-heavy turns is no longer persisted by default, which slows short-term context bloat
-- **Smarter Prompt Memory**: memory injected into the model is now query-aware and summary handling avoids duplicated compressed context
-- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.4` tree
+### 0.4.5 Highlights
+- **Heartbeat Recovery Tightened**: heartbeat state no longer accepts malformed success summaries and now tracks tick timing correctly for the 30-minute cadence
+- **Moltbook Auth Hardening**: structured HTTP retries alternate credential sources on `401` and persists validated Moltbook bearer tokens for later heartbeat runs
+- **Better Continuity Memory**: useful chat turns are now captured into episodic daily notes while explicit durable facts still promote into curated memory
+- **Real Notes Backend**: note-taking is now backed by a workspace-local SQLite store instead of placeholder skill failures
+- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.5` tree
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.

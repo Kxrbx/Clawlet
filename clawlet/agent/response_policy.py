@@ -68,6 +68,10 @@ class ResponsePolicy:
             summary = next((item for item in action_summaries if item), "")
             if not summary:
                 summary = text or f"Completed actions using: {', '.join(dict.fromkeys(meaningful_tools))}"
+            if self._is_unusable_heartbeat_summary(summary):
+                detail = text or "heartbeat completed but returned an unusable summary"
+                detail = detail.splitlines()[0][:220]
+                return f"HEARTBEAT_BLOCKED - {detail}", True
             if not summary.startswith("HEARTBEAT_ACTION_TAKEN"):
                 summary = f"HEARTBEAT_ACTION_TAKEN - {summary}"
             return summary, False
@@ -124,5 +128,19 @@ class ResponsePolicy:
             return True
         lowered = text.lower()
         if "temporarily unavailable" in lowered or "repeated failures" in lowered:
+            return True
+        return False
+
+    @staticmethod
+    def _is_unusable_heartbeat_summary(summary: str) -> bool:
+        text = (summary or "").strip()
+        if not text:
+            return True
+        if text in {"{", "[", "(", "<"}:
+            return True
+        if text.startswith(("{", "[", '"{', '"[')):
+            return True
+        lowered = text.lower()
+        if lowered in {"ok", "done", "completed", "success"}:
             return True
         return False

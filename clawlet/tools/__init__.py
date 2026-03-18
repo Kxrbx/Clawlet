@@ -34,10 +34,12 @@ from clawlet.tools.http_request import HttpRequestTool
 from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
+from clawlet.tools.notes import NotesTools
 from clawlet.tools.assembly import (
     register_file_and_shell_tools,
     register_memory_tools,
     register_network_tools,
+    register_notes_tools,
     register_plugin_tools,
     register_skill_tools,
 )
@@ -93,6 +95,7 @@ def create_default_tool_registry(
     register_network_tools(registry, allowed_dir=allowed_dir, config=config)
     register_skill_tools(registry, skill_registry=skill_registry)
     register_memory_tools(registry, memory_manager=memory_manager)
+    register_notes_tools(registry, workspace=allowed_dir)
     register_plugin_tools(registry, allowed_dir=allowed_dir, config=config)
     return registry
 
@@ -113,5 +116,6 @@ __all__ = [
     "InstallSkillTool",
     "ListSkillsTool",
     "MemoryTools",
+    "NotesTools",
     "create_default_tool_registry",
 ]
