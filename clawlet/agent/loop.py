@@ -328,6 +328,7 @@ class AgentLoop:
         self._active_message_task: Optional[asyncio.Task] = None
         self._active_run_context: Optional[RunContext] = None
         self._recent_http_context: dict[str, dict] = {}
+        self._current_provider_failures: list[str] = []
 
         # Deterministic runtime + replay infrastructure
         self.runtime_config = runtime_config or RuntimeSettings()
@@ -471,7 +472,8 @@ class AgentLoop:
 
     def _queue_persist(self, session_id: str, role: str, content: str, metadata: Optional[dict] = None) -> None:
         """Queue persistence task with lifecycle tracking."""
-        task = asyncio.create_task(self._persist_message(session_id, role, content, metadata))
+        frozen_metadata = dict(metadata or {}) if metadata else None
+        task = asyncio.create_task(self._persist_message(session_id, role, content, frozen_metadata))
         self._persist_tasks.add(task)
         task.add_done_callback(self._persist_tasks.discard)
 
@@ -887,6 +889,7 @@ class AgentLoop:
                 return response
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 failure = classify_exception(e)
+                self._current_provider_failures.append(failure.code)
                 self._consecutive_errors += 1
                 logger.warning(
                     f"Provider call failed (attempt {attempt}/{max_retries}, code={failure.code}): {e}"
@@ -954,6 +957,7 @@ class AgentLoop:
     def _activate_run_context(self, run_ctx: RunContext) -> None:
         self._active_run_context = run_ctx
         self._recent_http_context = {}
+        self._current_provider_failures = []
         self._session_id = run_ctx.session_id
         self._current_run_id = run_ctx.run_id
         self._current_channel = run_ctx.channel
@@ -972,6 +976,7 @@ class AgentLoop:
     def _clear_run_context(self) -> None:
         self._active_run_context = None
         self._recent_http_context = {}
+        self._current_provider_failures = []
         self._current_run_id = ""
         self._current_channel = ""
         self._current_chat_id = ""
@@ -1012,6 +1017,7 @@ class AgentLoop:
         self._run_tool_stats_snapshot = self._snapshot_tool_stats()
         self._history = convo.history
         prelude = await self._run_prelude.prepare(
+            run_id=run_ctx.run_id,
             session_id=convo.session_id,
             channel=channel,
             chat_id=chat_id,
@@ -1093,6 +1099,7 @@ class AgentLoop:
 
         from clawlet.bus.queue import OutboundMessage
         self._run_lifecycle.complete_run(
+            run_id=run_ctx.run_id,
             session_id=convo.session_id,
             iterations=iteration,
             is_error=is_error,
@@ -1404,6 +1411,9 @@ class AgentLoop:
         normalized = self._normalize_special_file_path(tool_call)
         if normalized is not tool_call:
             tool_call = normalized
+        normalized_tick = self._normalize_heartbeat_tick_write(tool_call)
+        if normalized_tick is not tool_call:
+            tool_call = normalized_tick
         if tool_call.name != "shell":
             return tool_call
         if self.tools.get("http_request") is None:
@@ -1440,6 +1450,77 @@ class AgentLoop:
         arguments["path"] = str(candidate)
         logger.info(f"Normalizing HEARTBEAT.md path: {raw_path} -> {candidate}")
         return ToolCall(id=tool_call.id, name=tool_call.name, arguments=arguments)
+
+    def _normalize_heartbeat_tick_write(self, tool_call: ToolCall) -> ToolCall:
+        """Repair heartbeat writes that try to persist a bogus Moltbook last-check timestamp."""
+        if tool_call.name != "write_file":
+            return tool_call
+        if not self._current_heartbeat_metadata:
+            return tool_call
+
+        arguments = dict(tool_call.arguments or {})
+        raw_path = str(arguments.get("path", "") or "").strip()
+        if not raw_path:
+            return tool_call
+
+        layout = get_workspace_layout(self.workspace)
+        normalized = raw_path.replace("\\", "/").lower()
+        target_suffix = "/.moltbook/lastmoltbookcheck"
+        expected_path = str(layout.project_dir / ".moltbook" / "lastMoltbookCheck")
+        if not (
+            normalized.endswith(target_suffix)
+            or raw_path == expected_path
+            or raw_path == ".moltbook/lastMoltbookCheck"
+        ):
+            return tool_call
+
+        tick_at = str(self._current_heartbeat_metadata.get("heartbeat_tick_at") or "").strip()
+        canonical = tick_at
+        if tick_at:
+            try:
+                parsed = datetime.fromisoformat(tick_at)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC_TZ)
+                canonical = parsed.astimezone(UTC_TZ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                canonical = ""
+        if not canonical:
+            canonical = datetime.now(UTC_TZ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        changed = False
+        if raw_path != expected_path:
+            arguments["path"] = expected_path
+            changed = True
+        if str(arguments.get("content", "") or "").strip() != canonical:
+            arguments["content"] = canonical
+            changed = True
+        if not changed:
+            return tool_call
+
+        logger.info(f"Normalizing heartbeat lastMoltbookCheck write: {raw_path} -> {expected_path} ({canonical})")
+        return ToolCall(id=tool_call.id, name=tool_call.name, arguments=arguments)
+
+    def _is_disallowed_heartbeat_mutation_tool(self, tool_call: ToolCall) -> bool:
+        if not self._current_heartbeat_metadata:
+            return False
+
+        mapped_name = self._tool_aliases.get(tool_call.name, tool_call.name)
+        arguments = dict(tool_call.arguments or {})
+        raw_path = str(arguments.get("path", "") or "").strip()
+        normalized_path = raw_path.replace("\\", "/").lower()
+        heartbeat_path = str(get_workspace_layout(self.workspace).heartbeat_path).replace("\\", "/").lower()
+        blocked_suffixes = {"/heartbeat.md", "/.moltbook/lastmoltbookcheck"}
+
+        if mapped_name in {"write_file", "edit_file"}:
+            if normalized_path == heartbeat_path or any(normalized_path.endswith(suffix) for suffix in blocked_suffixes):
+                return True
+
+        if mapped_name == "shell":
+            command = str(arguments.get("command", "") or "").strip().lower()
+            if "heartbeat.md" in command or "lastmoltbookcheck" in command:
+                return True
+
+        return False
 
     def _parse_curl_shell_command(self, command: str) -> Optional[dict]:
         """Best-effort parser for common curl invocations emitted by the model."""
@@ -1835,6 +1916,8 @@ class AgentLoop:
         lowered = (user_message or "").strip().lower()
         action_markers = (
             "introduce yourself",
+            "engage with others",
+            "engage ",
             "post ",
             "comment ",
             "reply ",
@@ -1847,6 +1930,95 @@ class AgentLoop:
             "introduce yourself on",
         )
         return any(marker in lowered for marker in action_markers)
+
+    def _is_guided_external_action_mission(self, user_message: str, is_heartbeat: bool) -> bool:
+        if is_heartbeat:
+            return True
+        lowered = (user_message or "").strip().lower()
+        cues = (
+            "engage with others",
+            "engage ",
+            "engage with",
+            "reply to others",
+            "reply to",
+            "comment on posts",
+            "post something",
+            "check notifications",
+            "social",
+            "interact with",
+            "do whatever you want",
+        )
+        return any(cue in lowered for cue in cues)
+
+    def _guided_next_tool_call(
+        self,
+        *,
+        user_message: str,
+        is_heartbeat: bool,
+        tool_calls_used: int,
+    ) -> Optional[ToolCall]:
+        if not self._is_guided_external_action_mission(user_message, is_heartbeat):
+            return None
+
+        if not self._recent_http_context:
+            return None
+
+        latest_key = str(self._recent_http_context.get("_latest_host") or "").strip().lower()
+        if not latest_key:
+            return None
+        bucket = self._recent_http_context.get(latest_key) or {}
+        if not isinstance(bucket, dict):
+            return None
+
+        fetched_urls = {str(url).strip() for url in list(bucket.get("fetched_urls") or []) if str(url).strip()}
+        quick_links = dict(bucket.get("quick_links") or {})
+        suggestions = list(bucket.get("suggested_endpoints") or [])
+        known_ids = dict(bucket.get("known_ids") or {})
+
+        def _materialize(endpoint: str) -> str:
+            value = str(endpoint or "").strip()
+            if not value:
+                return ""
+            for placeholder, replacement in (
+                (":id", known_ids.get("id")),
+                (":postId", known_ids.get("post_id") or known_ids.get("id")),
+                (":post_id", known_ids.get("post_id") or known_ids.get("id")),
+                (":commentId", known_ids.get("comment_id")),
+                (":comment_id", known_ids.get("comment_id")),
+            ):
+                if replacement and placeholder in value:
+                    value = value.replace(placeholder, str(replacement))
+            return value
+
+        candidate_paths: list[str] = []
+        for suggestion in suggestions:
+            endpoint = _materialize(str(suggestion or ""))
+            if endpoint:
+                candidate_paths.append(endpoint)
+        for key in ("notifications", "dm_conversations", "feed", "profile", "post_comments", "post_detail"):
+            endpoint = _materialize(str(quick_links.get(key, "") or ""))
+            if endpoint:
+                candidate_paths.append(endpoint)
+
+        base_url = str(bucket.get("base_url") or "").rstrip("/")
+        auth_profile = str(bucket.get("auth_profile") or "").strip()
+        for candidate in candidate_paths:
+            normalized = candidate.strip()
+            if not normalized or not normalized.startswith("/"):
+                continue
+            full_url = f"{base_url}{normalized}" if base_url else normalized
+            if full_url in fetched_urls:
+                continue
+            arguments = {"method": "GET", "url": full_url}
+            if auth_profile:
+                arguments["auth_profile"] = auth_profile
+            return ToolCall(
+                id="guided_external_observation",
+                name="http_request",
+                arguments=arguments,
+            )
+
+        return None
 
     def _is_low_value_exploration_tool(
         self,
@@ -1869,10 +2041,14 @@ class AgentLoop:
             return True
         if mapped_name == "get_context":
             return True
+        if mapped_name == "web_search" and tool_calls_used > 0 and self._is_guided_external_action_mission(user_message, is_heartbeat):
+            return True
         if mapped_name == "read_file" and normalized_name == "skill.md":
             return True
         if mapped_name == "read_file" and normalized_name == "heartbeat.md":
             return is_heartbeat and tool_calls_used > 0
+        if is_heartbeat and self._is_disallowed_heartbeat_mutation_tool(tool_call):
+            return True
         if mapped_name == "read_file" and normalized_name == "credentials.json":
             if "/.config/" in normalized_path or normalized_path.startswith(".config/"):
                 return True
@@ -1888,6 +2064,13 @@ class AgentLoop:
             return True
         if mapped_name == "fetch_url" and is_heartbeat and self._is_low_value_heartbeat_url(url):
             return True
+        if (
+            mapped_name == "fetch_url"
+            and tool_calls_used > 0
+            and self._is_guided_external_action_mission(user_message, is_heartbeat)
+            and self._is_low_value_action_url(url)
+        ):
+            return True
         if is_heartbeat and tool_calls_used > 0 and mapped_name in {"read_file", "list_dir"}:
             return True
         return False
@@ -1901,6 +2084,17 @@ class AgentLoop:
             lowered.endswith(suffix)
             for suffix in ("/skill.md", "/heartbeat.md", "/rules.md", "/messaging.md")
         )
+
+    @staticmethod
+    def _is_low_value_action_url(url: str) -> bool:
+        lowered = (url or "").strip().lower()
+        if not lowered:
+            return False
+        if "github.com" in lowered and any(part in lowered for part in {"/blob/", "/tree/", "/readme", "/api"}):
+            return True
+        if any(host in lowered for host in {"docs.github.com", "developer.mozilla.org", "docs.", "/developers", "/documentation"}):
+            return True
+        return False
 
     def _should_schedule_autonomous_followup(
         self,
@@ -2227,19 +2421,36 @@ class AgentLoop:
         if not url:
             return
         parsed = urlparse(url)
-        if (parsed.hostname or "").lower() != "www.moltbook.com":
+        host = (parsed.hostname or "").lower()
+        if not host:
             return
 
-        bucket = self._recent_http_context.setdefault("moltbook", {})
+        bucket = self._recent_http_context.setdefault(host, {})
+        self._recent_http_context["_latest_host"] = host
         path = parsed.path or "/"
+        bucket["base_url"] = f"{parsed.scheme}://{host}" if parsed.scheme else ""
+        fetched_urls = list(bucket.get("fetched_urls") or [])
+        normalized_url = str(parsed._replace(query=parsed.query or "").geturl())
+        if normalized_url not in fetched_urls:
+            fetched_urls.append(normalized_url)
+        bucket["fetched_urls"] = fetched_urls[-12:]
 
         def _remember(key: str, value) -> None:
             if isinstance(value, str) and value.strip():
-                bucket[key] = value.strip()
+                known_ids = dict(bucket.get("known_ids") or {})
+                known_ids[key] = value.strip()
+                bucket["known_ids"] = known_ids
 
         match = re.search(r"/posts/([^/]+)", path)
         if match:
-            _remember("last_post_id", match.group(1))
+            _remember("post_id", match.group(1))
+        comment_match = re.search(r"/comments/([^/]+)", path)
+        if comment_match:
+            _remember("comment_id", comment_match.group(1))
+
+        requested_auth_profile = str(args.get("auth_profile", "") or "").strip()
+        if requested_auth_profile and not self._contains_placeholder_artifacts(requested_auth_profile):
+            bucket["auth_profile"] = requested_auth_profile
 
         try:
             payload = json.loads(result.output or "{}")
@@ -2248,27 +2459,50 @@ class AgentLoop:
         if not isinstance(payload, dict):
             return
 
-        _remember("last_post_id", payload.get("post_id"))
-        _remember("last_comment_id", payload.get("comment_id"))
-        _remember("last_content_id", payload.get("content_id"))
-        _remember("last_molty_name", payload.get("molty_name"))
+        for key, value in payload.items():
+            if isinstance(key, str) and key.endswith("_id"):
+                _remember(key, value)
+            elif key == "id":
+                _remember("id", value)
 
         post = payload.get("post")
         if isinstance(post, dict):
-            _remember("last_post_id", post.get("id"))
+            _remember("post_id", post.get("id"))
+
+        quick_links = payload.get("quick_links")
+        if isinstance(quick_links, dict):
+            filtered: dict[str, str] = {}
+            for key, value in quick_links.items():
+                if isinstance(value, str) and value.strip().startswith(("GET ", "POST ", "PATCH ", "DELETE ")):
+                    method, _, endpoint = value.strip().partition(" ")
+                    if method.upper() == "GET" and endpoint.startswith("/"):
+                        filtered[str(key)] = endpoint.strip()
+            if filtered:
+                bucket["quick_links"] = filtered
+
+        suggested_endpoints: list[str] = list(bucket.get("suggested_endpoints") or [])
+        for field in ("what_to_do_next", "next_actions", "recommended_actions"):
+            value = payload.get(field)
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                match = re.search(r"\bGET\s+(/[^\s`]+)", item)
+                if match:
+                    endpoint = match.group(1).strip()
+                    if endpoint not in suggested_endpoints:
+                        suggested_endpoints.append(endpoint)
+        if suggested_endpoints:
+            bucket["suggested_endpoints"] = suggested_endpoints[-12:]
 
         activities = payload.get("activity_on_your_posts")
         if isinstance(activities, list):
             for activity in activities:
                 if not isinstance(activity, dict):
                     continue
-                _remember("last_post_id", activity.get("post_id"))
-                commenters = activity.get("latest_commenters")
-                if isinstance(commenters, list):
-                    for commenter in commenters:
-                        if isinstance(commenter, str) and commenter.strip():
-                            _remember("last_molty_name", commenter)
-                            break
+                post_id = activity.get("post_id")
+                _remember("post_id", post_id)
                 break
 
         comments = payload.get("comments")
@@ -2276,12 +2510,19 @@ class AgentLoop:
             for comment in comments:
                 if not isinstance(comment, dict):
                     continue
-                _remember("last_comment_id", comment.get("id"))
-                _remember("last_post_id", comment.get("post_id"))
-                author = comment.get("author")
-                if isinstance(author, dict):
-                    _remember("last_molty_name", author.get("name"))
+                _remember("comment_id", comment.get("id"))
+                _remember("post_id", comment.get("post_id"))
                 break
+
+        posts = payload.get("posts")
+        if isinstance(posts, list):
+            for post in posts:
+                if not isinstance(post, dict):
+                    continue
+                post_id = str(post.get("id", "") or "").strip()
+                if post_id:
+                    _remember("post_id", post_id)
+                    break
 
     def _repair_moltbook_http_request(self, repaired: dict) -> bool:
         changed = False
@@ -2382,6 +2623,7 @@ class AgentLoop:
         blockers: list[str],
         action_summaries: list[str],
         tool_calls_used: int,
+        provider_failures: Optional[list[str]] = None,
     ) -> tuple[str, bool]:
         return self._response_policy.canonicalize_heartbeat_outcome(
             response_text=response_text,
@@ -2389,6 +2631,7 @@ class AgentLoop:
             tool_names=tool_names,
             blockers=blockers,
             action_summaries=action_summaries,
+            provider_failures=provider_failures,
         )
 
     def _summarize_heartbeat_tool_result(self, tool_name: str, result: ToolResult) -> str:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
@@ -21,6 +21,7 @@ class RunLifecycle:
     sched_payload_run_id: str
     sched_payload_session_target: str
     sched_payload_wake_mode: str
+    _active_runs: set[str] = field(default_factory=set)
 
     def build_outbound_metadata(
         self,
@@ -47,6 +48,7 @@ class RunLifecycle:
     def start_run(
         self,
         *,
+        run_id: str,
         session_id: str,
         channel: str,
         chat_id: str,
@@ -58,6 +60,7 @@ class RunLifecycle:
         metadata: dict,
         scheduled_payload: dict | None,
     ) -> None:
+        self._active_runs.add(run_id)
         self.save_checkpoint(stage="run_started", iteration=0, notes="Inbound message accepted")
         self.emit_runtime_event(
             self.event_run_started,
@@ -84,6 +87,7 @@ class RunLifecycle:
     def complete_run(
         self,
         *,
+        run_id: str,
         session_id: str,
         iterations: int,
         is_error: bool,
@@ -91,6 +95,8 @@ class RunLifecycle:
         scheduled_payload: dict | None,
         extra_payload: dict | None = None,
     ) -> None:
+        if run_id not in self._active_runs:
+            return
         if is_error:
             self.metrics_factory().inc_errors()
             self.save_checkpoint(stage="interrupted", iteration=iterations, notes=response_text[:400])
@@ -118,14 +124,18 @@ class RunLifecycle:
                     "response_preview": response_text[:200],
                 },
             )
+        self._active_runs.discard(run_id)
 
     def complete_short_run(
         self,
         *,
+        run_id: str,
         session_id: str,
         response_text: str,
         scheduled_payload: dict | None,
     ) -> None:
+        if run_id not in self._active_runs:
+            return
         self.emit_runtime_event(
             self.event_run_completed,
             session_id=session_id,
@@ -138,3 +148,4 @@ class RunLifecycle:
                 payload={**scheduled_payload, "is_error": False, "response_preview": response_text[:200]},
             )
         self.complete_checkpoint()
+        self._active_runs.discard(run_id)

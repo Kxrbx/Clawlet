@@ -2,6 +2,20 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.6] - 2026-03-22
+
+### Fixes
+
+- **Heartbeat State Machine Hardening**: heartbeat runs now classify outcomes more consistently across `ok`, `action_taken`, `degraded`, and `blocked`, and provider `429` failures no longer collapse into false heartbeat success states.
+- **Heartbeat Spec Immutability**: heartbeat runs can no longer mutate `HEARTBEAT.md` or write synthetic `.moltbook/lastMoltbookCheck` values through file-editing tools.
+- **Runtime Storage Reliability**: SQLite runtime storage now enables stronger durability defaults, tracks schema metadata explicitly, and preserves conversation anchors and summaries more safely across trims and reloads.
+- **Run Lifecycle and Budget Guards**: active run tracking is now run-scoped instead of session-scoped, and runtime turns are bounded by an explicit wall-time budget to reduce hung or drifting runs.
+- **Prompt Hygiene and Diagnostics**: provider message assembly strips more placeholder artifacts before reinjection, and the new `clawlet doctor` command surfaces recent runtime failures and consistency issues.
+
+### Verification
+
+- **Regression Coverage Expanded**: Added and extended unit coverage for heartbeat outcome/state handling, blocked heartbeat self-mutations, lifecycle completion invariants, context anchors, storage durability setup, run time budgets, and doctor diagnostics.
+
 ## [0.4.5] - 2026-03-18
 
 ### Fixes

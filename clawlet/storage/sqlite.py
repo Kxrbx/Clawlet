@@ -75,6 +75,10 @@ class SQLiteStorage(StorageBackend):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._db = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=NORMAL")
+        self._db.execute("PRAGMA foreign_keys=ON")
+        self._db.execute("PRAGMA temp_store=MEMORY")
         self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
@@ -88,12 +92,14 @@ class SQLiteStorage(StorageBackend):
             """
         )
         self._ensure_metadata_column()
+        self._ensure_runtime_meta_table()
         self._db.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_messages_session
             ON messages(session_id, created_at DESC)
             """
         )
+        self._set_schema_version(1)
         self._db.commit()
         logger.info(f"SQLite storage initialized at {self.db_path}")
     
@@ -194,6 +200,25 @@ class SQLiteStorage(StorageBackend):
             return
         self._db.execute("ALTER TABLE messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
         self._db.commit()
+
+    def _ensure_runtime_meta_table(self) -> None:
+        assert self._db is not None
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
+    def _set_schema_version(self, version: int) -> None:
+        assert self._db is not None
+        self._db.execute(f"PRAGMA user_version = {int(version)}")
+        self._db.execute(
+            "INSERT OR REPLACE INTO runtime_meta (key, value) VALUES (?, ?)",
+            ("schema_version", str(int(version))),
+        )
 
     @staticmethod
     def _decode_metadata(raw: Optional[str]) -> dict:

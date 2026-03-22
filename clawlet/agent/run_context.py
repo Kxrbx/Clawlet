@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass(slots=True)
@@ -12,6 +13,7 @@ class RunModeProfile:
     iteration_limit: int
     tool_call_limit: int
     no_progress_limit: int
+    max_wall_time_seconds: float
 
 
 @dataclass(slots=True)
@@ -26,6 +28,7 @@ class RunContext:
     metadata: dict = field(default_factory=dict)
     scheduled_payload: dict | None = None
     mode: RunModeProfile | None = None
+    started_at: datetime | None = None
 
     @property
     def is_heartbeat(self) -> bool:

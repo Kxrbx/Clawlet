@@ -35,6 +35,7 @@ class HeartbeatTurnHandler:
             tool_names=tool_names,
             blockers=blockers,
             action_summaries=action_summaries,
+            provider_failures=list(getattr(self.agent, "_current_provider_failures", []) or []),
             tool_calls_used=len(tool_names),
         )
         self.agent._record_heartbeat_result(

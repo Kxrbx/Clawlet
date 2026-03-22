@@ -74,6 +74,33 @@ def run_health() -> None:
     console.print()
 
 
+def run_doctor(workspace_path: Path) -> None:
+    """Run runtime diagnostics against recent event and heartbeat artifacts."""
+    from clawlet.health import quick_runtime_doctor
+
+    print_section("Runtime Doctor", f"Inspecting {workspace_path}")
+    result = quick_runtime_doctor(workspace_path)
+    for check in result.get("checks", []):
+        status = check["status"]
+        if status == "healthy":
+            console.print(f"|  [green]OK[/green] {check['name']}: {check['message']}")
+        elif status == "degraded":
+            console.print(f"|  [yellow]![/yellow] {check['name']}: {check['message']}")
+        else:
+            console.print(f"|  [red]x[/red] {check['name']}: {check['message']}")
+
+    print_footer()
+    console.print()
+    overall = result.get("status", "unknown")
+    if overall == "healthy":
+        console.print("[green]OK Runtime diagnostics clean[/green]")
+    elif overall == "degraded":
+        console.print("[yellow]! Runtime diagnostics found degraded conditions[/yellow]")
+    else:
+        console.print("[red]x Runtime diagnostics found unhealthy conditions[/red]")
+    console.print()
+
+
 def run_validate(workspace_path: Path, migration: bool = False) -> None:
     """Validate workspace config and optional migration compatibility."""
     from clawlet.config import Config

@@ -457,6 +457,138 @@ def test_response_policy_rejects_unusable_heartbeat_action_summary():
     assert text.startswith("HEARTBEAT_BLOCKED - ")
 
 
+def test_response_policy_accepts_heartbeat_ok_with_detail_suffix():
+    policy = ResponsePolicy(
+        continuation_split=__import__("re").compile(r"$^"),
+        looks_like_incomplete_followthrough=lambda text, n: False,
+        sanitize_template_placeholders=lambda text: text,
+        looks_like_blocker_response=lambda text: False,
+    )
+
+    text, is_error = policy.canonicalize_heartbeat_outcome(
+        response_text="HEARTBEAT_OK - Checked Moltbook, all good! 🦞",
+        is_error=False,
+        tool_names=["http_request"],
+        blockers=[],
+        action_summaries=[],
+    )
+
+    assert text == "HEARTBEAT_OK"
+    assert is_error is False
+
+
+def test_response_policy_recovers_heartbeat_ok_from_blocked_prefix_when_clean():
+    policy = ResponsePolicy(
+        continuation_split=__import__("re").compile(r"$^"),
+        looks_like_incomplete_followthrough=lambda text, n: False,
+        sanitize_template_placeholders=lambda text: text,
+        looks_like_blocker_response=lambda text: False,
+    )
+
+    text, is_error = policy.canonicalize_heartbeat_outcome(
+        response_text="HEARTBEAT_BLOCKED - HEARTBEAT_OK - Checked Moltbook, all good! 🦞",
+        is_error=False,
+        tool_names=["http_request"],
+        blockers=[],
+        action_summaries=[],
+    )
+
+    assert text == "HEARTBEAT_OK"
+    assert is_error is False
+
+
+def test_response_policy_marks_provider_instability_as_degraded():
+    policy = ResponsePolicy(
+        continuation_split=__import__("re").compile(r"$^"),
+        looks_like_incomplete_followthrough=lambda text, n: False,
+        sanitize_template_placeholders=lambda text: text,
+        looks_like_blocker_response=lambda text: False,
+    )
+
+    text, is_error = policy.canonicalize_heartbeat_outcome(
+        response_text="HEARTBEAT_OK",
+        is_error=False,
+        tool_names=[],
+        blockers=[],
+        action_summaries=[],
+        provider_failures=["provider_rate_limited"],
+    )
+
+    assert text.startswith("HEARTBEAT_DEGRADED - ")
+    assert is_error is False
+
+
+def test_message_builder_strips_placeholder_auth_profile_in_tool_history():
+    builder = MessageBuilder(
+        identity=type("I", (), {"build_system_prompt": lambda self, **kwargs: "system"})(),
+        tools=type("T", (), {"all_tools": lambda self: []})(),
+        workspace="/root/.clawlet",
+        context_engine=type("C", (), {"render_for_prompt": lambda self, **kwargs: ""})(),
+        memory=type("M", (), {"get_context": lambda self, **kwargs: ""})(),
+        heartbeat_state=type("H", (), {"build_prompt_summary": lambda self: ""})(),
+        context_window=20,
+        heartbeat_action_policy="policy",
+        logger=type("L", (), {"debug": lambda self, *a, **k: None, "warning": lambda self, *a, **k: None})(),
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "http_request",
+                    "arguments": '{"method":"GET","url":"https://api.example.com/v1/home","auth_profile":"the live value"}',
+                },
+            }
+        ],
+    }
+
+    sanitized = builder._sanitize_message_for_provider(msg)
+    assert '"auth_profile"' not in sanitized["tool_calls"][0]["function"]["arguments"]
+
+
+def test_message_builder_strips_placeholder_http_headers_and_fields_in_tool_history():
+    builder = MessageBuilder(
+        identity=type("I", (), {"build_system_prompt": lambda self, **kwargs: "system"})(),
+        tools=type("T", (), {"all_tools": lambda self: []})(),
+        workspace="/root/.clawlet",
+        context_engine=type("C", (), {"render_for_prompt": lambda self, **kwargs: ""})(),
+        memory=type("M", (), {"get_context": lambda self, **kwargs: ""})(),
+        heartbeat_state=type("H", (), {"build_prompt_summary": lambda self: ""})(),
+        context_window=20,
+        heartbeat_action_policy="policy",
+        logger=type("L", (), {"debug": lambda self, *a, **k: None, "warning": lambda self, *a, **k: None})(),
+    )
+
+    msg = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "http_request",
+                    "arguments": (
+                        '{"method":"POST","url":"https://api.example.com/v1/action",'
+                        '"headers":{"Authorization":"Bearer the live value"},'
+                        '"json_body":{"token":"the live value","note":"keep me"}}'
+                    ),
+                },
+            }
+        ],
+    }
+
+    sanitized = builder._sanitize_message_for_provider(msg)
+    arguments = sanitized["tool_calls"][0]["function"]["arguments"]
+    assert "Authorization" not in arguments
+    assert '"token"' not in arguments
+    assert '"note": "keep me"' in arguments
+
+
 def test_history_trimmer_compresses_overflow_into_summary():
     class _Msg:
         def __init__(self, role, content, metadata=None):
@@ -580,6 +712,7 @@ def test_run_lifecycle_emits_start_completion_and_metadata():
     )
 
     lifecycle.start_run(
+        run_id="run-1",
         session_id="sess-1",
         channel="telegram",
         chat_id="123",
@@ -592,6 +725,7 @@ def test_run_lifecycle_emits_start_completion_and_metadata():
         scheduled_payload={"job_id": "heartbeat"},
     )
     lifecycle.complete_run(
+        run_id="run-1",
         session_id="sess-1",
         iterations=2,
         is_error=False,
@@ -659,6 +793,7 @@ async def test_run_prelude_normalizes_input_and_short_circuits_confirmation():
     )
 
     result = await prelude.prepare(
+        run_id="run-1",
         session_id="sess-1",
         channel="telegram",
         chat_id="123",

@@ -42,7 +42,7 @@ from clawlet.cli.templates import (
     get_soul_template,
     get_user_template,
 )
-from clawlet.cli.workspace_ui import run_health, run_status, run_validate
+from clawlet.cli.workspace_ui import run_doctor, run_health, run_status, run_validate
 
 # Sakura color scheme
 SAKURA_PINK = "#FF69B4"
@@ -108,6 +108,7 @@ MAIN_MENU_COMMANDS = [
     ("sessions", "List and export stored sessions", "clawlet sessions"),
     ("status", "Check workspace status", "clawlet status"),
     ("health", "Run health checks", "clawlet health"),
+    ("doctor", "Inspect runtime failures and stale state", "clawlet doctor"),
     ("validate", "Validate configuration", "clawlet validate"),
     ("config", "View/edit configuration", "clawlet config"),
 ]
@@ -307,6 +308,14 @@ def status():
 def health():
     """* Run health checks on all components."""
     run_health()
+
+
+@app.command()
+def doctor(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """* Inspect recent runtime failures, stale heartbeat state, and prompt artifacts."""
+    run_doctor(workspace or get_workspace_path())
 
 
 @app.command()

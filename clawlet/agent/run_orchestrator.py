@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from clawlet.agent.run_context import RunContext, RunModeProfile
@@ -39,7 +40,9 @@ class RunOrchestrator:
                 iteration_limit=self.agent.MAX_HEARTBEAT_ITERATIONS if is_heartbeat else self.agent.max_iterations,
                 tool_call_limit=self.agent.MAX_HEARTBEAT_TOOL_CALLS if is_heartbeat else self.agent.max_tool_calls_per_message,
                 no_progress_limit=self.agent.HEARTBEAT_NO_PROGRESS_LIMIT if is_heartbeat else self.agent.NO_PROGRESS_LIMIT,
+                max_wall_time_seconds=60.0 if is_heartbeat else 180.0,
             ),
+            started_at=datetime.now(timezone.utc),
         )
         self.agent._activate_run_context(run_ctx)
         try:

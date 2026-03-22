@@ -25,6 +25,7 @@ class RunPrelude:
     async def prepare(
         self,
         *,
+        run_id: str,
         session_id: str,
         channel: str,
         chat_id: str,
@@ -41,6 +42,7 @@ class RunPrelude:
         engine_resolved: str,
     ) -> RunPreludeResult:
         self.run_lifecycle.start_run(
+            run_id=run_id,
             session_id=session_id,
             channel=channel,
             chat_id=chat_id,
@@ -68,6 +70,7 @@ class RunPrelude:
         )
         if approval_response is not None:
             self.run_lifecycle.complete_short_run(
+                run_id=run_id,
                 session_id=session_id,
                 response_text=approval_response,
                 scheduled_payload=scheduled_payload,
@@ -90,6 +93,7 @@ class RunPrelude:
             history.append(self.message_cls(role="assistant", content=direct_install_response))
             self.queue_persist(session_id, "assistant", direct_install_response, persist_metadata)
             self.run_lifecycle.complete_short_run(
+                run_id=run_id,
                 session_id=session_id,
                 response_text=direct_install_response,
                 scheduled_payload=scheduled_payload,
