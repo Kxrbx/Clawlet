@@ -517,12 +517,11 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.6 Highlights
-- **Heartbeat Runtime Hardening**: heartbeat runs now distinguish `ok`, `action_taken`, `degraded`, and `blocked` more cleanly, and no longer mutate their own spec/state files through tool calls
-- **Runtime Reliability Guards**: SQLite runtime storage now uses stronger durability settings, run lifecycle tracking is run-scoped, and long runs are bounded by an explicit wall-time budget
-- **Prompt Hygiene and Continuity**: provider message building strips more placeholder artifacts, preserves conversation anchors more safely, and keeps context injection cleaner across turns
-- **Built-in Diagnostics**: `clawlet doctor` now surfaces recent provider/channel failures, placeholder artifacts, heartbeat inconsistencies, over-budget runs, and orphaned lifecycle events
-- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.6` tree
+### 0.4.7 Highlights
+- **Heartbeat Route Retention**: internal scheduler heartbeats no longer overwrite the last real user route when `target=last`, keeping proactive runs aligned with the intended destination
+- **Heartbeat Budget Tuning**: heartbeat wall-time allowance is less aggressive, reducing false `execution time budget` blockers on useful multi-step checks
+- **Runtime Heartbeat Stability**: the recent heartbeat hardening remains in place, including degraded-provider classification and blocked self-mutation of the heartbeat spec
+- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.7` tree
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
