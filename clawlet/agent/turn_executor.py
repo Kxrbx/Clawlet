@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -73,10 +74,19 @@ class TurnExecutor:
         iteration_limit = run_ctx.mode.iteration_limit if run_ctx.mode else self.agent.max_iterations
         tool_call_limit = run_ctx.mode.tool_call_limit if run_ctx.mode else self.agent.max_tool_calls_per_message
         no_progress_limit = run_ctx.mode.no_progress_limit if run_ctx.mode else self.agent.NO_PROGRESS_LIMIT
+        max_wall_time_seconds = run_ctx.mode.max_wall_time_seconds if run_ctx.mode else 180.0
+        started_monotonic = time.monotonic()
 
         await self.agent._publish_progress_update("started", "Starting work on your request.")
 
         while iteration < iteration_limit:
+            if time.monotonic() - started_monotonic >= max_wall_time_seconds:
+                final_response = (
+                    "I stopped this run because it exceeded the execution time budget. "
+                    "Please narrow the request or retry."
+                )
+                is_error = True
+                break
             iteration += 1
             self.agent._save_checkpoint(stage="iteration", iteration=iteration, notes="Starting model iteration")
             messages = self.agent._build_messages(
@@ -90,6 +100,8 @@ class TurnExecutor:
                 self.agent._save_checkpoint(stage="provider_response", iteration=iteration, notes="Model response received")
                 response_content = response.content
                 tool_calls = self._normalize_tool_calls(
+                    user_message=user_message,
+                    is_heartbeat=is_heartbeat,
                     response_content=response_content,
                     response=response,
                     install_skill_intent=install_skill_intent,
@@ -312,6 +324,8 @@ class TurnExecutor:
     def _normalize_tool_calls(
         self,
         *,
+        user_message: str,
+        is_heartbeat: bool,
         response_content: str,
         response: Any,
         install_skill_intent: bool,
@@ -347,6 +361,18 @@ class TurnExecutor:
                 f"forcing fetch_url for {explicit_urls[0]}"
             )
             tool_calls = [ToolCall(id="forced_fetch_url_missing_tool_call", name="fetch_url", arguments={"url": explicit_urls[0]})]
+        if not tool_calls:
+            guided = self.agent._guided_next_tool_call(
+                user_message=user_message,
+                is_heartbeat=is_heartbeat,
+                tool_calls_used=tool_calls_used,
+            )
+            if guided is not None:
+                logger.info(
+                    "Applying guided mission next-step policy: "
+                    f"forcing {guided.name} for external action mission"
+                )
+                tool_calls = [guided]
         return self.agent._prioritize_explicit_url_fetch(
             tool_calls=tool_calls,
             explicit_urls=explicit_urls,

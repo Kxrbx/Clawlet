@@ -49,16 +49,25 @@ class ResponsePolicy:
         tool_names: list[str],
         blockers: list[str],
         action_summaries: list[str],
+        provider_failures: list[str] | None = None,
     ) -> tuple[str, bool]:
         text = (response_text or "").strip()
         blocker_text = (blockers[0] if blockers else "").strip()
+        normalized_provider_failures = [str(item or "").strip() for item in (provider_failures or []) if str(item or "").strip()]
+
+        if text.startswith("HEARTBEAT_BLOCKED - HEARTBEAT_OK") and not blocker_text and not is_error:
+            text = "HEARTBEAT_OK"
+
+        if (text == "HEARTBEAT_OK" or text.startswith("HEARTBEAT_OK -")) and not is_error and not blocker_text:
+            if normalized_provider_failures:
+                failure_codes = ", ".join(dict.fromkeys(normalized_provider_failures))
+                return f"HEARTBEAT_DEGRADED - provider instability during run ({failure_codes})", False
+            return "HEARTBEAT_OK", False
+
         if is_error or blocker_text or self.looks_like_blocker_response(text):
             detail = blocker_text or text or "heartbeat run failed"
             detail = detail.splitlines()[0][:220]
             return f"HEARTBEAT_BLOCKED - {detail}", True
-
-        if text == "HEARTBEAT_OK":
-            return "HEARTBEAT_OK", False
 
         meaningful_tools = [
             name for name in tool_names
@@ -74,7 +83,14 @@ class ResponsePolicy:
                 return f"HEARTBEAT_BLOCKED - {detail}", True
             if not summary.startswith("HEARTBEAT_ACTION_TAKEN"):
                 summary = f"HEARTBEAT_ACTION_TAKEN - {summary}"
+            if normalized_provider_failures:
+                failure_codes = ", ".join(dict.fromkeys(normalized_provider_failures))
+                summary = f"HEARTBEAT_DEGRADED - {summary} (provider instability: {failure_codes})"
             return summary, False
+
+        if normalized_provider_failures:
+            failure_codes = ", ".join(dict.fromkeys(normalized_provider_failures))
+            return f"HEARTBEAT_DEGRADED - provider instability during run ({failure_codes})", False
 
         return "HEARTBEAT_OK", False
 

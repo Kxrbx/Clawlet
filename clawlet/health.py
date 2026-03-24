@@ -346,3 +346,156 @@ async def quick_health_check() -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
     }
+
+
+def quick_runtime_doctor(workspace: Optional[Path] = None) -> dict:
+    """Inspect recent runtime artifacts for common reliability failures."""
+    workspace = workspace or get_default_workspace_path()
+    layout = get_workspace_layout_for(workspace)
+    events_path = layout.runtime_dir / "events.jsonl"
+    heartbeat_state_path = layout.heartbeat_state_path
+
+    checks: list[dict] = []
+    overall = "healthy"
+
+    last_provider_failed: dict | None = None
+    last_channel_failed: dict | None = None
+    placeholder_calls = 0
+    over_budget_runs = 0
+    recent_event_count = 0
+    started_run_ids: set[str] = set()
+    completed_run_ids: set[str] = set()
+
+    if events_path.exists():
+        try:
+            lines = events_path.read_text(encoding="utf-8").splitlines()[-300:]
+            recent_event_count = len(lines)
+            for raw in lines:
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                event_type = str(event.get("event_type") or "")
+                payload = event.get("payload") or {}
+                text_payload = json.dumps(payload, ensure_ascii=False)
+                if '"the live value"' in text_payload or '"auth_profile": "the live value"' in text_payload:
+                    placeholder_calls += 1
+                if event_type == "ProviderFailed":
+                    last_provider_failed = event
+                elif event_type == "ChannelFailed":
+                    last_channel_failed = event
+                elif event_type == "RunStarted":
+                    started_run_ids.add(str(event.get("run_id") or ""))
+                elif event_type == "RunCompleted":
+                    completed_run_ids.add(str(event.get("run_id") or ""))
+                    preview = str(payload.get("response_preview") or "").lower()
+                    if "excessive tool calls" in preview or "maximum number of iterations" in preview:
+                        over_budget_runs += 1
+        except Exception as e:
+            checks.append({"name": "runtime_events", "status": "degraded", "message": f"Could not inspect runtime events: {e}"})
+            overall = "degraded"
+    else:
+        checks.append({"name": "runtime_events", "status": "degraded", "message": "No runtime event log found"})
+        overall = "degraded"
+
+    if last_provider_failed is not None:
+        payload = last_provider_failed.get("payload") or {}
+        checks.append(
+            {
+                "name": "provider_failures",
+                "status": "degraded",
+                "message": f"Last provider failure: {payload.get('failure_code', 'unknown')} ({payload.get('provider', 'unknown')})",
+                "details": {"timestamp": last_provider_failed.get("timestamp", ""), "attempt": payload.get("attempt", 0)},
+            }
+        )
+        overall = "degraded"
+    else:
+        checks.append({"name": "provider_failures", "status": "healthy", "message": "No recent provider failures"})
+
+    if last_channel_failed is not None:
+        payload = last_channel_failed.get("payload") or {}
+        checks.append(
+            {
+                "name": "channel_failures",
+                "status": "unhealthy",
+                "message": f"Last channel failure: {payload.get('failure_code', 'unknown')}",
+                "details": {"timestamp": last_channel_failed.get("timestamp", "")},
+            }
+        )
+        overall = "unhealthy"
+    else:
+        checks.append({"name": "channel_failures", "status": "healthy", "message": "No recent channel failures"})
+
+    if placeholder_calls:
+        checks.append(
+            {
+                "name": "placeholder_artifacts",
+                "status": "degraded",
+                "message": f"Detected {placeholder_calls} recent tool payload(s) with placeholder artifacts",
+                "details": {"recent_events_scanned": recent_event_count},
+            }
+        )
+        if overall == "healthy":
+            overall = "degraded"
+    else:
+        checks.append({"name": "placeholder_artifacts", "status": "healthy", "message": "No recent placeholder tool payloads"})
+
+    if over_budget_runs:
+        checks.append(
+            {
+                "name": "run_budgets",
+                "status": "degraded",
+                "message": f"Detected {over_budget_runs} recent run(s) that exhausted iteration/tool-call budget",
+            }
+        )
+        if overall == "healthy":
+            overall = "degraded"
+    else:
+        checks.append({"name": "run_budgets", "status": "healthy", "message": "No recent over-budget runs"})
+
+    orphaned_runs = sorted(run_id for run_id in started_run_ids if run_id and run_id not in completed_run_ids)
+    if orphaned_runs:
+        checks.append(
+            {
+                "name": "run_lifecycle",
+                "status": "degraded",
+                "message": f"Detected {len(orphaned_runs)} started run(s) without RunCompleted in recent event window",
+                "details": {"sample_run_id": orphaned_runs[0]},
+            }
+        )
+        if overall == "healthy":
+            overall = "degraded"
+    else:
+        checks.append({"name": "run_lifecycle", "status": "healthy", "message": "No recent orphaned runs"})
+
+    if heartbeat_state_path.exists():
+        try:
+            state = json.loads(heartbeat_state_path.read_text(encoding="utf-8"))
+            outcome_kind = str(state.get("last_outcome_kind") or "")
+            last_result = str(state.get("last_result") or "")
+            status = "healthy"
+            message = "Heartbeat state looks coherent"
+            if outcome_kind == "ok" and last_result.startswith("HEARTBEAT_BLOCKED"):
+                status = "unhealthy"
+                message = "Heartbeat state is incoherent: ok outcome with blocked result text"
+            elif outcome_kind == "blocked" and not last_result.startswith("HEARTBEAT_BLOCKED"):
+                status = "degraded"
+                message = "Heartbeat state kind/result mismatch"
+            elif outcome_kind == "degraded":
+                status = "degraded"
+                message = "Heartbeat recently degraded"
+            checks.append({"name": "heartbeat_state", "status": status, "message": message})
+            if status == "unhealthy":
+                overall = "unhealthy"
+            elif status == "degraded" and overall == "healthy":
+                overall = "degraded"
+        except Exception as e:
+            checks.append({"name": "heartbeat_state", "status": "degraded", "message": f"Could not inspect heartbeat state: {e}"})
+            if overall == "healthy":
+                overall = "degraded"
+
+    return {
+        "status": overall,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+    }

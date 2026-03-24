@@ -65,6 +65,9 @@ class HeartbeatStateStore:
         "general": timedelta(minutes=30),
     }
     OUTREACH_COOLDOWN = timedelta(hours=8)
+    SUCCESS_PREFIXES = ("heartbeat_ok", "heartbeat_action_taken")
+    DEGRADED_PREFIXES = ("heartbeat_degraded",)
+    BLOCKED_PREFIXES = ("heartbeat_blocked", "heartbeat_needs_attention")
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -155,13 +158,15 @@ class HeartbeatStateStore:
         blockers: Optional[list[str]] = None,
     ) -> None:
         state = self.load()
-        state["last_result_at"] = _iso(now)
-        state["last_result"] = (response_text or "").strip()
-        if route:
-            state["last_route"] = dict(route)
         text = (response_text or "").strip()
         lowered = text.lower()
-        checks_completed = not lowered.startswith("heartbeat_blocked")
+        outcome_kind = self._classify_outcome_kind(lowered)
+        state["last_result_at"] = _iso(now)
+        state["last_result"] = text
+        state["last_outcome_kind"] = outcome_kind
+        if route:
+            state["last_route"] = dict(route)
+        checks_completed = outcome_kind in {"ok", "action_taken"}
         if checks_completed:
             if check_types:
                 for name in check_types:
@@ -171,21 +176,30 @@ class HeartbeatStateStore:
                     state.setdefault("last_checks", {})[inferred] = _iso(now)
         if blockers:
             state["last_blockers"] = [str(x) for x in blockers[:5]]
-        elif "needs_attention" in lowered or "could not" in lowered or "failed" in lowered:
+        elif outcome_kind == "blocked" or "could not" in lowered or "failed" in lowered:
             state["last_blockers"] = [text[:280]]
         else:
             state["last_blockers"] = []
-        if text == "HEARTBEAT_OK":
+        if outcome_kind == "ok":
             state["last_heartbeat_ok_at"] = _iso(now)
+            state["last_success_at"] = _iso(now)
             state["consecutive_noops"] = int(state.get("consecutive_noops", 0) or 0) + 1
-        else:
-            state["consecutive_noops"] = 0
-        if lowered.startswith("heartbeat_needs_attention") or lowered.startswith("heartbeat_blocked"):
-            state["last_attention_at"] = _iso(now)
-        if lowered.startswith("heartbeat_action_taken"):
+        elif outcome_kind == "action_taken":
+            state["last_success_at"] = _iso(now)
             state["last_action_at"] = _iso(now)
+            state["consecutive_noops"] = 0
             recent = [self._summarize_action(tool_names, response_text)] + list(state.get("recent_actions") or [])
             state["recent_actions"] = [x for x in recent if x][:5]
+        elif outcome_kind == "degraded":
+            state["last_degraded_at"] = _iso(now)
+            state["consecutive_noops"] = 0
+        else:
+            state["consecutive_noops"] = 0
+        if outcome_kind == "blocked":
+            state["last_blocked_at"] = _iso(now)
+            state["last_attention_at"] = _iso(now)
+        elif outcome_kind == "degraded":
+            state["last_attention_at"] = _iso(now)
         self.save(state)
 
     def record_outreach(self, *, now: datetime, response_text: str) -> None:
@@ -210,6 +224,8 @@ class HeartbeatStateStore:
             lines.append(f"- Last {key} check: {age_minutes}m ago")
         if state.get("last_attention_at"):
             lines.append(f"- Last attention alert: {state['last_attention_at']}")
+        if state.get("last_degraded_at"):
+            lines.append(f"- Last degraded run: {state['last_degraded_at']}")
         if state.get("last_outreach_at"):
             lines.append(f"- Last outreach: {state['last_outreach_at']}")
         if state.get("recent_actions"):
@@ -254,7 +270,11 @@ class HeartbeatStateStore:
             "last_published_at": "",
             "last_result_at": "",
             "last_result": "",
+            "last_outcome_kind": "",
             "last_heartbeat_ok_at": "",
+            "last_success_at": "",
+            "last_blocked_at": "",
+            "last_degraded_at": "",
             "last_attention_at": "",
             "last_action_at": "",
             "last_outreach_at": "",
@@ -266,6 +286,18 @@ class HeartbeatStateStore:
             "recent_actions": [],
             "consecutive_noops": 0,
         }
+
+    @classmethod
+    def _classify_outcome_kind(cls, lowered: str) -> str:
+        if lowered.startswith(cls.BLOCKED_PREFIXES):
+            return "blocked"
+        if lowered.startswith(cls.DEGRADED_PREFIXES):
+            return "degraded"
+        if lowered.startswith("heartbeat_action_taken"):
+            return "action_taken"
+        if lowered.startswith("heartbeat_ok"):
+            return "ok"
+        return "other"
 
     @staticmethod
     def _summarize_action(tool_names: list[str], response_text: str) -> str:

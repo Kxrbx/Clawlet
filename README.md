@@ -517,12 +517,12 @@ python scripts/release_smoke.py
 
 ## 📝 Latest Changes
 
-### 0.4.5 Highlights
-- **Heartbeat Recovery Tightened**: heartbeat state no longer accepts malformed success summaries and now tracks tick timing correctly for the 30-minute cadence
-- **Moltbook Auth Hardening**: structured HTTP retries alternate credential sources on `401` and persists validated Moltbook bearer tokens for later heartbeat runs
-- **Better Continuity Memory**: useful chat turns are now captured into episodic daily notes while explicit durable facts still promote into curated memory
-- **Real Notes Backend**: note-taking is now backed by a workspace-local SQLite store instead of placeholder skill failures
-- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.5` tree
+### 0.4.6 Highlights
+- **Heartbeat Runtime Hardening**: heartbeat runs now distinguish `ok`, `action_taken`, `degraded`, and `blocked` more cleanly, and no longer mutate their own spec/state files through tool calls
+- **Runtime Reliability Guards**: SQLite runtime storage now uses stronger durability settings, run lifecycle tracking is run-scoped, and long runs are bounded by an explicit wall-time budget
+- **Prompt Hygiene and Continuity**: provider message building strips more placeholder artifacts, preserves conversation anchors more safely, and keeps context injection cleaner across turns
+- **Built-in Diagnostics**: `clawlet doctor` now surfaces recent provider/channel failures, placeholder artifacts, heartbeat inconsistencies, over-budget runs, and orphaned lifecycle events
+- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.6` tree
 
 ### Previous Versions
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
