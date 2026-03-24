@@ -614,53 +614,25 @@ async def shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_tas
 
 
 async def run_chat(workspace: Path, model: Optional[str]) -> None:
-    """Run a local terminal chat loop using the same agent core."""
-    from clawlet.agent.identity import IdentityLoader
-    from clawlet.agent.loop import AgentLoop
-    from clawlet.bus.queue import InboundMessage, MessageBus
-    from clawlet.config import load_config
-    from clawlet.runtime import build_runtime_services
+    """Run local terminal chat using the shared local runtime bootstrap."""
+    from clawlet.tui.runtime_adapter import create_local_runtime
 
-    identity = IdentityLoader(workspace).load_all()
-    bus = MessageBus()
-    config = load_config(workspace)
-    provider, effective_model = _create_provider(config, model)
-    services = build_runtime_services(workspace, config)
-    memory_manager = services.memory_manager
-    tools = services.tools
+    def _emit(_event: object) -> None:
+        return None
 
-    agent = AgentLoop(
-        bus=bus,
-        workspace=workspace,
-        identity=identity,
-        provider=provider,
-        model=effective_model,
-        tools=tools,
-        memory_manager=memory_manager,
-        max_iterations=config.agent.max_iterations,
-        max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
-        storage_config=config.storage,
-        runtime_config=config.runtime,
-    )
-
-    agent_task = asyncio.create_task(agent.run())
+    runtime = await create_local_runtime(workspace, model, emit=_emit, session_id="local")
+    runtime.emit_snapshot()
     console.print("[dim]Local chat mode. Type 'exit' to quit.[/dim]")
     try:
         while True:
             user_text = await asyncio.to_thread(input, "\nYou> ")
             if user_text.strip().lower() in {"exit", "quit"}:
                 break
-            await bus.publish_inbound(InboundMessage(channel="cli", chat_id="local", content=user_text))
+            await runtime.send_text(user_text)
             while True:
-                out = await bus.consume_outbound_for("cli")
-                if out.chat_id == "local":
+                out = await runtime.poll_outbound()
+                if out.chat_id == runtime.session_id and not (out.metadata or {}).get("progress"):
                     console.print(f"Clawlet> {out.content}")
                     break
     finally:
-        agent.stop()
-        await agent.close()
-        agent_task.cancel()
-        try:
-            await agent_task
-        except asyncio.CancelledError:
-            pass
+        await runtime.stop()

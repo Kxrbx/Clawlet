@@ -98,6 +98,7 @@ MAIN_MENU_COMMANDS = [
     ("init", "Quick workspace initialization", "clawlet init"),
     ("agent", "Start your AI agent", "clawlet agent"),
     ("chat", "Start a local terminal chat session", "clawlet chat"),
+    ("tui", "Launch the full-screen terminal ops console", "clawlet tui"),
     ("logs", "Tail the Clawlet agent logs", "clawlet logs"),
     ("models", "Manage AI models", "clawlet models"),
     ("dashboard", "Launch web dashboard", "clawlet dashboard"),
@@ -302,6 +303,27 @@ def dashboard(
 def status():
     """* Show Clawlet workspace status."""
     run_status(get_workspace_path(), __version__)
+
+
+
+
+@app.command()
+def tui(
+    workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
+):
+    """* Launch the full-screen terminal UI for Clawlet."""
+    workspace_path = workspace or get_workspace_path()
+    if not workspace_path.exists():
+        console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
+        raise typer.Exit(1)
+    try:
+        from clawlet.tui import run_tui_app
+    except ImportError as e:
+        console.print(f"[red]Error: TUI dependencies are not installed: {e}[/red]")
+        console.print("Install with: [magenta]pip install -e .[/magenta]")
+        raise typer.Exit(1)
+    run_tui_app(workspace=workspace_path, model=model)
 
 
 @app.command()
