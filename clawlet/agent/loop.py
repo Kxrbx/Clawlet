@@ -643,6 +643,11 @@ class AgentLoop:
         """Return best-effort last active route for heartbeat target='last'."""
         if not self._last_route.get("channel") or not self._last_route.get("chat_id"):
             return None
+        if (
+            str(self._last_route.get("channel") or "") == "scheduler"
+            and str(self._last_route.get("chat_id") or "") == "main"
+        ):
+            return None
         return dict(self._last_route)
 
     def get_runtime_status(self, channel: str, chat_id: str) -> dict:
@@ -966,12 +971,14 @@ class AgentLoop:
         self._current_user_name = run_ctx.user_name
         self._current_source = run_ctx.source
         self._current_heartbeat_metadata = run_ctx.metadata if run_ctx.is_heartbeat else {}
-        self._last_route = {
-            "channel": run_ctx.channel,
-            "chat_id": run_ctx.chat_id,
-            "user_id": run_ctx.user_id,
-            "user_name": run_ctx.user_name,
-        }
+        is_internal_scheduler_route = run_ctx.channel == "scheduler" and run_ctx.chat_id == "main"
+        if not is_internal_scheduler_route:
+            self._last_route = {
+                "channel": run_ctx.channel,
+                "chat_id": run_ctx.chat_id,
+                "user_id": run_ctx.user_id,
+                "user_name": run_ctx.user_name,
+            }
 
     def _clear_run_context(self) -> None:
         self._active_run_context = None

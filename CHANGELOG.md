@@ -2,6 +2,17 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.4.7] - 2026-03-24
+
+### Fixes
+
+- **Heartbeat Route Resolution**: heartbeat runs with `target=last` no longer let internal `scheduler/main` executions overwrite the last real user-facing route, reducing misrouting of proactive heartbeat behavior.
+- **Heartbeat Time Budget Tuning**: heartbeat wall-time limits are now less aggressive, reducing false blockers on useful multi-step checks that were still making forward progress.
+
+### Verification
+
+- **Release Checks Revalidated**: Version references were updated across package metadata, dashboard metadata, changelog, and docs for the latest heartbeat reliability pass.
+
 ## [0.4.6] - 2026-03-22
 
 ### Fixes
