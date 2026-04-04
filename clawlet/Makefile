@@ -8,13 +8,13 @@ dev: install
 	pip install -r requirements-dev.txt
 
 test:
-	pytest tests/ --cov=clawlet --cov-report=html --cov-report=term
+	pytest tests/ clawlet/tests/ --cov=clawlet --cov-report=html --cov-report=term
 
 test-unit:
-	pytest tests/ -m unit --cov=clawlet
+	pytest tests/ clawlet/tests/ -m unit --cov=clawlet
 
 test-integration:
-	pytest tests/ -m integration
+	pytest tests/ clawlet/tests/ -m integration
 
 lint:
 	 flake8 clawlet/ --max-line-length=100 --extend-ignore=E203,W503

@@ -5,6 +5,7 @@ Agent loop - the core processing engine.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -32,6 +33,12 @@ from clawlet.agent.history_trimmer import HistoryTrimmer
 from clawlet.agent.message_builder import MessageBuilder
 from clawlet.agent.models import ConversationState, Message, ToolCall
 from clawlet.agent.outbound_publisher import OutboundPublisher
+from clawlet.agent.prompts import (
+    AUTONOMOUS_EXECUTION_NUDGE,
+    COMMITMENT_FOLLOWTHROUGH_NUDGE,
+    HEARTBEAT_ACTION_POLICY,
+    POST_TOOL_FINALIZATION_NUDGE,
+)
 from clawlet.agent.recovery_checkpoint import RecoveryCheckpointService
 from clawlet.agent.run_context import RunContext
 from clawlet.agent.run_lifecycle import RunLifecycle
@@ -39,15 +46,16 @@ from clawlet.agent.run_prelude import RunPrelude
 from clawlet.agent.run_orchestrator import RunOrchestrator
 from clawlet.agent.response_policy import ResponsePolicy
 from clawlet.agent.turn_executor import TurnExecutor
+from clawlet.exceptions import CircuitBreakerOpen
 from clawlet.heartbeat.state import HeartbeatStateStore
 from clawlet.providers.base import BaseProvider, LLMResponse
 from clawlet.tools.registry import ToolRegistry, ToolResult, validate_tool_params
-from clawlet.agent.memory import MemoryManager
 from clawlet.storage.sqlite import SQLiteStorage
 from clawlet.config import RuntimeSettings, StorageConfig
 from clawlet.context import ContextEngine
 from clawlet.workspace_layout import get_workspace_layout
 from clawlet.metrics import get_metrics
+from clawlet.retry import CircuitBreaker
 from clawlet.utils.security import mask_secrets
 from clawlet.runtime import (
     EVENT_CHANNEL_FAILED,
@@ -167,22 +175,9 @@ class AgentLoop:
         r"i need|i can't|cannot|unable|if you want)\b",
         re.IGNORECASE,
     )
-    AUTONOMOUS_EXECUTION_NUDGE = (
-        "Autonomous execution mode: do not promise future action. "
-        "Either use tools now to perform the task, or reply with a concrete blocker explaining why "
-        "the action could not be executed automatically."
-    )
-    COMMITMENT_FOLLOWTHROUGH_NUDGE = (
-        "Do not narrate future action. "
-        "If you said you would do something, perform the next concrete step now using tools when needed. "
-        "Only reply to the user after you have either completed the action or hit a concrete blocker."
-    )
-    POST_TOOL_FINALIZATION_NUDGE = (
-        "You have already used tools in this turn. "
-        "Do not send intermediate status updates or describe next steps. "
-        "Either provide the final answer grounded in the tool results you already have, "
-        "or explain the concrete blocker that prevents completion."
-    )
+    AUTONOMOUS_EXECUTION_NUDGE = AUTONOMOUS_EXECUTION_NUDGE
+    COMMITMENT_FOLLOWTHROUGH_NUDGE = COMMITMENT_FOLLOWTHROUGH_NUDGE
+    POST_TOOL_FINALIZATION_NUDGE = POST_TOOL_FINALIZATION_NUDGE
     CONTINUATION_PATTERN = re.compile(
         r"\b(let me|i'll|i will|i am going to|i'm going to|then)\b|"
         r"\bcontent was truncated\b|"
@@ -208,16 +203,7 @@ class AgentLoop:
         r"<[A-Z][A-Z0-9 _-]{1,48}>",
         r"<[^>]*(?:api[_\s-]*key|clé[_\s-]*api|cle[_\s-]*api|token|bearer|post[_\s-]*id|comment[_\s-]*id|molty|name|nom)[^>]*>",
     )
-    HEARTBEAT_ACTION_POLICY = (
-        "Heartbeat poll policy:\n"
-        "- Follow the heartbeat prompt strictly.\n"
-        "- Do not infer or repeat old tasks from prior chats.\n"
-        "- Read HEARTBEAT.md first when the prompt requires it.\n"
-        "- Prefer `http_request` over shell/curl for API calls and JSON posts.\n"
-        "- Use `review_daily_notes` before curating long-term memory, and use `curate_memory` when recent notes contain durable updates.\n"
-        "- If nothing needs attention, reply exactly with HEARTBEAT_OK.\n"
-        "- Avoid unrelated exploration unless the heartbeat task is blocked."
-    )
+    HEARTBEAT_ACTION_POLICY = HEARTBEAT_ACTION_POLICY
     
     def __init__(
         self,
@@ -298,10 +284,10 @@ class AgentLoop:
         self._current_heartbeat_metadata: dict = {}
         
         # Circuit breaker for provider failures
-        self._consecutive_errors = 0
-        self._max_consecutive_errors = 5
-        self._circuit_open_until: Optional[datetime] = None
-        self._circuit_timeout_seconds = 30
+        self._provider_circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            recovery_timeout=30.0,
+        )
         
         # Tool circuit breaker tracking
         self._tool_failures: dict[str, int] = {}
@@ -542,6 +528,7 @@ class AgentLoop:
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
+        await self.memory.initialize()
         # Ensure storage is initialized
         if not self.storage.is_initialized():
             await self._initialize_storage()
@@ -635,9 +622,8 @@ class AgentLoop:
 
     def _generate_session_id(self, channel: str, chat_id: str) -> str:
         """Generate a stable session ID per workspace/channel/chat combination."""
-        import hashlib
         seed = f"{self.workspace.resolve()}::{channel}::{chat_id}"
-        return hashlib.md5(seed.encode()).hexdigest()[:12]
+        return hashlib.blake2s(seed.encode(), digest_size=6).hexdigest()
 
     def get_last_route(self) -> Optional[dict[str, str]]:
         """Return best-effort last active route for heartbeat target='last'."""
@@ -846,7 +832,7 @@ class AgentLoop:
             capture = self._memory_capture_plan(role, content, metadata or {})
             if capture is not None:
                 try:
-                    self.memory.remember(
+                    await self.memory.remember(
                         key=f"{role}_{session_id}_{int(datetime.now(UTC_TZ).timestamp())}",
                         value=content,
                         category=capture["category"],
@@ -859,14 +845,10 @@ class AgentLoop:
     
     async def _call_provider_with_retry(self, messages: list[dict], enable_tools: bool = True) -> LLMResponse:
         """Call LLM provider with retry, exponential backoff, and circuit breaker."""
-        # Check circuit breaker first
-        now = datetime.now(UTC_TZ)
-        if self._circuit_open_until and now < self._circuit_open_until:
-            raise RuntimeError(f"Circuit breaker open until {self._circuit_open_until.isoformat()}")
-        elif self._circuit_open_until and now >= self._circuit_open_until:
-            logger.info("Circuit breaker timeout elapsed, resetting")
-            self._circuit_open_until = None
-            self._consecutive_errors = 0
+        if not self._provider_circuit_breaker.can_execute():
+            raise CircuitBreakerOpen(
+                "Provider circuit breaker is open due to repeated failures. Please retry shortly."
+            )
         
         max_retries = 3
         base_delay = 2  # seconds
@@ -884,8 +866,7 @@ class AgentLoop:
                     temperature=0.7,
                     **request_kwargs,
                 )
-                # Success: reset error counter
-                self._consecutive_errors = 0
+                self._provider_circuit_breaker.record_success()
                 elapsed = time.time() - start_time
                 if elapsed > 10.0:
                     logger.warning(f"LLM call took {elapsed:.2f}s (exceeds 10s threshold)")
@@ -895,7 +876,7 @@ class AgentLoop:
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 failure = classify_exception(e)
                 self._current_provider_failures.append(failure.code)
-                self._consecutive_errors += 1
+                self._provider_circuit_breaker.record_failure()
                 logger.warning(
                     f"Provider call failed (attempt {attempt}/{max_retries}, code={failure.code}): {e}"
                 )
@@ -922,11 +903,11 @@ class AgentLoop:
                     notes=f"attempt={attempt} code={failure.code} retryable={failure.retryable}",
                 )
                 if attempt >= max_retries:
-                    # Check if we need to trip circuit breaker
-                    if self._consecutive_errors >= self._max_consecutive_errors:
-                        self._circuit_open_until = now + timedelta(seconds=self._circuit_timeout_seconds)
-                        logger.error(f"Circuit breaker tripped! Open until {self._circuit_open_until.isoformat()}")
                     raise
+                if not self._provider_circuit_breaker.can_execute():
+                    raise CircuitBreakerOpen(
+                        "Provider circuit breaker opened during retries due to repeated failures."
+                    )
                 # Exponential backoff
                 delay = base_delay * (2 ** (attempt - 1))
                 logger.info(f"Retrying in {delay}s...")
@@ -935,6 +916,11 @@ class AgentLoop:
 
     def _format_user_facing_error(self, exc: Exception) -> str:
         """Map internal exceptions to concise, actionable user-facing messages."""
+        if isinstance(exc, CircuitBreakerOpen):
+            return (
+                "The model provider is temporarily paused after repeated failures. "
+                "Please retry shortly."
+            )
         failure = classify_exception(exc)
         if failure.code in {"provider_rate_limited", "rate_limited"}:
             return (
@@ -2731,14 +2717,14 @@ class AgentLoop:
         results = await asyncio.gather(*[_run(tc) for tc in tool_calls])
         return list(zip(tool_calls, results))
     
-    def _build_messages(
+    async def _build_messages(
         self,
         history: list[Message],
         query_hint: Optional[str] = None,
         is_heartbeat: bool = False,
     ) -> list[dict]:
         """Build messages list for LLM."""
-        return self._message_builder.build_messages(
+        return await self._message_builder.build_messages(
             history,
             query_hint=query_hint,
             is_heartbeat=is_heartbeat,
@@ -2816,7 +2802,7 @@ class AgentLoop:
 
         # Save long-term memories
         try:
-            self.memory.close()
+            await self.memory.close()
         except Exception as e:
             logger.error(f"Failed to save long-term memory: {e}")
         

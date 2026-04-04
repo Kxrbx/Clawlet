@@ -19,7 +19,7 @@ class MessageBuilder:
     heartbeat_action_policy: str
     logger: Any
 
-    def build_messages(
+    async def build_messages(
         self,
         history: list[Any],
         *,
@@ -64,7 +64,7 @@ class MessageBuilder:
                 self.logger.debug(f"Context engine unavailable for this turn: {e}")
 
         try:
-            memory_context = self.memory.get_context(
+            memory_context = await self.memory.get_context(
                 max_entries=max(6, min(12, self.context_window)),
                 query=query_text,
             )

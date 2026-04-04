@@ -4,7 +4,7 @@ Configuration management with validation.
 
 import os
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Any, Match, Optional, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
@@ -728,12 +728,12 @@ class Config(BaseModel):
         """Recursively substitute environment variables in config."""
         import re
         
-        def substitute(value):
+        def substitute(value: Any) -> Any:
             if isinstance(value, str):
                 # Match ${VAR_NAME} or ${VAR_NAME:-default}
                 pattern = r'\$\{([^}]+)\}'
                 
-                def replace(match):
+                def replace(match: Match[str]) -> str:
                     expr = match.group(1)
                     if ':-' in expr:
                         var_name, default = expr.split(':-', 1)
@@ -766,17 +766,16 @@ class Config(BaseModel):
         """Backward-compatible alias for writing config to disk."""
         self.to_yaml(path)
 
-    def reload(self) -> None:
-        """Reload configuration from the original YAML file."""
+    def reload(self) -> "Config":
+        """Reload configuration from the original YAML file into a new instance."""
         if self.config_path and self.config_path.exists():
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            # Update self with new data
-            updated = Config(**data)
-            self.__dict__.update(updated.__dict__)
+            reloaded = self.from_yaml(self.config_path)
+            reloaded.config_path = self.config_path
             logger.info(f"Reloaded config from {self.config_path}")
-        else:
-            logger.warning("Cannot reload config: file not found")
+            return reloaded
+
+        logger.warning("Cannot reload config: file not found")
+        return self
 
 
 def load_config(workspace: Optional[Path] = None) -> Config:
@@ -842,7 +841,7 @@ def load_config(workspace: Optional[Path] = None) -> Config:
             provider=ProviderConfig(
                 primary="openrouter",
                 openrouter=OpenRouterConfig(
-                    api_key=os.environ.get("OPENROUTER_API_KEY"),
+                    api_key=os.environ.get("OPENROUTER_API_KEY") or "",
                 ),
             ),
         )

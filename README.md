@@ -359,7 +359,7 @@ The agent can review and curate recent daily notes back into durable memory over
 
 ---
 
-## 🎨 Exemples of Customizing Your Agent
+## 🎨 Examples of Customizing Your Agent
 
 ### SOUL.md - Agent Personality
 

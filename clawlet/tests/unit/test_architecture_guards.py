@@ -201,7 +201,8 @@ async def test_approval_service_cancel_clears_pending():
     assert service.get("cli:local") is None
 
 
-def test_message_builder_adds_context_and_skips_invalid_tool_messages():
+@pytest.mark.asyncio
+async def test_message_builder_adds_context_and_skips_invalid_tool_messages():
     class _Identity:
         def build_system_prompt(self, tools, workspace_path):
             return f"prompt:{workspace_path}"
@@ -218,7 +219,7 @@ def test_message_builder_adds_context_and_skips_invalid_tool_messages():
         def __init__(self):
             self.calls = []
 
-        def get_context(self, max_entries, query):
+        async def get_context(self, max_entries, query):
             self.calls.append((max_entries, query))
             return f"memory:{query}:{max_entries}"
 
@@ -258,10 +259,10 @@ def test_message_builder_adds_context_and_skips_invalid_tool_messages():
         _Msg("tool", "good tool", tool_call_id="tc-1"),
     ]
 
-    messages = builder.build_messages(history, query_hint="hello")
+    messages = await builder.build_messages(history, query_hint="hello")
     contents = [msg.get("content", "") for msg in messages]
 
-    assert "prompt:/tmp/ws" in contents
+    assert f"prompt:{Path('/tmp/ws')}" in contents
     assert "context:hello" in contents
     assert "memory:hello:10" in contents
     assert "good tool" in contents
@@ -518,13 +519,17 @@ def test_response_policy_marks_provider_instability_as_degraded():
     assert is_error is False
 
 
-def test_message_builder_strips_placeholder_auth_profile_in_tool_history():
+@pytest.mark.asyncio
+async def test_message_builder_strips_placeholder_auth_profile_in_tool_history():
+    async def _get_context(self, **kwargs):
+        return ""
+
     builder = MessageBuilder(
         identity=type("I", (), {"build_system_prompt": lambda self, **kwargs: "system"})(),
         tools=type("T", (), {"all_tools": lambda self: []})(),
         workspace="/root/.clawlet",
         context_engine=type("C", (), {"render_for_prompt": lambda self, **kwargs: ""})(),
-        memory=type("M", (), {"get_context": lambda self, **kwargs: ""})(),
+        memory=type("M", (), {"get_context": _get_context})(),
         heartbeat_state=type("H", (), {"build_prompt_summary": lambda self: ""})(),
         context_window=20,
         heartbeat_action_policy="policy",
@@ -550,13 +555,17 @@ def test_message_builder_strips_placeholder_auth_profile_in_tool_history():
     assert '"auth_profile"' not in sanitized["tool_calls"][0]["function"]["arguments"]
 
 
-def test_message_builder_strips_placeholder_http_headers_and_fields_in_tool_history():
+@pytest.mark.asyncio
+async def test_message_builder_strips_placeholder_http_headers_and_fields_in_tool_history():
+    async def _get_context(self, **kwargs):
+        return ""
+
     builder = MessageBuilder(
         identity=type("I", (), {"build_system_prompt": lambda self, **kwargs: "system"})(),
         tools=type("T", (), {"all_tools": lambda self: []})(),
         workspace="/root/.clawlet",
         context_engine=type("C", (), {"render_for_prompt": lambda self, **kwargs: ""})(),
-        memory=type("M", (), {"get_context": lambda self, **kwargs: ""})(),
+        memory=type("M", (), {"get_context": _get_context})(),
         heartbeat_state=type("H", (), {"build_prompt_summary": lambda self: ""})(),
         context_window=20,
         heartbeat_action_policy="policy",

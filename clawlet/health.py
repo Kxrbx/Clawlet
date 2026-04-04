@@ -50,7 +50,7 @@ class HealthChecker:
     - Provider connectivity
     - Storage backend
     - Channel connections
-    - Memory usage
+    - Memory usage (requires optional `psutil` from the `monitoring` extra)
     """
     
     def __init__(
@@ -227,7 +227,7 @@ class HealthChecker:
             )
     
     async def check_memory(self) -> HealthCheckResult:
-        """Check system memory usage."""
+        """Check system memory usage when optional `psutil` monitoring support is installed."""
         try:
             import psutil
             
@@ -258,7 +258,7 @@ class HealthChecker:
             return HealthCheckResult(
                 name="memory",
                 status=HealthStatus.HEALTHY,
-                message="Memory check skipped (psutil not installed)",
+                message="Memory check skipped (`psutil` not installed; install `clawlet[monitoring]` to enable it)",
             )
         except Exception as e:
             return HealthCheckResult(

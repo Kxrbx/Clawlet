@@ -8,6 +8,7 @@ SECURITY: This tool uses multiple layers of protection:
 """
 
 import asyncio
+import os
 import shlex
 import re
 import shutil
@@ -20,33 +21,48 @@ from clawlet.runtime.rust_bridge import execute_command_argv as rust_execute_com
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
-# Dangerous patterns that should never be allowed
-DANGEROUS_PATTERNS = [
-    # Command chaining
-    r';',           # command1; command2
-    r'&&',          # command1 && command2
-    r'\|\|',        # command1 || command2
-    # Pipes to shells
-    r'\|\s*sh\b',   # | sh
-    r'\|\s*bash\b', # | bash
-    r'\|\s*zsh\b',  # | zsh
-    r'\|\s*fish\b', # | fish
-    # Subshells
-    r'\$\(',        # $(command)
-    r'`',           # `command`
-    # Redirects to sensitive files
-    r'>\s*/etc/',   # > /etc/*
-    r'>\s*/dev/sd', # > /dev/sda
-    r'>\s*/dev/hd', # > /dev/hda
+# Regex checks operate on the raw command string before tokenization. They are
+# used for shell constructs or destructive invocations that should be rejected
+# outright in safe mode, even if later token parsing would succeed.
+RAW_DANGEROUS_PATTERNS = [
+    # Command chaining / shell flow control
+    (r';', 'command chaining with ";"'),
+    (r'&&', 'command chaining with "&&"'),
+    (r'\|\|', 'command chaining with "||"'),
+    # Pipes that bootstrap another shell
+    (r'\|\s*sh\b', 'piping into sh'),
+    (r'\|\s*bash\b', 'piping into bash'),
+    (r'\|\s*zsh\b', 'piping into zsh'),
+    (r'\|\s*fish\b', 'piping into fish'),
+    (r'\|\s*(?:pwsh|pwsh\.exe|powershell|powershell\.exe)\b', 'piping into PowerShell'),
+    # Subshells / secondary evaluation
+    (r'\$\(', 'subshell execution with "$()"'),
+    (r'`', 'command substitution with backticks'),
+    # Redirects to sensitive Unix paths
+    (r'>\s*/etc/', 'redirect into /etc'),
+    (r'>\s*/dev/sd', 'redirect into block devices'),
+    (r'>\s*/dev/hd', 'redirect into block devices'),
     # Backgrounding
-    r'&\s*$',       # command &
-    # Dangerous commands even if in whitelist
-    r'\brm\s+-rf\s+/',      # rm -rf /
-    r'\bdd\s+if=',          # dd if=
-    r'\bmkfs\b',            # mkfs
-    r'\bfdisk\b',           # fdisk
-    r'\bchmod\s+777',       # chmod 777
-    r'\bchown\s+.*:',       # chown user:
+    (r'&\s*$', 'background execution'),
+    # Explicit destructive Unix commands
+    (r'\brm\s+-rf\s+/', 'recursive deletion from filesystem root'),
+    (r'\bdd\s+if=', 'disk imaging with dd'),
+    (r'\bmkfs\b', 'filesystem formatting with mkfs'),
+    (r'\bfdisk\b', 'disk partitioning with fdisk'),
+    (r'\bchmod\s+777', 'world-writable chmod'),
+    (r'\bchown\s+.*:', 'ownership change with chown'),
+]
+
+WINDOWS_DANGEROUS_PATTERNS = [
+    (r'\bdel\s+/(?:f|q|s)\b', 'destructive deletion with del'),
+    (r'\berase\s+/(?:f|q|s)\b', 'destructive deletion with erase'),
+    (r'\brmdir\s+/(?:s|q)\b', 'recursive directory removal with rmdir'),
+    (r'\bformat\b', 'disk formatting with format'),
+    (r'\bdiskpart\b', 'disk partitioning with diskpart'),
+    (r'\breg\s+delete\b', 'registry deletion with reg delete'),
+    (r'\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\b.*\bremove-item\b.*(?:^|\s)-(?:recurse|r)\b.*(?:^|\s)-(?:force|f)\b', 'forced recursive deletion via PowerShell'),
+    (r'\b(?:powershell|powershell\.exe|pwsh|pwsh\.exe)\b.*\b(?:invoke-expression|iex)\b', 'dynamic PowerShell execution'),
+    (r'\b(?:stop-computer|restart-computer|shutdown)\b', 'system shutdown or restart'),
 ]
 
 CONTROL_OPERATORS = {"&&", "||", ";", "|"}
@@ -179,8 +195,8 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
         try:
             # Parse command safely. In dangerous/full-exec mode, commands may include
             # shell metacharacters like redirects and chaining operators; those need a
-            # shell interpreter instead of argv execution.
-            args = shlex.split(command)
+            # platform shell interpreter instead of argv execution.
+            args = self._split_command(command)
             base_cmd = self._extract_base_command(args)
             if base_cmd is None:
                 return ToolResult(success=False, output="", error="Empty command")
@@ -226,10 +242,9 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                     )
             
             if use_shell:
+                shell_argv = self._shell_launcher(command)
                 process = await asyncio.create_subprocess_exec(
-                    "/bin/bash",
-                    "-lc",
-                    command,
+                    *shell_argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(self.workspace),
@@ -308,6 +323,16 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
     def _validate_command(self, command: str) -> tuple[bool, str]:
         """
         Validate command for security.
+
+        Pipeline:
+        1. Reject empty input.
+        2. In safe mode, scan the raw string for dangerous shell syntax and
+           known destructive commands. These checks intentionally run before
+           tokenization because some shell constructs do not survive argv
+           parsing cleanly.
+        3. Tokenize the command with OS-appropriate shlex settings.
+        4. Apply semantic validation that depends on tokens (inline Python,
+           whitelist enforcement, shell-segment extraction).
         
         Returns:
             (is_allowed, error_message)
@@ -317,15 +342,13 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
         
         command = command.strip()
         
-        # Security check 2: Block dangerous patterns
         if not self.allow_dangerous:
-            for pattern in DANGEROUS_PATTERNS:
-                if re.search(pattern, command):
-                    return False, f"Blocked pattern detected in command"
+            dangerous_reason = self._match_dangerous_pattern(command)
+            if dangerous_reason:
+                return False, f"Blocked dangerous command pattern: {dangerous_reason}"
         
-        # Security check 3: Parse and validate base command
         try:
-            args = shlex.split(command)
+            args = self._split_command(command)
         except ValueError as e:
             return False, f"Invalid command syntax: {e}"
 
@@ -342,6 +365,29 @@ Dangerous patterns (pipes, redirects, subshells) are blocked."""
                 return False, f"Command '{base_cmd}' not allowed. Allowed: {allowed_list}..."
         
         return True, ""
+
+    def _is_windows(self) -> bool:
+        return os.name == "nt"
+
+    def _split_command(self, command: str) -> list[str]:
+        return shlex.split(command, posix=not self._is_windows())
+
+    def _match_dangerous_pattern(self, command: str) -> Optional[str]:
+        patterns = list(RAW_DANGEROUS_PATTERNS)
+        if self._is_windows():
+            patterns.extend(WINDOWS_DANGEROUS_PATTERNS)
+        for pattern, reason in patterns:
+            if re.search(pattern, command, flags=re.IGNORECASE):
+                return reason
+        return None
+
+    def _shell_launcher(self, command: str) -> list[str]:
+        if self._is_windows():
+            powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe") or shutil.which("pwsh")
+            if powershell is None:
+                raise RuntimeError("PowerShell was not found for full-exec shell mode")
+            return [powershell, "-Command", command]
+        return ["/bin/bash", "-lc", command]
 
     def _needs_shell_interpreter(self, args: list[str]) -> bool:
         return any(token in CONTROL_OPERATORS or token in REDIRECTION_OPERATORS for token in args)

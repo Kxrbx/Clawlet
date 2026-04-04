@@ -4,9 +4,9 @@ Rate limiting for message and tool execution.
 
 import asyncio
 import time
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Optional
-from collections import defaultdict
 
 from loguru import logger
 
@@ -36,20 +36,23 @@ class RateLimit:
 @dataclass
 class RateLimitEntry:
     """Entry tracking requests for a key."""
-    timestamps: list[float] = field(default_factory=list)
+    timestamps: deque[float] = field(default_factory=deque)
     
-    def cleanup(self, window_seconds: float) -> None:
+    def cleanup(self, window_seconds: float, now: Optional[float] = None) -> None:
         """Remove expired timestamps."""
-        cutoff = time.time() - window_seconds
-        self.timestamps = [t for t in self.timestamps if t > cutoff]
+        current_time = time.time() if now is None else now
+        cutoff = current_time - window_seconds
+
+        while self.timestamps and self.timestamps[0] <= cutoff:
+            self.timestamps.popleft()
     
     def is_allowed(self, max_requests: int) -> bool:
         """Check if request is allowed."""
         return len(self.timestamps) < max_requests
     
-    def record(self) -> None:
+    def record(self, now: Optional[float] = None) -> None:
         """Record a request."""
-        self.timestamps.append(time.time())
+        self.timestamps.append(time.time() if now is None else now)
 
 
 class RateLimiter:
@@ -85,9 +88,14 @@ class RateLimiter:
         self.tool_limit = tool_limit or RateLimit.per_minute(30)
         self.max_entries = max_entries
         
-        self._entries: dict[str, RateLimitEntry] = defaultdict(RateLimitEntry)
+        self._entries: OrderedDict[str, RateLimitEntry] = OrderedDict()
         self._cleanup_interval = 60.0  # Cleanup every minute
         self._last_cleanup = time.time()
+        self._cleanup_batch_size = max(32, min(256, self.max_entries))
+        self._aggressive_cleanup_batch_size = max(
+            self._cleanup_batch_size,
+            min(max(self.max_entries, 1), 1024),
+        )
         
         logger.info(f"RateLimiter initialized: messages={self.default_limit}, tools={self.tool_limit}, max_entries={self.max_entries}")
     
@@ -103,31 +111,37 @@ class RateLimiter:
             (is_allowed, retry_after_seconds)
         """
         limit = limit or self.default_limit
+        now = time.time()
         
         # Periodic cleanup
-        if time.time() - self._last_cleanup > self._cleanup_interval:
-            self._cleanup()
+        if now - self._last_cleanup > self._cleanup_interval:
+            self._cleanup(now=now)
+        
+        entry = self._entries.get(key)
+        is_new_key = entry is None
         
         # Limit total entries to prevent memory growth
-        if len(self._entries) >= self.max_entries:
-            logger.warning(f"Rate limiter entries limit reached ({self.max_entries}), running aggressive cleanup")
-            self._cleanup(aggressive=True)
-            
-            # If still at limit after aggressive cleanup, reject the new key
-            if len(self._entries) >= self.max_entries:
+        if is_new_key:
+            if not self._ensure_capacity(key, now):
                 logger.error(f"Rate limiter cannot accept new key {key}: too many entries")
                 return False, 60.0  # Retry after 1 minute
+            entry = RateLimitEntry()
+            self._entries[key] = entry
+        else:
+            self._entries.move_to_end(key)
         
-        entry = self._entries[key]
-        entry.cleanup(limit.window_seconds)
+        entry.cleanup(limit.window_seconds, now=now)
+
+        if not entry.timestamps:
+            self._entries.move_to_end(key)
         
         if entry.is_allowed(limit.max_requests):
-            entry.record()
+            entry.record(now=now)
             return True, 0.0
         else:
             # Calculate retry time
-            oldest = min(entry.timestamps)
-            retry_after = oldest + limit.window_seconds - time.time()
+            oldest = entry.timestamps[0]
+            retry_after = oldest + limit.window_seconds - now
             return False, max(0, retry_after)
     
     def check_message(self, user_id: str, channel: str) -> tuple[bool, float]:
@@ -143,41 +157,68 @@ class RateLimiter:
     def record_message(self, user_id: str, channel: str) -> None:
         """Record a message (bypasses check)."""
         key = f"msg:{channel}:{user_id}"
-        self._entries[key].record()
+        self._get_or_create_entry(key).record()
     
     def record_tool(self, tool_name: str, user_id: str) -> None:
         """Record a tool execution."""
         key = f"tool:{tool_name}:{user_id}"
-        self._entries[key].record()
+        self._get_or_create_entry(key).record()
+
+    def _get_or_create_entry(self, key: str) -> RateLimitEntry:
+        """Get an entry and update its LRU position."""
+        entry = self._entries.get(key)
+        if entry is None:
+            entry = RateLimitEntry()
+            self._entries[key] = entry
+        else:
+            self._entries.move_to_end(key)
+        return entry
+
+    def _ensure_capacity(self, incoming_key: str, now: float) -> bool:
+        """Make room for a new key using bounded cleanup and LRU eviction."""
+        if self.max_entries <= 0:
+            return False
+
+        if len(self._entries) < self.max_entries:
+            return True
+
+        logger.warning(
+            f"Rate limiter entries limit reached ({self.max_entries}), running aggressive cleanup"
+        )
+        self._cleanup(aggressive=True, now=now)
+
+        while len(self._entries) >= self.max_entries:
+            evicted_key, _ = self._entries.popitem(last=False)
+            logger.debug(f"Rate limiter evicted least recently used key: {evicted_key}")
+            if evicted_key == incoming_key:
+                continue
+
+        return len(self._entries) < self.max_entries
     
-    def _cleanup(self, aggressive: bool = False) -> None:
+    def _cleanup(self, aggressive: bool = False, now: Optional[float] = None) -> None:
         """
         Clean up expired entries.
         
         Args:
-            aggressive: If True, also remove entries older than 2x window_seconds
+            aggressive: If True, inspect a larger oldest-first batch before evicting
         """
+        current_time = time.time() if now is None else now
         max_window = max(self.default_limit.window_seconds, self.tool_limit.window_seconds)
-        cutoff = time.time() - max_window
-        
-        # For aggressive cleanup, use 2x window_seconds cutoff
-        aggressive_cutoff = time.time() - (2 * max_window) if aggressive else None
-        
-        # Clean up each entry
-        for key, entry in list(self._entries.items()):
-            entry.cleanup(max_window)
-            
-            # For aggressive cleanup, also check for stale entries
-            if aggressive and aggressive_cutoff is not None:
-                # Remove entries that have no recent timestamps
-                if not entry.timestamps or min(entry.timestamps) < aggressive_cutoff:
-                    del self._entries[key]
-                    continue
-            
+
+        batch_size = self._aggressive_cleanup_batch_size if aggressive else self._cleanup_batch_size
+        keys_to_check = list(self._entries.keys())[:batch_size]
+
+        for key in keys_to_check:
+            entry = self._entries.get(key)
+            if entry is None:
+                continue
+
+            entry.cleanup(max_window, now=current_time)
+
             if not entry.timestamps:
                 del self._entries[key]
         
-        self._last_cleanup = time.time()
+        self._last_cleanup = current_time
         logger.debug(f"Rate limiter cleanup: {len(self._entries)} active keys")
     
     def get_stats(self) -> dict:

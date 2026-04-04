@@ -2,6 +2,41 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.5.0] - 2026-04-04
+
+### Breaking Changes
+
+- **Internal async changes**: `MemoryManager` and `SQLiteStorage` now use real async persistence via `aiosqlite`. Code that previously called these components synchronously must use `await`. No public API changes.
+
+### New Features
+
+- **Cross-platform shell execution**: Native Windows PowerShell support with platform-specific command handling
+- **Optional monitoring dependencies**: Install with `pip install clawlet[monitoring]` for `psutil`-based system metrics
+- **Comprehensive test suite**: Added unit tests covering security-critical paths, async behavior, memory operations, rate limiting, and configuration validation
+
+### Improvements
+
+- **Real async persistence**: `MemoryManager` and `SQLiteStorage` now use `aiosqlite` for non-blocking database operations
+- **Event-loop-safe HTTP client manager**: HTTP connections no longer bind to the wrong event loop
+- **Circuit breaker pattern unified**: Consistent circuit breaker behavior across all provider calls
+- **O(1) memory recall**: Short-term storage now uses indexed lookups for constant-time retrieval
+- **LRU-style rate limiter cleanup**: Stale rate limit entries are automatically evicted to prevent memory growth
+- **Atomic config reload**: Configuration updates are applied atomically to prevent partial reads
+- **UUID-based memory note keys**: Memory notes now use UUIDs instead of predictable identifiers
+- **Blake2s session IDs**: Replaced MD5 with Blake2s for cryptographically stronger session identifiers
+
+### Bug Fixes
+
+- **Fixed `LLMResponse.tool_calls` mutable default**: Replaced mutable list default with `None` + factory pattern
+- **Fixed async lock bound to wrong event loop**: Locks are now created lazily within the correct event loop context
+- **Fixed memory key collision risk**: UUID-based keys eliminate collision possibilities
+- **Fixed README typo**: Corrected formatting and text errors
+
+### Security
+
+- **Hardened shell tool**: Windows-specific dangerous pattern blocking added (PowerShell-specific injection vectors, WMI abuse, registry manipulation)
+- **Comprehensive security tests**: Added tests for all security-critical validation paths including cross-platform shell injection patterns
+
 ## [0.4.7] - 2026-03-24
 
 ### Fixes

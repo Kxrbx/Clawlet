@@ -55,7 +55,7 @@ class RememberTool(BaseTool):
     async def execute(self, key: str, value: str, category: str = "general", importance: int = 5) -> ToolResult:
         """Store information in memory."""
         try:
-            self.memory.remember(key, value, category, importance)
+            await self.memory.remember(key, value, category, importance)
             logger.debug(f"Remembered: {key} in category {category}")
             return ToolResult(
                 success=True,
@@ -100,7 +100,7 @@ class RecallTool(BaseTool):
     async def execute(self, key: str) -> ToolResult:
         """Retrieve information from memory."""
         try:
-            value = self.memory.recall(key)
+            value = await self.memory.recall(key)
             if value is not None:
                 logger.debug(f"Recalled: {key}")
                 return ToolResult(
@@ -151,7 +151,7 @@ class ForgetTool(BaseTool):
     async def execute(self, key: str) -> ToolResult:
         """Remove information from memory."""
         try:
-            removed = self.memory.forget(key)
+            removed = await self.memory.forget(key)
             if removed:
                 logger.debug(f"Forgot: {key}")
                 return ToolResult(
@@ -204,7 +204,7 @@ class GetContextTool(BaseTool):
     async def execute(self, max_entries: int = 10) -> ToolResult:
         """Get memories as context."""
         try:
-            context = self.memory.get_context(max_entries)
+            context = await self.memory.get_context(max_entries)
             logger.debug(f"Retrieved context with max_entries={max_entries}")
             return ToolResult(
                 success=True,
@@ -253,7 +253,7 @@ class SearchMemoryTool(BaseTool):
 
     async def execute(self, query: str, category: Optional[str] = None, limit: int = 5) -> ToolResult:
         try:
-            matches = self.memory.search(query=query, category=category, limit=limit)
+            matches = await self.memory.search(query=query, category=category, limit=limit)
             if not matches:
                 return ToolResult(success=True, output="No matching memories found.")
             lines = ["## Memory Search Results"]
@@ -297,7 +297,7 @@ class RecentMemoriesTool(BaseTool):
 
     async def execute(self, limit: int = 5, category: Optional[str] = None) -> ToolResult:
         try:
-            matches = self.memory.recent(limit=limit, category=category)
+            matches = await self.memory.recent(limit=limit, category=category)
             if not matches:
                 return ToolResult(success=True, output="No recent memories found.")
             lines = ["## Recent Memories"]
@@ -392,7 +392,7 @@ class CurateMemoryTool(BaseTool):
 
     async def execute(self, days: int = 7, limit: int = 10) -> ToolResult:
         try:
-            promoted = self.memory.curate_from_recent_daily_notes(days=days, limit=limit)
+            promoted = await self.memory.curate_from_recent_daily_notes(days=days, limit=limit)
             if not promoted:
                 return ToolResult(success=True, output="No durable items needed promotion from recent daily notes.")
             lines = ["## Curated Memory Updates"]

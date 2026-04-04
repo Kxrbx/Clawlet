@@ -1,13 +1,14 @@
 """Storage backend interfaces and SQLite implementation."""
 
 import json
-import sqlite3
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
+import aiosqlite
 from loguru import logger
 
 
@@ -65,43 +66,46 @@ class StorageBackend(ABC):
 class SQLiteStorage(StorageBackend):
     """SQLite storage backend."""
     
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self._db: Optional[sqlite3.Connection] = None
+    def __init__(self, db_path: Path | str):
+        self.db_path = Path(db_path)
+        self._db: Optional[aiosqlite.Connection] = None
+        self._lock = asyncio.Lock()
         
     async def initialize(self) -> None:
         """Initialize the database."""
-        # Ensure directory exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self._db = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA synchronous=NORMAL")
-        self._db.execute("PRAGMA foreign_keys=ON")
-        self._db.execute("PRAGMA temp_store=MEMORY")
-        self._db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                metadata TEXT NOT NULL DEFAULT '{}',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        async with self._lock:
+            if self._db is not None:
+                return
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            db = await aiosqlite.connect(str(self.db_path), timeout=30.0)
+            self._db = db
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA synchronous=NORMAL")
+            await db.execute("PRAGMA foreign_keys=ON")
+            await db.execute("PRAGMA temp_store=MEMORY")
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
-        )
-        self._ensure_metadata_column()
-        self._ensure_runtime_meta_table()
-        self._db.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_messages_session
-            ON messages(session_id, created_at DESC)
-            """
-        )
-        self._set_schema_version(1)
-        self._db.commit()
-        logger.info(f"SQLite storage initialized at {self.db_path}")
+            await self._ensure_metadata_column()
+            await self._ensure_runtime_meta_table()
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_session
+                ON messages(session_id, created_at DESC)
+                """
+            )
+            await self._set_schema_version(1)
+            await db.commit()
+            logger.info(f"SQLite storage initialized at {self.db_path}")
     
     async def store_message(
         self,
@@ -114,33 +118,36 @@ class SQLiteStorage(StorageBackend):
         if self._db is None:
             raise RuntimeError("Database not initialized")
 
-        cursor = self._db.execute(
-            "INSERT INTO messages (session_id, role, content, metadata) VALUES (?, ?, ?, ?)",
-            (session_id, role, content, json.dumps(metadata or {}, ensure_ascii=True, sort_keys=True)),
-        )
-        self._db.commit()
-        return int(cursor.lastrowid)
+        async with self._lock:
+            cursor = await self._db.execute(
+                "INSERT INTO messages (session_id, role, content, metadata) VALUES (?, ?, ?, ?)",
+                (session_id, role, content, json.dumps(metadata or {}, ensure_ascii=True, sort_keys=True)),
+            )
+            await self._db.commit()
+            row_id = cursor.lastrowid
+            return int(row_id) if row_id is not None else 0
     
     async def get_messages(self, session_id: str, limit: int = 100) -> List[Message]:
         """Get messages for a session in chronological order."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
 
-        cursor = self._db.execute(
-            """
-            SELECT id, session_id, role, content, metadata, created_at
-            FROM (
+        async with self._lock:
+            cursor = await self._db.execute(
+                """
                 SELECT id, session_id, role, content, metadata, created_at
-                FROM messages
-                WHERE session_id = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
+                FROM (
+                    SELECT id, session_id, role, content, metadata, created_at
+                    FROM messages
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                )
+                ORDER BY created_at ASC, id ASC
+                """,
+                (session_id, limit),
             )
-            ORDER BY created_at ASC, id ASC
-            """,
-            (session_id, limit),
-        )
-        rows = cursor.fetchall()
+            rows = await cursor.fetchall()
 
         messages: list[Message] = []
         for row in rows:
@@ -161,20 +168,22 @@ class SQLiteStorage(StorageBackend):
         if self._db is None:
             raise RuntimeError("Database not initialized")
 
-        cursor = self._db.execute(
-            "DELETE FROM messages WHERE session_id = ?",
-            (session_id,),
-        )
-        self._db.commit()
-        return int(cursor.rowcount)
+        async with self._lock:
+            cursor = await self._db.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                (session_id,),
+            )
+            await self._db.commit()
+            return int(cursor.rowcount)
     
     async def close(self) -> None:
         """Close the database connection."""
-        if self._db:
-            db = self._db
-            self._db = None
-            db.close()
-            logger.info("SQLite storage closed")
+        async with self._lock:
+            if self._db:
+                db = self._db
+                self._db = None
+                await db.close()
+                logger.info("SQLite storage closed")
     
     def is_initialized(self) -> bool:
         """Check if storage is initialized and ready."""
@@ -185,25 +194,26 @@ class SQLiteStorage(StorageBackend):
         if not self._db:
             raise RuntimeError("Database not initialized")
         try:
-            self._db.execute("SELECT 1")
+            await self._db.execute("SELECT 1")
         except Exception as e:
             raise RuntimeError(f"DB health check failed: {e}")
 
-    def _ensure_metadata_column(self) -> None:
+    async def _ensure_metadata_column(self) -> None:
         """Backfill metadata storage on older databases."""
         assert self._db is not None
+        db = self._db
         columns = {
             str(row[1]).lower()
-            for row in self._db.execute("PRAGMA table_info(messages)").fetchall()
+            for row in await (await db.execute("PRAGMA table_info(messages)")).fetchall()
         }
         if "metadata" in columns:
             return
-        self._db.execute("ALTER TABLE messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
-        self._db.commit()
+        await db.execute("ALTER TABLE messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+        await db.commit()
 
-    def _ensure_runtime_meta_table(self) -> None:
+    async def _ensure_runtime_meta_table(self) -> None:
         assert self._db is not None
-        self._db.execute(
+        await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS runtime_meta (
                 key TEXT PRIMARY KEY,
@@ -212,10 +222,10 @@ class SQLiteStorage(StorageBackend):
             """
         )
 
-    def _set_schema_version(self, version: int) -> None:
+    async def _set_schema_version(self, version: int) -> None:
         assert self._db is not None
-        self._db.execute(f"PRAGMA user_version = {int(version)}")
-        self._db.execute(
+        await self._db.execute(f"PRAGMA user_version = {int(version)}")
+        await self._db.execute(
             "INSERT OR REPLACE INTO runtime_meta (key, value) VALUES (?, ?)",
             ("schema_version", str(int(version))),
         )

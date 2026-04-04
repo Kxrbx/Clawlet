@@ -4,12 +4,15 @@ Memory management for agent context and history.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+import asyncio
+from collections import OrderedDict
 import json
-import sqlite3
 from typing import Optional, Any
 from pathlib import Path
 import re
+from uuid import uuid4
 
+import aiosqlite
 from loguru import logger
 from clawlet.workspace_layout import get_workspace_layout
 
@@ -64,30 +67,55 @@ class MemoryManager:
         self.max_short_term = max_short_term
         self.db_path = self.workspace / "memory.db"
         
-        self._short_term: list[MemoryEntry] = []
+        self._short_term: OrderedDict[str, MemoryEntry] = OrderedDict()
+        self._short_term_index: dict[str, MemoryEntry] = self._short_term
         self._long_term: dict[str, MemoryEntry] = {}
         self._working: dict[str, Any] = {}
         self._base_memory_content: str = ""
-        self._db: Optional[sqlite3.Connection] = None
+        self._db: Optional[aiosqlite.Connection] = None
         self._fts_enabled = False
-
-        self._initialize_db()
-        
-        # Load long-term memories from MEMORY.md
+        self._initialized = False
+        self._init_lock: asyncio.Lock | None = None
+        self._file_lock: asyncio.Lock | None = None
         self._load_long_term()
-        self._load_long_term_from_db()
-        removed = self.compact_long_term()
-        if removed:
-            logger.info(f"Compacted {removed} low-value long-term memories")
-        
-        logger.info(f"MemoryManager initialized with {len(self._long_term)} long-term memories")
     
-    def _load_long_term(self) -> None:
+    @property
+    def _async_init_lock(self) -> asyncio.Lock:
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        return self._init_lock
+
+    @property
+    def _async_file_lock(self) -> asyncio.Lock:
+        if self._file_lock is None:
+            self._file_lock = asyncio.Lock()
+        return self._file_lock
+
+    async def initialize(self) -> None:
+        """Initialize the SQLite store and hydrate cached memory state."""
+        if self._initialized:
+            return
+        async with self._async_init_lock:
+            if self._initialized:
+                return
+            generated_content = self._load_long_term()
+            await self._initialize_db()
+            if generated_content and not await self._db_has_memory_entries():
+                self._load_structured_entries(generated_content)
+                await self._sync_long_term_to_db()
+            await self._load_long_term_from_db()
+            removed = await self.compact_long_term()
+            if removed:
+                logger.info(f"Compacted {removed} low-value long-term memories")
+            self._initialized = True
+            logger.info(f"MemoryManager initialized with {len(self._long_term)} long-term memories")
+
+    def _load_long_term(self) -> str:
         """Load long-term memories from MEMORY.md."""
         memory_file = self.workspace / "MEMORY.md"
         if not memory_file.exists():
             logger.debug(f"No MEMORY.md found at {memory_file}")
-            return
+            return ""
         
         try:
             content = memory_file.read_text(encoding="utf-8")
@@ -99,18 +127,19 @@ class MemoryManager:
                 category="system",
                 importance=10,
             )
-            if not self._db_has_memory_entries():
-                self._load_structured_entries(generated_content or content)
-                self._sync_long_term_to_db()
+            return generated_content or content
         except Exception as e:
             logger.warning(f"Failed to load MEMORY.md: {e}")
+            return ""
 
-    def _initialize_db(self) -> None:
+    async def _initialize_db(self) -> None:
         """Initialize the SQLite-backed memory store."""
         try:
             self.workspace.mkdir(parents=True, exist_ok=True)
-            self._db = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
-            self._db.execute(
+            self._db = await aiosqlite.connect(str(self.db_path), timeout=30.0)
+            db = self._db
+            assert db is not None
+            await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory_entries (
                     key TEXT PRIMARY KEY,
@@ -123,14 +152,14 @@ class MemoryManager:
                 )
                 """
             )
-            self._db.execute(
+            await db.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_memory_entries_category_updated
                 ON memory_entries(category, updated_at DESC)
                 """
             )
             try:
-                self._db.execute(
+                await db.execute(
                     """
                     CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts
                     USING fts5(key, value, category)
@@ -140,33 +169,35 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(f"FTS5 unavailable for memory DB {self.db_path}: {e}")
                 self._fts_enabled = False
-            self._db.commit()
+            await db.commit()
         except Exception as e:
             logger.warning(f"Failed to initialize memory DB {self.db_path}: {e}")
             self._db = None
 
-    def _db_has_memory_entries(self) -> bool:
+    async def _db_has_memory_entries(self) -> bool:
         if self._db is None:
             return False
         try:
-            row = self._db.execute("SELECT COUNT(*) FROM memory_entries").fetchone()
+            async with self._db.execute("SELECT COUNT(*) FROM memory_entries") as cursor:
+                row = await cursor.fetchone()
             return bool(row and int(row[0]) > 0)
         except Exception as e:
             logger.warning(f"Failed to inspect memory DB {self.db_path}: {e}")
             return False
 
-    def _load_long_term_from_db(self) -> None:
+    async def _load_long_term_from_db(self) -> None:
         """Load structured memories from SQLite if available."""
         if self._db is None:
             return
         try:
-            rows = self._db.execute(
+            async with self._db.execute(
                 """
                 SELECT key, value, category, importance, created_at, updated_at, metadata
                 FROM memory_entries
                 ORDER BY updated_at DESC, key ASC
                 """
-            ).fetchall()
+            ) as cursor:
+                rows = await cursor.fetchall()
         except Exception as e:
             logger.warning(f"Failed to load memories from DB {self.db_path}: {e}")
             return
@@ -203,7 +234,7 @@ class MemoryManager:
 
     def _all_entries(self) -> list[MemoryEntry]:
         """Return the merged in-memory view without duplicate keys."""
-        return self._dedupe_entries(self._short_term + list(self._long_term.values()))
+        return self._dedupe_entries(list(self._short_term.values()) + list(self._long_term.values()))
 
     @staticmethod
     def _parse_dt(value: str) -> datetime:
@@ -212,11 +243,11 @@ class MemoryManager:
         except Exception:
             return datetime.now(UTC)
 
-    def _upsert_db_entry(self, entry: MemoryEntry) -> None:
+    async def _upsert_db_entry(self, entry: MemoryEntry) -> None:
         if self._db is None or entry.key == "__file__":
             return
         try:
-            self._db.execute(
+            await self._db.execute(
                 """
                 INSERT INTO memory_entries (key, value, category, importance, created_at, updated_at, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -238,33 +269,33 @@ class MemoryManager:
                 ),
             )
             if self._fts_enabled:
-                self._db.execute("DELETE FROM memory_entries_fts WHERE key = ?", (entry.key,))
-                self._db.execute(
+                await self._db.execute("DELETE FROM memory_entries_fts WHERE key = ?", (entry.key,))
+                await self._db.execute(
                     "INSERT INTO memory_entries_fts (key, value, category) VALUES (?, ?, ?)",
                     (entry.key, entry.value, entry.category),
                 )
-            self._db.commit()
+            await self._db.commit()
         except Exception as e:
             logger.warning(f"Failed to persist memory '{entry.key}' to DB: {e}")
 
-    def _delete_db_entry(self, key: str) -> None:
+    async def _delete_db_entry(self, key: str) -> None:
         if self._db is None:
             return
         try:
-            self._db.execute("DELETE FROM memory_entries WHERE key = ?", (key,))
+            await self._db.execute("DELETE FROM memory_entries WHERE key = ?", (key,))
             if self._fts_enabled:
-                self._db.execute("DELETE FROM memory_entries_fts WHERE key = ?", (key,))
-            self._db.commit()
+                await self._db.execute("DELETE FROM memory_entries_fts WHERE key = ?", (key,))
+            await self._db.commit()
         except Exception as e:
             logger.warning(f"Failed to delete memory '{key}' from DB: {e}")
 
-    def _sync_long_term_to_db(self) -> None:
+    async def _sync_long_term_to_db(self) -> None:
         if self._db is None:
             return
         for entry in self._long_term.values():
             if entry.key == "__file__":
                 continue
-            self._upsert_db_entry(entry)
+            await self._upsert_db_entry(entry)
 
     def _split_memory_sections(self, content: str) -> tuple[str, str]:
         """Split manual MEMORY.md content from the auto-generated section."""
@@ -300,7 +331,7 @@ class MemoryManager:
                 importance=8,
             )
     
-    def remember(
+    async def remember(
         self,
         key: str,
         value: str,
@@ -322,6 +353,7 @@ class MemoryManager:
         if not sanitized_value:
             logger.debug(f"Skipping low-value memory entry: {key}")
             return
+        await self.initialize()
 
         entry = MemoryEntry(
             key=key,
@@ -332,23 +364,22 @@ class MemoryManager:
         )
         
         # Add to short-term
-        self._short_term.append(entry)
+        self._short_term_index[key] = entry
+        self._short_term.move_to_end(key)
         
         # Also add/update in long-term storage for persistence
         self._long_term[key] = entry
-        self._upsert_db_entry(entry)
+        await self._upsert_db_entry(entry)
         if write_daily_note:
-            self._append_daily_note(entry)
+            await self._append_daily_note_async(entry)
         
         # Trim short-term if needed
-        if len(self._short_term) > self.max_short_term:
-            # Remove lowest importance, oldest entries
-            self._short_term.sort(key=lambda e: (e.importance, e.created_at), reverse=True)
-            self._short_term = self._short_term[:self.max_short_term]
+        while len(self._short_term) > self.max_short_term:
+            self._short_term.popitem(last=False)
         
         logger.debug(f"Remembered: {key} (importance={importance})")
     
-    def recall(self, key: str) -> Optional[str]:
+    async def recall(self, key: str) -> Optional[str]:
         """
         Recall a memory by key.
         
@@ -360,10 +391,10 @@ class MemoryManager:
         Returns:
             Memory value or None
         """
-        # Check short-term (most recent first)
-        for entry in reversed(self._short_term):
-            if entry.key == key:
-                return entry.value
+        await self.initialize()
+        entry = self._short_term_index.get(key)
+        if entry is not None:
+            return entry.value
         
         # Check long-term
         if key in self._long_term:
@@ -388,13 +419,16 @@ class MemoryManager:
         
         return filtered[:limit]
 
-    def search(self, query: str, category: Optional[str] = None, limit: int = 10) -> list[MemoryEntry]:
+    async def search(self, query: str, category: Optional[str] = None, limit: int = 10) -> list[MemoryEntry]:
         """Search memories by free-text query, preferring the SQLite store."""
+        await self.initialize()
         text = (query or "").strip().lower()
         if not text:
             return []
         if self._db is not None:
             try:
+                db = self._db
+                assert db is not None
                 fts_query = self._fts_query(text)
                 if fts_query and self._fts_enabled:
                     sql = (
@@ -409,7 +443,8 @@ class MemoryManager:
                         params.append(category)
                     sql += " ORDER BY e.importance DESC, e.updated_at DESC LIMIT ?"
                     params.append(limit)
-                    rows = self._db.execute(sql, tuple(params)).fetchall()
+                    async with db.execute(sql, tuple(params)) as cursor:
+                        rows = await cursor.fetchall()
                     results: list[MemoryEntry] = []
                     for row in rows:
                         entry = self._entry_from_row(row)
@@ -428,7 +463,8 @@ class MemoryManager:
                     params.append(category)
                 sql += " ORDER BY importance DESC, updated_at DESC LIMIT ?"
                 params.append(limit)
-                rows = self._db.execute(sql, tuple(params)).fetchall()
+                async with db.execute(sql, tuple(params)) as cursor:
+                    rows = await cursor.fetchall()
                 results: list[MemoryEntry] = []
                 for row in rows:
                     entry = self._entry_from_row(row)
@@ -448,10 +484,13 @@ class MemoryManager:
         filtered.sort(key=lambda e: (e.importance, e.updated_at), reverse=True)
         return filtered[:limit]
 
-    def recent(self, limit: int = 10, category: Optional[str] = None) -> list[MemoryEntry]:
+    async def recent(self, limit: int = 10, category: Optional[str] = None) -> list[MemoryEntry]:
         """Return recent memories, preferring the SQLite-backed long-term store."""
+        await self.initialize()
         if self._db is not None:
             try:
+                db = self._db
+                assert db is not None
                 sql = (
                     "SELECT key, value, category, importance, created_at, updated_at, metadata "
                     "FROM memory_entries"
@@ -462,7 +501,8 @@ class MemoryManager:
                     params.append(category)
                 sql += " ORDER BY updated_at DESC, importance DESC LIMIT ?"
                 params.append(limit)
-                rows = self._db.execute(sql, tuple(params)).fetchall()
+                async with db.execute(sql, tuple(params)) as cursor:
+                    rows = await cursor.fetchall()
                 results: list[MemoryEntry] = []
                 for row in rows:
                     entry = self._entry_from_row(row)
@@ -478,7 +518,7 @@ class MemoryManager:
         all_memories.sort(key=lambda e: e.updated_at, reverse=True)
         return all_memories[:limit]
     
-    def forget(self, key: str) -> bool:
+    async def forget(self, key: str) -> bool:
         """
         Remove a memory.
         
@@ -488,15 +528,13 @@ class MemoryManager:
         Returns:
             True if memory was removed
         """
+        await self.initialize()
         removed = False
         
         # Remove from short-term
-        for i, entry in enumerate(self._short_term):
-            if entry.key == key:
-                self._short_term.pop(i)
-                logger.debug(f"Forgot short-term memory: {key}")
-                removed = True
-                break  # key unique, stop after first
+        if self._short_term_index.pop(key, None) is not None:
+            logger.debug(f"Forgot short-term memory: {key}")
+            removed = True
         
         # Remove from long-term
         if key in self._long_term:
@@ -504,7 +542,7 @@ class MemoryManager:
             logger.debug(f"Forgot long-term memory: {key}")
             removed = True
         if removed:
-            self._delete_db_entry(key)
+            await self._delete_db_entry(key)
         
         return removed
     
@@ -520,7 +558,7 @@ class MemoryManager:
         """Clear all working memory."""
         self._working.clear()
     
-    def get_context(self, max_entries: int = 20, query: str = "") -> str:
+    async def get_context(self, max_entries: int = 20, query: str = "") -> str:
         """
         Build context string from memories.
         
@@ -533,7 +571,7 @@ class MemoryManager:
         """
         max_entries = max(1, min(int(max_entries or 1), 50))
         query = (query or "").strip()
-        top_memories = self._context_entries(max_entries=max_entries, query=query)
+        top_memories = await self._context_entries(max_entries=max_entries, query=query)
         if not top_memories:
             return ""
         
@@ -544,7 +582,7 @@ class MemoryManager:
         
         return "\n".join(lines)
 
-    def _context_entries(self, max_entries: int, query: str = "") -> list[MemoryEntry]:
+    async def _context_entries(self, max_entries: int, query: str = "") -> list[MemoryEntry]:
         """Select prompt memory with a relevance-first path and recent/high-signal fallback."""
         query = (query or "").strip()
         selected: list[MemoryEntry] = []
@@ -561,13 +599,13 @@ class MemoryManager:
             seen.add(entry.key)
 
         if query:
-            for entry in self.search(query=query, limit=max_entries):
+            for entry in await self.search(query=query, limit=max_entries):
                 add(entry)
                 if len(selected) >= max_entries:
                     return selected
 
             recent_limit = max(3, min(max_entries, max_entries // 2 + 2))
-            for entry in self.recent(limit=recent_limit):
+            for entry in await self.recent(limit=recent_limit):
                 if int(entry.importance or 0) >= 7:
                     add(entry)
                 if len(selected) >= max_entries:
@@ -599,7 +637,7 @@ class MemoryManager:
         """Return only the manual identity memory section, excluding auto-generated memories."""
         return self._base_memory_content.strip()
     
-    def save_long_term(self) -> None:
+    async def save_long_term(self) -> None:
         """Save long-term memories to MEMORY.md."""
         memory_file = self.workspace / "MEMORY.md"
         
@@ -634,7 +672,7 @@ class MemoryManager:
             lines.extend(generated_lines)
 
             content = "\n".join(lines).rstrip() + "\n"
-            memory_file.write_text(content, encoding="utf-8")
+            await self._write_text_file(memory_file, content)
             self._long_term["__file__"] = MemoryEntry(
                 key="__file__",
                 value=content,
@@ -645,7 +683,7 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"Failed to save memories: {e}")
 
-    def compact_long_term(self) -> int:
+    async def compact_long_term(self) -> int:
         """Drop low-value long-term memories that should not survive across sessions."""
         removed = 0
         for key in list(self._long_term.keys()):
@@ -655,13 +693,14 @@ class MemoryManager:
             sanitized = self._sanitize_memory_value(entry.value)
             if not sanitized:
                 del self._long_term[key]
-                self._delete_db_entry(key)
+                self._short_term_index.pop(key, None)
+                await self._delete_db_entry(key)
                 removed += 1
                 continue
             if sanitized != entry.value:
                 entry.value = sanitized
                 entry.updated_at = datetime.now(UTC)
-                self._upsert_db_entry(entry)
+                await self._upsert_db_entry(entry)
         return removed
     
     def get_stats(self) -> dict:
@@ -688,32 +727,33 @@ class MemoryManager:
             "categories": sorted({m.category for m in self._all_entries()}),
         }
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Flush and close the SQLite-backed memory store."""
         try:
-            self.save_long_term()
+            if self._initialized:
+                await self.save_long_term()
         finally:
             if self._db is not None:
                 db = self._db
                 self._db = None
-                db.close()
+                await db.close()
 
     @property
     def daily_notes_dir(self) -> Path:
         return get_workspace_layout(self.workspace).memory_dir
 
-    def append_note(self, text: str, category: str = "notes", source: str = "manual") -> None:
+    async def append_note(self, text: str, category: str = "notes", source: str = "manual") -> None:
         """Append an unstructured episodic note to today's daily memory file."""
         cleaned = self._sanitize_memory_value(text)
         if not cleaned:
             return
-        key = f"note_{int(datetime.now(UTC).timestamp() * 1_000_000)}"
+        key = f"note_{uuid4()}"
         metadata = {
             "source": source,
             "scope": "daily_note",
             "curated": False,
         }
-        self.remember(
+        await self.remember(
             key=key,
             value=cleaned,
             category=category,
@@ -723,7 +763,15 @@ class MemoryManager:
         )
         entry = self._long_term.get(key)
         if entry is not None:
-            self._append_daily_note(entry)
+            await self._append_daily_note_async(entry)
+
+    async def _append_daily_note_async(self, entry: MemoryEntry) -> None:
+        async with self._async_file_lock:
+            await asyncio.to_thread(self._append_daily_note, entry)
+
+    async def _write_text_file(self, path: Path, content: str) -> None:
+        async with self._async_file_lock:
+            await asyncio.to_thread(path.write_text, content, encoding="utf-8")
 
     def get_recent_daily_notes(self, days: int = 7, limit: int = 200) -> str:
         """Return recent daily note content for review/curation."""
@@ -758,7 +806,7 @@ class MemoryManager:
 
         return "\n".join(lines).strip()
 
-    def curate_from_recent_daily_notes(self, days: int = 7, limit: int = 50) -> list[str]:
+    async def curate_from_recent_daily_notes(self, days: int = 7, limit: int = 50) -> list[str]:
         """Promote durable items from recent daily notes into curated long-term memory."""
         days = max(1, min(int(days or 1), 30))
         limit = max(1, min(int(limit or 10), 200))
@@ -799,7 +847,7 @@ class MemoryManager:
                 "curated_from_daily": True,
                 "curated_at": datetime.now(UTC).isoformat(),
             }
-            self.remember(
+            await self.remember(
                 key=key,
                 value=value,
                 category=category,
@@ -813,7 +861,7 @@ class MemoryManager:
                 break
 
         if promoted:
-            self.save_long_term()
+            await self.save_long_term()
         return promoted
 
     def _append_daily_note(self, entry: MemoryEntry) -> None:
@@ -837,7 +885,7 @@ class MemoryManager:
         except Exception as e:
             logger.warning(f"Failed to append daily memory note for '{entry.key}': {e}")
 
-    def _entry_from_row(self, row: tuple) -> Optional[MemoryEntry]:
+    def _entry_from_row(self, row: Any) -> Optional[MemoryEntry]:
         try:
             key, value, category, importance, created_at, updated_at, metadata_json = row
         except Exception:

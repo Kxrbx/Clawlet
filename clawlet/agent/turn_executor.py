@@ -11,6 +11,11 @@ from loguru import logger
 
 from clawlet.agent.heartbeat_turn import HeartbeatTurnHandler
 from clawlet.agent.models import Message, ToolCall
+from clawlet.agent.prompts import (
+    AUTONOMOUS_EXECUTION_NUDGE,
+    COMMITMENT_FOLLOWTHROUGH_NUDGE,
+    POST_TOOL_FINALIZATION_NUDGE,
+)
 from clawlet.tools.registry import ToolResult
 
 
@@ -89,7 +94,7 @@ class TurnExecutor:
                 break
             iteration += 1
             self.agent._save_checkpoint(stage="iteration", iteration=iteration, notes="Starting model iteration")
-            messages = self.agent._build_messages(
+            messages = await self.agent._build_messages(
                 convo.history,
                 query_hint=user_message,
                 is_heartbeat=is_heartbeat,
@@ -200,7 +205,7 @@ class TurnExecutor:
                         logger.info("Model returned mid-task narration without action; forcing same-turn follow-through")
                         commitment_followthrough_used = True
                         convo.history.append(
-                            Message(role="system", content=self.agent.COMMITMENT_FOLLOWTHROUGH_NUDGE)
+                            Message(role="system", content=COMMITMENT_FOLLOWTHROUGH_NUDGE)
                         )
                         continue
                     if is_internal_autonomous:
@@ -233,7 +238,7 @@ class TurnExecutor:
                     logger.info("Suppressing post-tool intermediate narration; forcing one finalization pass")
                     await self.agent._publish_progress_update("finalizing", "Finalizing the response.")
                     post_tool_finalization_used = True
-                    convo.history.append(Message(role="system", content=self.agent.POST_TOOL_FINALIZATION_NUDGE))
+                    convo.history.append(Message(role="system", content=POST_TOOL_FINALIZATION_NUDGE))
                     continue
 
                 if (
@@ -247,7 +252,7 @@ class TurnExecutor:
                             "Internal autonomous follow-up returned another commitment without tool calls; nudging model to execute now or report blocker"
                         )
                         action_nudge_used = True
-                        convo.history.append(Message(role="system", content=self.agent.AUTONOMOUS_EXECUTION_NUDGE))
+                        convo.history.append(Message(role="system", content=AUTONOMOUS_EXECUTION_NUDGE))
                         continue
                     logger.warning(
                         "Internal autonomous follow-up still returned a commitment with no tool calls after nudge"
@@ -624,7 +629,7 @@ class TurnExecutor:
                     ),
                 )
             )
-            messages = self.agent._build_messages(
+            messages = await self.agent._build_messages(
                 convo.history,
                 query_hint=user_message,
                 is_heartbeat=is_heartbeat,

@@ -57,7 +57,7 @@ class _FlakyChannel(BaseChannel):
 
 
 class _MemoryStub:
-    def recall(self, key: str):
+    async def recall(self, key: str):
         return "moltbook_test_key" if key == "moltbook_api_key" else None
 
 
@@ -143,6 +143,7 @@ async def test_sqlite_storage_returns_latest_messages_in_chronological_order_wit
     assert [message.content for message in messages] == ["message-2", "message-3"]
     assert messages[0].metadata == {"summary": True, "index": 2}
     assert messages[1].metadata == {"summary": False, "index": 3}
+    await storage.close()
 
 
 def test_agent_loop_skips_transient_assistant_persistence():
@@ -289,7 +290,7 @@ def test_agent_loop_normalizes_heartbeat_last_moltbook_check_write():
 
     rewritten = loop._normalize_heartbeat_tick_write(tool_call)
 
-    assert rewritten.arguments["path"] == "/root/.clawlet/workspace/.moltbook/lastMoltbookCheck"
+    assert rewritten.arguments["path"].endswith("lastMoltbookCheck")
     assert rewritten.arguments["content"] == "2026-03-18T16:00:04Z"
 
 

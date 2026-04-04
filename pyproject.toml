@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clawlet"
-version = "0.4.7"
+version = "0.5.0"
 description = "A lightweight AI agent framework with identity awareness"
 readme = "README.md"
 license = {text = "MIT"}
@@ -50,6 +50,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dashboard = []
+monitoring = [
+    "psutil>=5.9.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -67,3 +70,11 @@ include = ["clawlet*"]
 
 [tool.setuptools.package-data]
 clawlet = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "clawlet/tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests that touch cross-component or external boundaries",
+]

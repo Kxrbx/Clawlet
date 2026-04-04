@@ -468,6 +468,7 @@ async def update_config_yaml(
     token: str = Depends(verify_api_token)
 ):
     """Update config.yaml entirely."""
+    global config
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
     try:
@@ -476,8 +477,7 @@ async def update_config_yaml(
             raise HTTPException(status_code=400, detail="Missing content")
         config.config_path.write_text(new_yaml)
         # Reload config
-        global reload_config
-        config.reload()
+        config = config.reload()
         logger.info("Config.yaml updated via API")
         return {"success": True, "message": "Config updated"}
     except Exception as e:

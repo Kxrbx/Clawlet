@@ -4,7 +4,7 @@ Provider interfaces and implementations for LLM backends.
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional, AsyncIterator, Dict, Any
+from typing import Optional, AsyncIterator, Dict, Any, cast
 from dataclasses import dataclass, field
 import threading
 import httpx
@@ -18,7 +18,7 @@ class LLMResponse:
     model: str
     usage: dict
     finish_reason: str = "stop"
-    tool_calls: list = None  # List of tool calls from the model
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)  # List of tool calls from the model
 
 
 @dataclass
@@ -41,7 +41,6 @@ class HTTPClientManager:
     """
     
     _instance: Optional["HTTPClientManager"] = None
-    _lock: asyncio.Lock = None  # Will be initialized lazily
     _init_lock = threading.Lock()
     
     def __new__(cls, config: Optional[HTTPClientConfig] = None) -> "HTTPClientManager":
@@ -56,18 +55,25 @@ class HTTPClientManager:
     def __init__(self, config: Optional[HTTPClientConfig] = None):
         if self._initialized:
             return
-        
-        # Initialize async lock lazily to avoid issues with event loop
-        if HTTPClientManager._lock is None:
-            HTTPClientManager._lock = asyncio.Lock()
-        
+
         self._config = config or HTTPClientConfig()
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_lock: Optional[asyncio.Lock] = None
+        self._client_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._initialized = True
         logger.debug(
             f"HTTPClientManager initialized: max_connections={self._config.max_connections}, "
             f"max_keepalive={self._config.max_keepalive_connections}"
         )
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        """Get a lock bound to the currently running event loop."""
+        current_loop = asyncio.get_running_loop()
+        if self._client_lock is None or self._client_lock_loop is not current_loop:
+            self._client_lock = asyncio.Lock()
+            self._client_lock_loop = current_loop
+        return cast(asyncio.Lock, self._client_lock)
     
     @property
     def config(self) -> HTTPClientConfig:
@@ -208,15 +214,19 @@ class BaseProvider(ABC):
         manager = get_http_client_manager()
         
         # Get limits from the shared client if it exists
-        limits = None
+        limits: Optional[httpx.Limits] = None
         if manager._client is not None:
-            limits = manager._client._limits
-        
-        client = httpx.AsyncClient(
-            base_url=base_url,
-            headers=headers,
-            limits=limits,
-            timeout=httpx.Timeout(120.0),
-            http2=True,
-        )
+            limits = cast(Optional[httpx.Limits], getattr(manager._client, "_limits", None))
+
+        client_kwargs: Dict[str, Any] = {
+            "headers": headers,
+            "timeout": httpx.Timeout(120.0),
+            "http2": True,
+        }
+        if base_url is not None:
+            client_kwargs["base_url"] = base_url
+        if limits is not None:
+            client_kwargs["limits"] = limits
+
+        client = httpx.AsyncClient(**client_kwargs)
         return client
