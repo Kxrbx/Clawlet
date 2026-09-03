@@ -516,6 +516,5 @@ All enabled channels will be started when the agent runs.
 
 ## See Also
 
-- [Multi-Agent Documentation](multi-agent.md) - Route messages to different agents
-- [Webhooks Documentation](webhooks.md) - Receive external events
+- [Skills Documentation](skills.md) - Add capabilities to agents
 - [Quick Start Guide](../QUICKSTART.md) - Get started quickly

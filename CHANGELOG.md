@@ -2,6 +2,33 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.6.0a0] - v2 Hermes-inspired revamp (alpha, branch `v2-hermes-revamp`)
+
+### Breaking Changes
+
+- **Python 3.11+ required** (was 3.10+).
+- **`runtime.engine: hybrid_rust` removed** — only `python` is accepted. Run `python scripts/migrate_v1_to_v2.py --write` to normalize old configs.
+- **Heavy dependencies are now optional extras** — fresh installs need `pip install clawlet[full]` for the old all-included footprint (`channels`, `providers`, `storage-postgres`, `tui`). Core install stays lean.
+- **Version sync** — `pyproject.toml`, `clawlet.__version__` and the dashboard API all report `0.6.0a0`.
+
+### New Features
+
+- **Always-on orchestrator** — every non-trivial request is classified (hybrid rules + optional LLM) and delegated to an isolated sub-agent with its own provider/model/toolset/budget; trivial messages use a traced direct fallback. Configure per task kind (`code`, `plan`, `research`, `browser`, `memory`, `review`, `ops-tool`, `chat`, `scheduled`) via `task_profiles` in `config.yaml`.
+- **`clawlet tasks` CLI** — `list` / `show <kind>` resolved profiles, `test-routing "<text>"` offline classification.
+- **Toolsets** — `minimal/coding/browser/memory-only/full` named views over the tool registry (`clawlet/tools/toolsets.py`).
+- **SessionDB** — `sessions` table (parent lineage, task kind, profile snapshot, system prompt, source) + FTS5 `session_search` with LIKE fallback, alongside the existing `messages` table in the same `clawlet.db`.
+- **SessionDB** — `sessions` table (parent lineage, task kind, profile snapshot, system prompt, source) + FTS5 `session_search` with LIKE fallback, alongside the existing `messages` table in the same `clawlet.db`.
+- **Skills progressive disclosure** — compact `name: description` index with token budget + keyword matching (`clawlet/skills/index.py`).
+- **Migration helper** — `python scripts/migrate_v1_to_v2.py [--write]` (dry-run by default).
+
+### Improvements
+
+- **9 OpenAI-compatible providers factorized** onto `OpenAICompatibleProvider` (~1700 lines removed).
+- **Single RateLimiter implementation** (`tools/registry.py` now wraps `rate_limit.py`).
+- **Dead-code audit removals** (~2900 lines): deleted the unwired `clawlet/webhooks/` package + docs, legacy `HeartbeatScheduler`, `AgentRouter`, 17 `create_*_provider` factories, `TokenBucket`, Copilot duplication (now on the shared base), the `runtime_ui` provider ladder (delegates to `provider_factory`), the dashboard's private rate limiter (uses the shared one), 13 duplicated provider `*Config` validators (one `APIKeyConfig` base), stale nested README/requirements/plan docs; pruned unused pins (`openai`, `anthropic`, `twilio`, `pydantic-settings`, `tenacity`, `mypy`, `types-requests`, `pre-commit`).
+- **Import-cycle fixes** — lazy `clawlet.agent` package, CLI-independent `clawlet.paths`, optional `python-telegram-bot` import guard.
+- **Shared HTTP pool sizing** via public manager config (no more private `_client._limits` access).
+
 ## [0.5.0] - 2026-04-04
 
 ### Breaking Changes

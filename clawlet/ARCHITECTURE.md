@@ -247,6 +247,45 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 
 ---
 
+## v2 Revamp (Hermes-inspired, `v2-hermes-revamp` branch)
+
+One loop, one registry, one SessionDB. The v2 runtime keeps the pipeline
+above but changes who runs it:
+
+```
+Inbound -> RunOrchestrator -> Orchestrator (classify)
+  -> trivial? parent turn directly (traced fallback)
+  -> else SubagentSpec(kind, instruction, context slice)
+  -> spawn fresh AgentLoop (profile provider/model/toolset/budget,
+     filtered ToolRegistry view, child session w/ parent_session_id lineage)
+  -> RunOrchestrator(child).process_message (classic pipeline, no re-delegation)
+  -> outbound (+ task_kind/child_session_id metadata)
+```
+
+Key modules:
+
+- `agent/orchestrator.py` — always-on dispatch (`decide/dispatch_single/
+  process_message`), exception-safe fallback.
+- `agent/task_profiles.py` — fixed taxonomy (`code/plan/research/browser/
+  memory/review/ops-tool/chat/scheduled`) with per-field inheritance
+  `profiles[kind] -> user defaults -> kind built-ins -> global primary`.
+- `agent/task_router.py` — hybrid rules-first classifier, injected LLM
+  fallback, never raises.
+- `agent/provider_factory.py` — single `(name, model, ProviderConfig)`
+  construction path shared by CLI, orchestrator and dashboard.
+- `agent/subagent.py` — fresh-loop spawning, depth guard (`max_depth=1`).
+- `tools/toolsets.py` — `minimal/coding/browser/memory-only/full` views
+  over the tool registry.
+- `storage/session_db.py` — `sessions` table + FTS5 `session_search`
+  (LIKE fallback) in the same `clawlet.db`; delegation lineage recorded
+  best-effort on every spawn.
+- `skills/index.py` — progressive-disclosure index (`name: description`,
+  token budget, keyword match) for the stable prompt tier.
+- `clawlet/paths.py` — CLI-independent path helpers (import-cycle fix);
+  `clawlet.agent` package is lazy for the same reason.
+
+---
+
 ## Future Improvements (Out of Scope for Current Phases)
 
 - Dashboard authentication (API key / JWT)

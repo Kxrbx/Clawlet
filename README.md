@@ -48,10 +48,9 @@ Clawlet is a **lightweight** agent framework designed for developers who want:
 
 ### Infrastructure
 - **Health Checks** - Monitor providers, storage, channels
-- **Rate Limiting** - Sliding window + token bucket algorithms
+- **Rate Limiting** - Sliding window algorithms
 - **Config Validation** - Pydantic-based with environment variable support
 - **Retry Logic** - Exponential backoff with circuit breaker
-- **Webhooks** - Receive events from GitHub, Stripe, and custom sources
 - **Scheduling** - Cron-based task scheduling with timezone support
 
 ### Channels
@@ -62,7 +61,7 @@ Clawlet is a **lightweight** agent framework designed for developers who want:
 
 ### Multi-Agent
 - **Workspace Management** - Isolated agent environments
-- **Message Routing** - Route messages to appropriate agents
+- **Message Routing** - Delegate to profiled sub-agents per task
 - **Specialized Agents** - Configure agents for specific tasks
 
 ### Dashboard
@@ -84,8 +83,11 @@ Clawlet is a **lightweight** agent framework designed for developers who want:
 git clone https://github.com/Kxrbx/Clawlet.git
 cd Clawlet
 
-# Install
+# Install (lean core: local providers + CLI + dashboard backend)
 pip install -e .
+
+# Or full footprint (channels, cloud provider SDKs, postgres, TUI)
+pip install -e ".[full]"
 
 # Optional: enable the dashboard CLI entrypoint
 pip install -e ".[dashboard]"
@@ -173,6 +175,7 @@ clawlet dashboard
 | `clawlet config [key]` | View configuration |
 | `clawlet benchmark run` | Run latency/reliability benchmark gates |
 | `clawlet replay <run_id>` | Inspect deterministic runtime replay events |
+| `clawlet tasks list/show/test-routing` | Inspect per-task profiles and routing (v2 orchestration) |
 | `clawlet recovery list` | List interrupted runs with recovery checkpoints |
 | `clawlet plugin init/test/publish` | Manage Plugin SDK v2 extensions |
 | `clawlet --version` | Show version |
@@ -445,7 +448,6 @@ clawlet/
 ├── channels/        # Telegram, Discord, WhatsApp, Slack
 ├── providers/       # 18+ LLM providers
 ├── skills/          # Skills system with bundled skills and templates
-├── webhooks/        # GitHub, Stripe, custom webhooks
 ├── heartbeat/       # Scheduling and periodic tasks
 ├── storage/         # SQLite, PostgreSQL
 ├── tools/           # Files, shell, web search
@@ -468,15 +470,14 @@ clawlet/
 | Dashboard | React + FastAPI with Sakura theme | WIP
 | Identity System | SOUL/USER/MEMORY files |
 | Health Checks | Monitor providers, storage, channels |
-| Rate Limiting | Sliding window + token bucket |
+| Rate Limiting | Sliding window |
 | Storage | SQLite + PostgreSQL |
 | Web Search | Brave Search API |
 | Models Cache | Daily auto-updating with disk persistence |
 | Interactive Onboarding | 7-step guided setup |
 | Skills System | Modular capabilities with SKILL.md |
-| Webhooks | GitHub, Stripe, custom integrations |
 | Scheduling | Cron-based task automation |
-| Multi-Agent | Workspace isolation and routing |
+| Multi-Agent | Workspace isolation and sub-agent delegation |
 
 ---
 
@@ -487,9 +488,7 @@ clawlet/
 | [Skills Documentation](docs/skills.md) | Create and manage modular skills |
 | [Skills API Reference](docs/skills-api.md) | Technical API documentation |
 | [Channels Documentation](docs/channels.md) | Telegram, Discord, WhatsApp, Slack |
-| [Webhooks Documentation](docs/webhooks.md) | GitHub, Stripe, custom webhooks |
 | [Scheduling Documentation](docs/scheduling.md) | Cron expressions and task scheduling |
-| [Multi-Agent Documentation](docs/multi-agent.md) | Workspace management and routing |
 | [Quick Start Guide](QUICKSTART.md) | Get started quickly |
 | [Deployment Guide](DEPLOYMENT.md) | Production deployment |
 

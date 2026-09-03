@@ -1,16 +1,9 @@
 """
 Heartbeat system for periodic autonomous tasks.
 
-This module provides two schedulers:
-1. HeartbeatScheduler - Simple interval-based scheduler (legacy)
-2. Scheduler - Enhanced scheduler with cron expressions, timezones, and more
+Cron-based scheduling with timezones (cron_scheduler), tick execution
+(runner), proactive dispatch (proactive_queue) and persisted state.
 """
-
-from clawlet.heartbeat.scheduler import (
-    HeartbeatScheduler,
-    HeartbeatTask,
-    HeartbeatPriority,
-)
 
 from clawlet.heartbeat.models import (
     ScheduledTask,
@@ -33,10 +26,6 @@ from clawlet.heartbeat.proactive_queue import ProactiveQueueWorker
 from clawlet.heartbeat.state import HeartbeatStateStore, HeartbeatDecision
 
 __all__ = [
-    # Legacy heartbeat scheduler
-    "HeartbeatScheduler",
-    "HeartbeatTask",
-    "HeartbeatPriority",
     # Enhanced scheduler
     "Scheduler",
     "ScheduledTask",
