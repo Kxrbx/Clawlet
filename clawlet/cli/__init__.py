@@ -34,6 +34,7 @@ from clawlet.cli.replay_commands import register_replay_commands
 from clawlet.cli.release_ui import run_release_readiness_command
 from clawlet.cli.runtime_paths import get_default_workspace_path
 from clawlet.cli.session_commands import register_session_commands
+from clawlet.cli.tasks_commands import register_tasks_commands
 from clawlet.cli.templates import (
     get_config_template,
     get_heartbeat_template,
@@ -58,6 +59,7 @@ plugin_app = typer.Typer(help="Plugin SDK v2 commands")
 recovery_app = typer.Typer(help="Interrupted-run recovery commands")
 cron_app = typer.Typer(help="Cron scheduler commands")
 heartbeat_app = typer.Typer(help="Heartbeat commands")
+tasks_app = typer.Typer(help="Per-task orchestration profiles and routing")
 agent_app = typer.Typer(help="Agent runtime commands", invoke_without_command=True, no_args_is_help=False)
 app.add_typer(agent_app, name="agent")
 app.add_typer(benchmark_app, name="benchmark")
@@ -65,6 +67,7 @@ app.add_typer(plugin_app, name="plugin")
 app.add_typer(recovery_app, name="recovery")
 app.add_typer(cron_app, name="cron")
 app.add_typer(heartbeat_app, name="heartbeat")
+app.add_typer(tasks_app, name="tasks")
 
 console = Console()
 
@@ -104,6 +107,7 @@ MAIN_MENU_COMMANDS = [
     ("dashboard", "Launch web dashboard", "clawlet dashboard"),
     ("heartbeat", "Inspect heartbeat state and controls", "clawlet heartbeat status"),
     ("cron", "List and run scheduled jobs", "clawlet cron list"),
+    ("tasks", "Inspect per-task profiles and routing", "clawlet tasks list"),
     ("benchmark", "Run performance regression suite", "clawlet benchmark run"),
     ("replay", "Inspect deterministic run events", "clawlet replay <run_id>"),
     ("sessions", "List and export stored sessions", "clawlet sessions"),
@@ -163,6 +167,7 @@ register_recovery_commands(recovery_app, get_workspace_path_fn=get_workspace_pat
 register_plugin_commands(plugin_app, get_workspace_path_fn=get_workspace_path)
 register_session_commands(app, get_workspace_path_fn=get_workspace_path)
 register_cron_commands(cron_app, get_workspace_path_fn=get_workspace_path)
+register_tasks_commands(tasks_app, get_workspace_path_fn=get_workspace_path)
 register_benchmark_commands(
     benchmark_app,
     get_workspace_path_fn=get_workspace_path,
