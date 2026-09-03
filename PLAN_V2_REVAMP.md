@@ -1,8 +1,8 @@
-# Clawlet v2 — Plan Revamp complet (inspiration Hermes)
+# Clawlet v2 — Plan Revamp complet
 
-> **État d'implémentation (branche `v2-hermes-revamp`) :** P0 ✅ · P1 ✅ · Orchestrateur ✅ · P2 ✅ · P3 ✅ · P4 ✅ (index skills + docs ; boucle de consolidation mémoire auto → suivi) · **Desktop exclu du périmètre sur demande (reporté)**. 101 tests verts, smoke release OK.
+> **État d'implémentation (branche `v2-revamp`) :** P0 ✅ · P1 ✅ · Orchestrateur ✅ · P2 ✅ · P3 ✅ · P4 ✅ (index skills + docs ; boucle de consolidation mémoire auto → suivi) · **Desktop exclu du périmètre sur demande (reporté)**. 101 tests verts, smoke release OK.
 
-> **Décisions figées :** nom `Clawlet` conservé · même repo `Kxrbx/Clawlet`, branche `v2-hermes-revamp` · full-break autorisé (Python ≥3.11, deps optionnelles, dashboard refonte autorisée) · priorités P1 One-loop+registry, P2 SessionDB+perfs, P3 Skills+mémoire auto · orchestrateur systématique · Desktop Tauri 2 + React full-admin.
+> **Décisions figées :** nom `Clawlet` conservé · même repo `Kxrbx/Clawlet`, branche `v2-revamp` · full-break autorisé (Python ≥3.11, deps optionnelles, dashboard refonte autorisée) · priorités P1 One-loop+registry, P2 SessionDB+perfs, P3 Skills+mémoire auto · orchestrateur systématique · Desktop Tauri 2 + React full-admin.
 > **Hors-scope v2.0 (backlog v2.1) :** gateway 30+ plateformes, kanban-swarm multi-agents, cron langage naturel.
 
 ---
@@ -39,7 +39,7 @@
 * **Tests :** ~58 `def test_*`, <15% modules, concentrés `rate_limit/memory/sqlite/shell/provider_base/tui/circuit_breaker/config_reload/architecture_guards`. Zéro test 15/16 providers réels, channels, heartbeat, webhooks, dashboard, onboard, skills, runtime replay/remote.
 * **Version :** `pyproject.toml:0.5.0` vs `clawlet/__init__.py:0.4.7` désync.
 
-### 1.3 Ce qu'on vole à Hermes (Nous Research)
+### 1.3 Principes repris
 
 * **One loop, many surfaces :** `AIAgent.run_conversation()` unique ; CLI/gateway/cron/kanban = wrappers fins. Pas de `core/framework` abstrait.
 * **Registry outils :** 1 fichier = 1 outil, `registry.register()` au load, tout passe par `handle_function_call` (coercition JSON, hooks pre/post, approvals). Pas de hiérarchie décorateur dispersée.
@@ -66,7 +66,7 @@
 
 ## 3. Phase 0 — Branche + hygiène (0.5j)
 
-* `git checkout -b v2-hermes-revamp` depuis `main` (`d10a52d`).
+* `git checkout -b v2-revamp` depuis `main` (`d10a52d`).
 * Version → `0.6.0a0` partout (`pyproject.toml`, `clawlet/__init__.py`, `dashboard/api.py`, README).
 * `requires-python >= 3.11`, `ruff` + `black` en CI, `coverage` introduit sans seuil bloquant puis ` --fail-under=40` cœur.
 * Suppressions immédiates : `runtime/rust_bridge.py`, `plugins/sdk.py` (ou implémentation minimale), legacy `hybrid_rust`, `benchmark equivalence` restes.
@@ -83,7 +83,7 @@
 * Nouveau `clawlet/agent/system_prompt.py` : prompt 3 tiers (stable/volatile/contexte), cache + `invalidate_system_prompt()`.
 * Nouveau `clawlet/run_agent.py` : façade `AIAgent.run_conversation()` (CLI/gateway/cron appellent ici).
 * `clawlet/agent/loop.py` : forwarder fin + guards `clawlet/tests/unit/test_architecture_guards.py` étendus (interdire re-grossissement >300l).
-* `clawlet/tools/registry.py` → pattern Hermes : `register()` par fichier, suppression doublon `RateLimiter`.
+* `clawlet/tools/registry.py` → pattern registre : `register()` par fichier, suppression doublon `RateLimiter`.
 * Nouveau `clawlet/tools/model_tools.py` : `handle_function_call` central (coercition, `tool_search/tool_describe/tool_call` bridge, hooks, approval gates).
 * Nouveau `clawlet/tools/toolsets.py` : `minimal/coding/full/memory-only/browser`, `check_fn`, presets CLI `--toolsets coding,browser`.
 * `approval_service.py` existant → pre-tool hooks (commandes dangereuses, edit hors scope, exfiltration), délimiteurs résultats anti-promptware.
@@ -135,7 +135,7 @@ providers-anthropic = ["anthropic"]
 * Lazy-import généralisé (étendre pattern `clawlet/__init__.py:__getattr__`). `textual`, channels, `openai/anthropic` SDKs chargés à l'usage avec message d'install + advisory.
 * `cli/onboard.py:1074l` découpé (steps provider/config/identity/workspace/tasks), `textual` TUI → extra.
 * `models_cache` refresh quotidien non-bloquant + `--offline`.
-* Secrets : `clawlet config set GITHUB_TOKEN xxx` écrit hors historique (modèle Hermes `/opt/data.env`), dashboard bind `127.0.0.1` + token requis par défaut.
+* Secrets : `clawlet config set GITHUB_TOKEN xxx` écrit hors historique, dashboard bind `127.0.0.1` + token requis par défaut.
 * Objectifs chiffrés : `clawlet --version` -63%, `clawlet tools` <1.5s, -40% calls/turn (mesuré `benchmarks/` sur conversation 31 tours), `browser` outil ~180x via CDP persistant (si repris).
 * Vérif : `benchmarks/release_gate.py`, `release_regression.py`, mesure cold-start en CI.
 
@@ -147,7 +147,7 @@ providers-anthropic = ["anthropic"]
 * Distillation : post-task (5+ tool calls / recovery / correction utilisateur) propose `SKILL.md` ; curator hebdo note/déduplique/élague (anti-cimetière).
 * Mémoire : consolidation horaire (prefs stables → SQLite, projection `MEMORY.md` incrémentale — plus de réécriture complète `save_long_term()`), `USER.md` <500 tokens + `MEMORY.md` <800 tokens frozen en tête pour caching.
 * Boucles lentes async (jamais synchrones fin-de-session) : L6 consolidation heure, L7 distillation jour, L8 meta-éval jour (retry rate, taux erreur outil, overflow → rapport + reco seuils).
-* Docs : réécriture `ARCHITECTURE.md` (One loop/many surfaces, registry, SessionDB, toolsets, orchestrateur), `docs/runtime-v2.md`, `QUICKSTART.md`, `DEPLOYMENT.md`, `OPERATIONS.md`. Supprimer références design pré-Hermes.
+* Docs : réécriture `ARCHITECTURE.md` (One loop/many surfaces, registry, SessionDB, toolsets, orchestrateur), `docs/runtime-v2.md`, `QUICKSTART.md`, `DEPLOYMENT.md`, `OPERATIONS.md`. Supprimer références design pré-v2.
 * Vérif : tests disclosure (budget tokens), distillation, curator, consolidation ; `pytest -m "unit or integration"`.
 
 ---
@@ -216,7 +216,7 @@ Résolution : `task-kind → task_profiles[kind] → defaults → provider.*` gl
 
 ---
 
-## 9. Phase 6 — Clawlet Desktop (Tauri 2 + React, full admin, Hermes-like)
+## 9. Phase 6 — Clawlet Desktop (Tauri 2 + React, full admin)
 
 > Acté : **Tauri 2 + React** (binaire ~10MB, updater signé, `safeStorage`, réutilise `dashboard/src/`) · **full admin v1** (chat + orchestrateur + providers + gateway + cron + skills + mémoire).
 
@@ -233,7 +233,7 @@ Backend Python : `clawlet serve --port 0 --token ...`
   expose `tui_gateway` JSON-RPC/WS ; self-contained, jamais besoin du dashboard web.
 ```
 
-Parité Hermes : même `~/.clawlet/` que CLI (config, keys, sessions, skills, mémoire), backend résolu `CLAWLET_DESKTOP_ROOT → install managée → clawlet sur PATH → override CLAWLET_DESKTOP_CLAWLET`, fallback `dashboard --no-open` si `serve` absent, contrat `CLAWLET_DESKTOP_CONTRACT` avec CTA update si backend trop vieux, logs `~/.clawlet/logs/`, plugins `~/.clawlet/desktop-plugins/plugin.js` hot-reload.
+Socle partagé : même `~/.clawlet/` que CLI (config, keys, sessions, skills, mémoire), backend résolu `CLAWLET_DESKTOP_ROOT → install managée → clawlet sur PATH → override CLAWLET_DESKTOP_CLAWLET`, fallback `dashboard --no-open` si `serve` absent, contrat `CLAWLET_DESKTOP_CONTRACT` avec CTA update si backend trop vieux, logs `~/.clawlet/logs/`, plugins `~/.clawlet/desktop-plugins/plugin.js` hot-reload.
 
 ### 9.2 Fonctionnalités v1
 
@@ -243,7 +243,7 @@ Parité Hermes : même `~/.clawlet/` que CLI (config, keys, sessions, skills, m�
 * **Model picker flou** partout + **par tâche** (`status-bar` défaut + `Settings → Tasks`), écrit via backend `config set` (jamais de secret dans transcripts).
 * **Admin** : providers/keys, toolsets, MCP catalog, channels, webhooks, cron `jobs.yaml`, skills (index + install/curate), mémoire, santé/métriques (`health.py`, `metrics.py`), gateway ops.
 * **Shell** : palette `Cmd+K`, shortcuts rebindables avec conflits, toggle YOLO per-session (mappe `safe/full_exec` + approvals parité `tui/app.py:121-134`), thèmes, i18n FR/EN.
-* Suppression Hermes-parité : flag `dashboard --tui` supprimé (chat toujours intégré).
+* Simplification : flag `dashboard --tui` supprimé (chat toujours intégré).
 
 ### 9.3 Phases Desktop
 
@@ -297,7 +297,7 @@ Parité Hermes : même `~/.clawlet/` que CLI (config, keys, sessions, skills, m�
 3. Orchestrateur (profils + routeur + spawn + synthèse) — utilisable sans SessionDB finale (adaptateur SQLite actuel).
 4. P2 SessionDB + compression + prompt-cache (branchement orchestrateur : `parent_session_id/task_kind`).
 5. P3 perfs/optionnelles + onboard découpé + `migrate_v1_to_v2.py`.
-6. P4 skills/memory-auto + docs `ARCHITECTURE.md` Hermes-first.
+6. P4 skills/memory-auto + docs `ARCHITECTURE.md` à jour v2.
 7. D0-D4 Desktop.
 8. Backlog v2.1 : gateway multi-plateformes (`platforms/base.py`), cron NL, kanban-swarm.
 

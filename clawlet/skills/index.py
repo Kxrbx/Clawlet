@@ -1,4 +1,4 @@
-"""Progressive-disclosure skills index (Hermes-style).
+"""Progressive-disclosure skills index.
 
 Loading every skill into every prompt bloats context linearly. Instead the
 stable prompt tier carries only a compact index — one ``name: description``

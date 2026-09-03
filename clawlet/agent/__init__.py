@@ -15,7 +15,7 @@ __all__ = [
     "MemoryManager",
     "Workspace",
     "WorkspaceStatus",
-    # v2 orchestration (Hermes-style always-delegate)
+    # v2 orchestration (always-delegate)
     "Orchestrator",
 ]
 

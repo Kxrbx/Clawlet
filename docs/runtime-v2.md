@@ -1,186 +1,111 @@
-# Runtime v2
+# Clawlet v2 — Runtime (`0.6.0a0`)
 
-Runtime v2 introduces deterministic tool execution with append-only event logs and replay signatures.
-Clawlet now runs the runtime on the Python execution path by default and in practice.
-Release `0.4.7` refines heartbeat execution further by preserving user-facing heartbeat routes when `target=last`, loosening overly aggressive heartbeat wall-time cutoffs for useful runs, and continuing to harden runtime continuity diagnostics.
+> One loop, one registry, one SessionDB. Every non-trivial request goes through
+> `Orchestrator → sub-agent(kind) → synthesis`. Desktop is out of scope (deferred).
 
-Recent runtime changes also align the autonomous path around a stricter, quieter autonomous runtime:
-- heartbeat work is stateful and quieter by default
-- runtime caching is restricted to safe reads
-- structured HTTP is preferred over brittle shell `curl` calls
-- hybrid memory uses SQLite as the durable source of truth with Markdown projections
-- authenticated structured HTTP now uses explicit configured auth profiles
+## Pipeline
 
-## Config
-
-```yaml
-runtime:
-  engine: python
-  enable_idempotency_cache: true
-  enable_parallel_read_batches: true
-  max_parallel_read_tools: 4
-  default_tool_timeout_seconds: 30
-  default_tool_retries: 1
-  outbound_publish_retries: 2
-  outbound_publish_backoff_seconds: 0.5
-  policy:
-    allowed_modes: [read_only, workspace_write]
-    require_approval_for: [elevated]
-    lanes:
-      read_only: "parallel:read_only"
-      workspace_write: "serial:workspace_write"
-      elevated: "serial:elevated"
-  replay:
-    enabled: true
-    directory: ".runtime"
-    retention_days: 30
-    redact_tool_outputs: false
-    validate_events: true
-    validation_mode: "warn"
-  remote:
-    enabled: false
-    endpoint: ""
-    timeout_seconds: 60
-    api_key_env: "CLAWLET_REMOTE_API_KEY"
-benchmarks:
-  enabled: true
-  gates:
-    max_p95_latency_ms: 3000
-    min_tool_success_rate_pct: 99.0
-    min_deterministic_replay_pass_rate_pct: 98.0
-    min_lane_speedup_ratio: 1.20
-    max_lane_parallel_elapsed_ms: 1000
-    min_context_cache_speedup_ratio: 1.05
-    max_context_cache_warm_ms: 1200
-    min_coding_loop_success_rate_pct: 99.0
-    max_coding_loop_p95_total_ms: 2500
-http_auth_profiles:
-  example_service:
-    bearer_token_path: ".config/example_service/credentials.json"
-    env_var: "EXAMPLE_SERVICE_TOKEN"
-    header_name: "Authorization"
-    header_prefix: "Bearer "
+```
+Inbound → Orchestrator (hybrid classify, 0-5 iters, tools OFF)
+  → trivial (<200 chars, no action-intent)? direct parent turn (traced fallback:true)
+  → else spawn(kind): fresh AgentLoop, resolved profile, history = instruction + slice, never the full history
+  → RunOrchestrator(child).process_message (no re-delegation, max_depth=1)
+  → synthesize → outbound (+ task_kind / child_session_id)
 ```
 
-## Commands
+Modules: `agent/orchestrator.py` (`decide/dispatch/process_message`),
+`agent/task_router.py` (sync rules + cheap LLM micro-classifier + cache, never raises),
+`agent/subagent.py` (spawn, depth guard), `agent/run_orchestrator.py` (kept as forwarder).
 
-- `clawlet benchmark run --workspace <path>`
-- `clawlet benchmark corpus --workspace <path> --iterations 10 --baseline-report <path>`
-- `clawlet benchmark corpus --workspace <path> --baseline-report <path> --publish-report --publish-report-path <path>`
-- `clawlet benchmark compare --current-report <path> --baseline-report <path>`
-- `clawlet benchmark compare --current-report <path> --baseline-report <path> --publish-report-path <path>`
-- `clawlet benchmark compare --current-report <path> --baseline-report <path> --json`
-- `clawlet benchmark publish-report --current-report <path> --baseline-report <path> --out benchmark-report.md`
-- `clawlet benchmark competitive-report --workspace <path> --baseline-report <path> --bundle-out benchmark-competitive.json --markdown-out benchmark-report.md`
-- `clawlet benchmark competitive-report --workspace <path> --baseline-report <path> --json`
-- `clawlet benchmark release-gate --workspace <path> --baseline-report <path>`
-- `clawlet benchmark release-gate --workspace <path> --max-breaches 12`
-- `clawlet benchmark release-gate --workspace <path> --breach-category coding`
-- `clawlet benchmark release-gate --workspace <path> --json`
-- `clawlet benchmark remote-health --workspace <path>`
-- `clawlet benchmark remote-parity --workspace <path>`
-- `clawlet benchmark lanes --workspace <path>`
-- `clawlet benchmark context-cache --workspace <path>`
-- `clawlet benchmark coding-loop --workspace <path>`
-- `clawlet replay <run_id> --workspace <path> --signature --verify --verify-resume --reliability --reexecute`
-- `clawlet plugin init|test|conformance|matrix|publish`
-- `clawlet recovery list|show|resume-payload|cleanup`
-- `clawlet heartbeat status|last|enable|disable`
-- `clawlet validate --migration`
-- `clawlet migrate-config --write`
-- `clawlet migration-matrix --root <path> --fail-on-errors`
-- `clawlet release-readiness --workspace <path> --baseline-report <path> --check-remote-health`
-- `clawlet release-readiness --workspace <path> --breach-category lane`
-- `clawlet release-readiness --workspace <path> --breach-category lane --max-breaches 5`
-- `clawlet release-readiness --workspace <path> --json`
+## Per-task profiles
 
-## Recovery checkpoints
+Fixed yet overridable taxonomy: `code, plan, research, browser, memory, review, ops-tool, chat, scheduled`.
 
-- Runtime writes checkpoints under `.runtime/checkpoints/`.
-- Successful runs clear their checkpoint.
-- Interrupted runs remain checkpointed and can be resumed using the generated resume payload.
+Resolution: `task_profiles[kind] → task_profiles.defaults → global provider.primary`.
+Each profile is a full execution contract (provider, model, toolset, max_iterations, tool_call_limit, timeout_s, temperature, fallback).
 
-## Event Types
+Defaults: `code=coding/50/20`, `plan=minimal/15/8`, `research=browser/25/15`,
+`browser=browser/20/12`, `memory=memory-only/10/6`, `review=minimal/10/6`,
+`ops-tool=full/15/10`, `chat=minimal/5/4`, `scheduled=full/20/10`.
 
-- `RunStarted`
-- `ToolRequested`
-- `ToolStarted`
-- `ToolCompleted`
-- `ToolFailed`
-- `ProviderFailed`
-- `StorageFailed`
-- `ChannelFailed`
-- `RunCompleted`
+```yaml
+orchestrator:
+  max_iterations: 5
+  allow_direct_fallback: true
+  trivial_max_chars: 200
+  classifier_mode: hybrid  # rules | llm | hybrid
+  max_depth: 1
+task_profiles:
+  code: {provider: anthropic, model: claude-sonnet-5-20260203, toolset: coding}
+```
 
-`ToolFailed` payloads now include normalized failure taxonomy fields:
-- `failure_code`
-- `retryable`
-- `failure_category`
+CLI:
 
-Published schema:
-- `docs/schemas/runtime-events.schema.json`
-- Lightweight Python validators: `clawlet.runtime.schema.validate_event_payload` and `validate_runtime_event`
-- Remote worker protocol schemas:
-  - `docs/schemas/remote-worker-execute-request.schema.json`
-  - `docs/schemas/remote-worker-execute-response.schema.json`
+```bash
+clawlet tasks list
+clawlet tasks show code
+clawlet tasks test-routing "fix the login bug"   # offline, no network
+clawlet onboard   # steps 7-8: per-task models
+clawlet validate
+```
 
-## Engine Resolution
+## Toolsets
 
-- `runtime.engine: python` is the supported execution path.
-- Legacy `runtime.engine: hybrid_rust` values are normalized to `python` during config load.
-- Local-first execution remains default; remote execution is optional via `runtime.remote`.
-- Per-call remote routing is available with tool arg `_execution_target: "remote"` (falls back to local if unavailable).
-- Per-call lane routing is available with tool arg `_lane`, e.g. `_lane: "parallel:read_only"` or `_lane: "serial:workspace_write"`.
-- Parallel read batching can be disabled globally with `runtime.enable_parallel_read_batches: false`.
-- Read-only parallel tool fanout is bounded by `runtime.max_parallel_read_tools`.
+Named views over the same registry (`tools/toolsets.py`), not different code:
 
-## Tool Execution Notes
+| Toolset | Contents |
+|---|---|
+| `full` | everything (only one accepting unknown future tools) |
+| `minimal` | read-only + read memory + `list_skills` |
+| `coding` | minimal + `write/edit/apply_patch/shell/http_request` + `install_skill` |
+| `browser` | `fetch_url/web_search/http_request` |
+| `memory-only` | `remember/recall/search/recent/review/curate/status` |
 
-- `shell` is not idempotency-cached by default.
-- Workspace-write tools are not idempotency-cached by default.
-- `fetch_url` is only cacheable on safe read paths; API-like URLs are excluded unless explicitly marked cacheable.
-- Structured `http_request` is the preferred network execution path for authenticated/API interactions.
-- Structured `http_request` only injects local credentials when `auth_profile` is explicitly provided.
-- Fragile multi-statement `python -c` shell calls are rejected to reduce broken autonomous execution paths.
+`clawlet --toolsets coding,browser` loads a filtered registry view.
 
-## Heartbeat Runtime
+## SessionDB
 
-- Heartbeat is driven by `HEARTBEAT.md`.
-- Comment-only or empty heartbeat files skip autonomous API work.
-- Runtime keeps heartbeat state in `memory/heartbeat-state.json`.
-- Canonical heartbeat outcomes are:
-  - `HEARTBEAT_OK`
-  - `HEARTBEAT_BLOCKED`
-  - `HEARTBEAT_ACTION_TAKEN`
-- Quiet heartbeat acknowledgements are suppressed outbound by default, while meaningful action-taken summaries may still be published.
+Same `clawlet.db`, new tables, backward compatible (`messages` untouched):
 
-## Hybrid Memory Runtime
+- `sessions(session_id, parent_session_id, task_kind, profile_snapshot, system_prompt, source, created_at)` — parent→child lineage written best-effort on every spawn.
+- `messages_fts`: FTS5 index for LLM-free `session_search` (~ms vs ~30s), `LIKE` fallback when FTS5 is missing. WAL + `synchronous=NORMAL` + FKs like `SQLiteStorage`.
+- Code: `storage/session_db.py` (`SessionStore.session_search`).
 
-- `memory.db` is the durable structured memory store.
-- `MEMORY.md` is a curated projection, not the primary source of truth.
-- `memory/YYYY-MM-DD.md` stores episodic daily notes.
-- Memory search uses SQLite FTS when available before falling back to simpler text scans.
-- Memory tools include:
-  - `remember`
-  - `recall`
-  - `search_memory`
-  - `recent_memories`
-  - `review_daily_notes`
-  - `curate_memory`
-  - `memory_status`
+## Context, compression, auto-memory
 
-`clawlet benchmark run` enforces gates for latency, tool success rate, and deterministic replay pass rate.
-`clawlet benchmark release-gate` writes a consolidated JSON artifact (`benchmark-release-gate-report.json` by default).
-`benchmark release-gate` now hard-fails on lane scheduling and context-cache benchmark regressions.
-`benchmark release-gate` also hard-fails on coding-loop success-rate regressions.
-Speedup thresholds are configured via `benchmarks.gates.min_lane_speedup_ratio` and `benchmarks.gates.min_context_cache_speedup_ratio`.
-Coding-loop thresholds are configured via `benchmarks.gates.min_coding_loop_success_rate_pct` and `benchmarks.gates.max_coding_loop_p95_total_ms`.
-Absolute latency thresholds are configured via `benchmarks.gates.max_lane_parallel_elapsed_ms` and `benchmarks.gates.max_context_cache_warm_ms`.
-Release-gate artifacts now include machine-readable `gate_breaches` and `breach_counts` for dashboard/CI consumption.
-`clawlet release-readiness` now also evaluates lane scheduling, context-cache, and coding-loop benchmark health.
-Release-readiness artifacts include top-level `gate_breaches` and `breach_counts` mirrored from release-gate output.
-CI should run both `scripts/release_smoke.py` and `scripts/release_regression.py` for bootstrap/runtime sanity.
-Use `--breach-category` to filter displayed breach lines during CLI triage.
-Use `--breach-category` and `--max-breaches` to filter and bound displayed breach lines in both `benchmark release-gate` and `release-readiness`.
-Use `--json` for machine-readable command output (includes `display_gate_breaches`, filters, and report path).
-Config loading now emits deprecation/migration warnings with actionable hints when legacy keys are detected.
+- `HistoryTrimmer`: 2 thresholds (count OR chars, default 100 msgs / 200k chars). Tool outputs capped first (2000c cap, no LLM call), then compressed `system` summary (60 lines max, 180c excerpts) + preserved anchor, deduplicated.
+- `memory_maintenance.maybe_run_memory_maintenance`: 24h slow loop, `curate_from_recent_daily_notes` → durable memory, state in `maintenance-state.json`, never raises (never breaks the heartbeat tick).
+- Same hybrid-memory idea: SQLite as durable source, `MEMORY.md` as curated projection, `memory/YYYY-MM-DD.md` episodic notes (`remember/recall/search/recent/review/curate/status`).
+- Progressive-disclosure skills (`skills/index.py`): the stable prompt carries only the `name: description` index (~630 tokens / 50 skills, 2000 budget, 120c/line), full content on demand via `skill_view`, keyword matching without LLM.
+
+## Providers & lean packaging
+
+- `OpenAICompatibleProvider` (`providers/openai_compat.py`): 1 class for the 10 near-identical ones (minimax, moonshot, qwen, zai, copilot, vercel, opencode_zen, xiaomi, synthetic, venice) — only `BASE_URL/default_model` differ. ~1700 lines removed.
+- `provider_factory.py`: single `(name, model, config)` path shared by CLI/orchestrator/dashboard. Shared HTTP pool sized via public config. Global `mask_secrets`.
+- Python ≥3.11. Lean core, heavy stuff in extras (`channels-*`, `tui`, `postgres`, `providers-openai/anthropic`, …). Guarded `python-telegram-bot` import. Lazy `clawlet.agent`, CLI-free `clawlet/paths.py` (cycle fixes).
+
+## v1 → v2 migration (full-break, no shim)
+
+```bash
+python scripts/migrate_v1_to_v2.py            # dry-run
+python scripts/migrate_v1_to_v2.py --write    # hybrid_rust→python, .bak first
+```
+
+- `runtime.engine: hybrid_rust` removed (only `python` accepted).
+- `orchestrator` / `task_profiles` sections optional (built-ins apply when absent).
+- DB: nothing to migrate, SessionDB tables are created next to `messages`.
+
+## Useful commands
+
+```bash
+clawlet agent [--channel telegram] [--toolsets coding,browser]
+clawlet heartbeat status|last|enable|disable
+clawlet replay <run_id> --signature --verify
+clawlet recovery list
+clawlet benchmark release-gate --workspace <path>
+python scripts/release_smoke.py
+```
+
+## Out of scope for v2.0 (v2.1 backlog)
+
+30+ platform gateway, kanban-swarm multi-agents, natural-language cron, Tauri Desktop (D0-D4 deferred).

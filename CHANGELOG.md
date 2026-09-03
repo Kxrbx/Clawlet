@@ -2,7 +2,7 @@
 
 All notable changes to Clawlet will be documented in this file.
 
-## [0.6.0a0] - v2 Hermes-inspired revamp (alpha, branch `v2-hermes-revamp`)
+## [0.6.0a0] - v2 revamp (alpha, branch `v2-revamp`)
 
 ### Breaking Changes
 
@@ -16,7 +16,6 @@ All notable changes to Clawlet will be documented in this file.
 - **Always-on orchestrator** — every non-trivial request is classified (hybrid rules + optional LLM) and delegated to an isolated sub-agent with its own provider/model/toolset/budget; trivial messages use a traced direct fallback. Configure per task kind (`code`, `plan`, `research`, `browser`, `memory`, `review`, `ops-tool`, `chat`, `scheduled`) via `task_profiles` in `config.yaml`.
 - **`clawlet tasks` CLI** — `list` / `show <kind>` resolved profiles, `test-routing "<text>"` offline classification.
 - **Toolsets** — `minimal/coding/browser/memory-only/full` named views over the tool registry (`clawlet/tools/toolsets.py`).
-- **SessionDB** — `sessions` table (parent lineage, task kind, profile snapshot, system prompt, source) + FTS5 `session_search` with LIKE fallback, alongside the existing `messages` table in the same `clawlet.db`.
 - **SessionDB** — `sessions` table (parent lineage, task kind, profile snapshot, system prompt, source) + FTS5 `session_search` with LIKE fallback, alongside the existing `messages` table in the same `clawlet.db`.
 - **Skills progressive disclosure** — compact `name: description` index with token budget + keyword matching (`clawlet/skills/index.py`).
 - **Migration helper** — `python scripts/migrate_v1_to_v2.py [--write]` (dry-run by default).

@@ -1,4 +1,4 @@
-"""Named tool bundles (toolsets) — Hermes-style filtering of the tool registry.
+"""Named tool bundles (toolsets) — named filters over the tool registry.
 
 A toolset is a named filter over registered tool names. Launching with
 ``--toolsets coding,browser`` loads different *views* of the same registry,

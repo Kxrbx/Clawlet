@@ -247,7 +247,7 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 
 ---
 
-## v2 Revamp (Hermes-inspired, `v2-hermes-revamp` branch)
+## v2 Revamp (`v2-revamp` branch)
 
 One loop, one registry, one SessionDB. The v2 runtime keeps the pipeline
 above but changes who runs it:

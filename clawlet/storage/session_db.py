@@ -1,4 +1,4 @@
-"""SessionDB — unified session truth (Hermes-style SessionDB, v1).
+"""SessionDB — unified session truth (v1).
 
 Adds three things on top of the existing ``clawlet.db`` (same file, new
 tables — fully backward compatible, existing ``messages`` table untouched):
