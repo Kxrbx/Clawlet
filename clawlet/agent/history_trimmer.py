@@ -10,10 +10,20 @@ from typing import Any
 class HistoryTrimmer:
     max_history: int
     logger: Any
+    max_chars: int = 200_000
+    tool_output_cap: int = 2000
 
     def trim(self, history: list[Any]) -> None:
-        """Trim history to prevent unbounded growth while keeping a compressed summary."""
-        if len(history) <= self.max_history:
+        """Trim history to prevent unbounded growth while keeping a compressed summary.
+
+        Two thresholds: message count OR total chars. Oversized tool
+        outputs are capped in place first (cheapest win, no LLM call).
+        """
+        self._cap_tool_outputs(history)
+        if (
+            len(history) <= self.max_history
+            and self._total_chars(history) <= self.max_chars
+        ):
             return
 
         overflow = len(history) - self.max_history + 1
@@ -28,8 +38,12 @@ class HistoryTrimmer:
         if summary_lines:
             if len(summary_lines) > 60:
                 summary_lines = summary_lines[:20] + ["..."] + summary_lines[-39:]
-            summary_text = "Conversation summary (compressed):\n" + "\n".join(summary_lines)
-            summary_msg = type(history[0])(role="system", content=summary_text, metadata={"summary": True})
+            summary_text = "Conversation summary (compressed):\n" + "\n".join(
+                summary_lines
+            )
+            summary_msg = type(history[0])(
+                role="system", content=summary_text, metadata={"summary": True}
+            )
             tail = list(history[overflow:])
             reserved = 1 + (1 if anchor_msg is not None else 0)
             tail_budget = max(0, self.max_history - reserved)
@@ -39,8 +53,31 @@ class HistoryTrimmer:
             rebuilt.extend(tail[-tail_budget:])
             history[:] = self._dedupe_preserved_messages(rebuilt)
         else:
-            del history[:-self.max_history]
+            del history[: -self.max_history]
         self.logger.debug(f"Trimmed history to {len(history)} messages")
+
+    @staticmethod
+    def _total_chars(history: list[Any]) -> int:
+        return sum(
+            len(c)
+            for m in history
+            if isinstance(c := getattr(m, "content", "") or "", str)
+        )
+
+    def _cap_tool_outputs(self, history: list[Any]) -> None:
+        """Cap oversized tool outputs in place, preserving metadata."""
+        for i, msg in enumerate(history):
+            if getattr(msg, "role", "") != "tool":
+                continue
+            content = getattr(msg, "content", "") or ""
+            if not isinstance(content, str) or len(content) <= self.tool_output_cap:
+                continue
+            history[i] = type(msg)(
+                role="tool",
+                content=content[: self.tool_output_cap]
+                + f"\n[... truncated {len(content) - self.tool_output_cap} chars ...]",
+                metadata=getattr(msg, "metadata", {}) or {},
+            )
 
     @staticmethod
     def _existing_summary_lines(messages: list[Any]) -> list[str]:

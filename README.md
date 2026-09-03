@@ -107,14 +107,15 @@ npm install
 clawlet onboard
 ```
 
-This 7-step wizard guides you through:
+This 8-step wizard guides you through:
 1. **Choose Provider** - 18+ providers available
 2. **Configure** - API keys or local settings
 3. **Model Selection** - Choose your default model
 4. **Execution Mode** - Pick `safe` or `full_exec`
 5. **Channels** - Telegram/Discord setup
 6. **Identity** - Name and personality
-7. **Create Workspace** - All files generated
+7. **Task Models** - Optional per-task provider/model overrides
+8. **Create Workspace** - All files generated
 
 ### Or Quick Init
 
@@ -474,7 +475,7 @@ clawlet/
 | Storage | SQLite + PostgreSQL |
 | Web Search | Brave Search API |
 | Models Cache | Daily auto-updating with disk persistence |
-| Interactive Onboarding | 7-step guided setup |
+| Interactive Onboarding | 8-step guided setup |
 | Skills System | Modular capabilities with SKILL.md |
 | Scheduling | Cron-based task automation |
 | Multi-Agent | Workspace isolation and sub-agent delegation |

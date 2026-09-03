@@ -421,6 +421,7 @@ class HeartbeatSettings(BaseModel):
     proactive_handoff_dir: str = "memory/proactive"
     proactive_max_turns_per_hour: int = Field(default=4, ge=1, le=60)
     proactive_max_tool_calls_per_cycle: int = Field(default=3, ge=1, le=20)
+    memory_maintenance: bool = True
 
     @model_validator(mode="after")
     def normalize_legacy_heartbeat_fields(self):

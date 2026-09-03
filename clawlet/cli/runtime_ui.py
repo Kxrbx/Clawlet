@@ -470,6 +470,12 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             await scheduler.on_heartbeat_tick(now)
         if proactive_worker is not None:
             await proactive_worker.on_heartbeat_tick(now)
+        if getattr(hb_cfg, "memory_maintenance", True):
+            from clawlet.agent.memory_maintenance import maybe_run_memory_maintenance
+
+            await maybe_run_memory_maintenance(
+                memory_manager, workspace_layout.memory_dir, now=now
+            )
 
     heartbeat_loader = _make_heartbeat_context_loader(workspace, hb_cfg)
     workspace_layout = get_workspace_layout(workspace)
