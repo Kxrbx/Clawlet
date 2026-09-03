@@ -14,36 +14,14 @@ SAKURA_PINK = "#FF69B4"
 console = Console()
 
 
-def run_status(workspace_path: Path, version: str) -> None:
-    """Render workspace status summary."""
-    print_section("Workspace Status", f"Checking {workspace_path}")
-
-    if workspace_path.exists():
-        console.print(f"|  [green]OK[/green] Workspace [dim]{workspace_path}[/dim]")
-    else:
-        console.print("|  [red]x[/red] Workspace [dim]not initialized[/dim]")
-
-    for filename in ["SOUL.md", "USER.md", "MEMORY.md", "HEARTBEAT.md"]:
-        file_path = workspace_path / filename
-        if file_path.exists():
-            console.print(f"|  [green]OK[/green] {filename}")
-        else:
-            console.print(f"|  [red]x[/red] {filename} [dim]missing[/dim]")
-
-    config_path = workspace_path / "config.yaml"
-    if config_path.exists():
-        console.print("|  [green]OK[/green] config.yaml")
-    else:
-        console.print("|  [red]x[/red] config.yaml [dim]missing[/dim]")
-
-    print_footer()
-    console.print()
-    console.print(f"[dim]* Version: {version}[/dim]")
-    console.print()
-
-
-def run_health() -> None:
+def run_health(
+    deep: bool = False,
+    workspace_path: Path | None = None,
+) -> None:
     """Run health checks and render summary."""
+    if deep:
+        run_doctor(workspace_path or Path("."))
+        return
     from clawlet.health import quick_health_check
 
     print_section("Health Checks", "Checking system components")
@@ -101,8 +79,8 @@ def run_doctor(workspace_path: Path) -> None:
     console.print()
 
 
-def run_validate(workspace_path: Path, migration: bool = False) -> None:
-    """Validate workspace config and optional migration compatibility."""
+def run_validate(workspace_path: Path) -> None:
+    """Validate workspace config."""
     from clawlet.config import Config
 
     config_path = workspace_path / "config.yaml"
@@ -131,29 +109,6 @@ def run_validate(workspace_path: Path, migration: bool = False) -> None:
             console.print(f"|    Model: [{SAKURA_PINK}]{config.provider.openrouter.model}[/{SAKURA_PINK}]")
         console.print(f"|    Storage: [{SAKURA_PINK}]{config.storage.backend}[/{SAKURA_PINK}]")
         console.print(f"|    Max Iterations: [{SAKURA_PINK}]{config.agent.max_iterations}[/{SAKURA_PINK}]")
-
-        if migration:
-            from clawlet.config_migration import analyze_config_migration
-
-            report = analyze_config_migration(config_path)
-            console.print("|")
-            console.print(f"|  [bold]Migration Analysis:[/bold] {len(report.issues)} issue(s)")
-            for issue in report.issues:
-                marker = "?"
-                if issue.severity == "error":
-                    marker = "[red]x[/red]"
-                elif issue.severity == "warning":
-                    marker = "[yellow]![/yellow]"
-                else:
-                    marker = "[cyan]i[/cyan]"
-                auto = " [dim](autofixable)[/dim]" if issue.can_autofix else ""
-                console.print(
-                    f"|    {marker} {issue.severity.upper()} {issue.path}: {issue.message}{auto}"
-                )
-                console.print(f"|      hint: {issue.hint}")
-            if report.has_blockers:
-                print_footer()
-                raise typer.Exit(2)
 
         print_footer()
         console.print()

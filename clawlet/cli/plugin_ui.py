@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import tarfile
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -42,8 +40,7 @@ def run_plugin_init(name: str, directory: Path) -> None:
             f"# {name}\n\n"
             "This plugin follows Clawlet Plugin SDK v2.\n\n"
             "Commands:\n"
-            f"- `clawlet plugin test --path {plugin_dir}`\n"
-            f"- `clawlet plugin publish --path {plugin_dir}`\n",
+            f"- `clawlet plugin test --path {plugin_dir}`\n",
             encoding="utf-8",
         )
 
@@ -79,35 +76,6 @@ def run_plugin_test(path: Path, strict: bool) -> None:
             console.print(f"  hint: {issue.hint}")
 
     if strict and not report.passed:
-        raise typer.Exit(2)
-
-
-def run_plugin_conformance(path: Path) -> None:
-    """Run Plugin SDK v2 conformance checks."""
-    from clawlet.plugins.conformance import check_plugin_conformance
-    from clawlet.plugins.loader import PluginLoader
-
-    loader = PluginLoader([path])
-    tools = loader.load_tools()
-    report = check_plugin_conformance(tools)
-
-    print_section("Plugin Conformance", f"path={path}")
-    console.print(
-        "|  "
-        f"checked={report.checked} errors={len(report.errors)} "
-        f"warnings={len(report.warnings)} infos={len(report.infos)}"
-    )
-    if report.issues:
-        console.print("|")
-        for issue in report.issues:
-            console.print(
-                "|  "
-                f"{issue.severity.upper()} {issue.plugin_name} [{issue.code}] {issue.message}"
-            )
-            console.print(f"|    hint: {issue.hint}")
-    print_footer()
-
-    if not report.passed:
         raise typer.Exit(2)
 
 
@@ -154,18 +122,3 @@ def run_plugin_matrix(
 
     if fail_on_errors and not report.passed:
         raise typer.Exit(2)
-
-
-def run_plugin_publish(path: Path, out_dir: Path) -> None:
-    """Package a plugin directory as a distributable tarball."""
-    if not path.exists() or not path.is_dir():
-        console.print("[red]Invalid plugin path[/red]")
-        raise typer.Exit(1)
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    archive = out_dir / f"{path.name}-{int(time.time())}.tar.gz"
-
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(path, arcname=path.name)
-
-    console.print(f"[green]o Packaged plugin archive: {archive}[/green]")

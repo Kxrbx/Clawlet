@@ -8,10 +8,8 @@ from typing import Callable, Optional
 import typer
 
 from clawlet.cli.plugin_ui import (
-    run_plugin_conformance,
     run_plugin_init,
     run_plugin_matrix,
-    run_plugin_publish,
     run_plugin_test,
 )
 
@@ -34,15 +32,8 @@ def register_plugin_commands(plugin_app: typer.Typer, *, get_workspace_path_fn: 
             help="Fail on conformance errors",
         ),
     ):
-        """Load and validate a plugin package."""
+        """Load and validate a plugin package (incl. conformance)."""
         run_plugin_test(path=path, strict=strict)
-
-    @plugin_app.command("conformance")
-    def plugin_conformance(
-        path: Path = typer.Option(..., "--path", help="Plugin directory containing plugin.py"),
-    ):
-        """Run Plugin SDK v2 conformance checks."""
-        run_plugin_conformance(path=path)
 
     @plugin_app.command("matrix")
     def plugin_matrix(
@@ -60,11 +51,3 @@ def register_plugin_commands(plugin_app: typer.Typer, *, get_workspace_path_fn: 
             report_path=report_path,
             fail_on_errors=fail_on_errors,
         )
-
-    @plugin_app.command("publish")
-    def plugin_publish(
-        path: Path = typer.Option(..., "--path", help="Plugin directory to package"),
-        out_dir: Path = typer.Option(Path("dist"), "--out-dir", help="Output directory"),
-    ):
-        """Package a plugin directory as a distributable tarball."""
-        run_plugin_publish(path=path, out_dir=out_dir)

@@ -102,7 +102,7 @@ clawlet agent [--channel telegram] [--toolsets coding,browser]
 clawlet heartbeat status|last|enable|disable
 clawlet replay <run_id> --signature --verify
 clawlet recovery list
-clawlet benchmark release-gate --workspace <path>
+clawlet benchmark run --workspace <path>
 python scripts/release_smoke.py
 ```
 

@@ -57,12 +57,7 @@ heartbeat: {enabled: true, interval_minutes: 30}
 
 ## Migration v1 → v2
 
-```bash
-python scripts/migrate_v1_to_v2.py          # dry-run
-python scripts/migrate_v1_to_v2.py --write  # hybrid_rust→python, .bak first
-```
-
-Breaking: `runtime.engine: hybrid_rust` removed, Python 3.11+ required, heavies are extras. DB needs no migration (SessionDB tables sit next to `messages`).
+Breaking: Python 3.11+ required, heavies are extras. DB needs no migration (SessionDB tables sit next to `messages`).
 
 ## Commands
 
@@ -73,7 +68,7 @@ Breaking: `runtime.engine: hybrid_rust` removed, Python 3.11+ required, heavies 
 | `clawlet tasks list/show/test-routing` | profiles + routing |
 | `clawlet heartbeat status\|last\|enable\|disable` | heartbeat ops |
 | `clawlet replay <run_id>` / `recovery list` | replay / checkpoints |
-| `clawlet benchmark release-gate` | release gate |
+| `clawlet benchmark run` / `corpus` | perf gates |
 | `clawlet validate / health / config` | diagnostics |
 
 ## Docs

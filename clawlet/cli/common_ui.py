@@ -49,11 +49,11 @@ def _filter_breach_lines(
     category = (breach_category or "").strip().lower()
     if not category:
         return breach_lines, None
-    valid_categories = {"local", "corpus", "lane", "context", "coding", "rust", "comparison", "other"}
+    valid_categories = {"local", "corpus", "lane", "context", "coding", "comparison", "other"}
     if category not in valid_categories:
         return breach_lines, (
             "Invalid --breach-category. Use one of: "
-            "local, corpus, lane, context, coding, rust, comparison, other"
+            "local, corpus, lane, context, coding, comparison, other"
         )
     filtered = [item for item in breach_lines if item.lower().startswith(f"{category}:")]
     return filtered, None

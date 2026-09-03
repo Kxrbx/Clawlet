@@ -894,7 +894,7 @@ def load_config(workspace: Optional[Path] = None) -> Config:
             if migration_report.issues:
                 logger.warning(
                     f"Detected {len(migration_report.issues)} migration-related config issue(s). "
-                    "Run `clawlet validate --migration` or `clawlet migrate-config --write`."
+                    "Check config.yaml against the v2 schema."
                 )
                 for line in summarize_migration_hints(migration_report, max_items=5):
                     logger.warning(f"Migration hint: {line}")

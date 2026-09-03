@@ -1234,10 +1234,10 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         f"  [{SAKURA_PINK}]clawlet --help[/{SAKURA_PINK}]     Show all commands"
     )
     console.print(
-        f"  [{SAKURA_PINK}]clawlet status[/{SAKURA_PINK}]    Check your setup"
+        f"  [{SAKURA_PINK}]clawlet health[/{SAKURA_PINK}]    Check your setup"
     )
     console.print(
-        f"  [{SAKURA_PINK}]clawlet dashboard[/{SAKURA_PINK}]  Launch web UI after dashboard setup"
+        f"  [{SAKURA_PINK}]clawlet validate[/{SAKURA_PINK}]  Validate configuration"
     )
     console.print()
     console.print(f"[dim]🌸 Docs: https://github.com/Kxrbx/Clawlet[/dim]")

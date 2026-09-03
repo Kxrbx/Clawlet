@@ -315,25 +315,6 @@ def run_agent_restart_command(
     )
 
 
-def run_chat_command(
-    workspace: Optional[Path], model: Optional[str], get_workspace_path_fn
-) -> None:
-    """Run local chat command orchestration."""
-    workspace_path = workspace or get_workspace_path_fn()
-    if not workspace_path.exists():
-        console.print(
-            "[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]"
-        )
-        raise typer.Exit(1)
-    try:
-        asyncio.run(run_chat(workspace_path, model))
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Chat stopped.[/yellow]")
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-
-
 def run_logs_command(log_file: Path, lines: int, follow: bool) -> None:
     """Tail or print agent logs."""
     if not log_file.exists():
@@ -627,32 +608,3 @@ async def shutdown_agent(
 
     await agent.close()
     logger.info("Agent shutdown complete")
-
-
-async def run_chat(workspace: Path, model: Optional[str]) -> None:
-    """Run local terminal chat using the shared local runtime bootstrap."""
-    from clawlet.tui.runtime_adapter import create_local_runtime
-
-    def _emit(_event: object) -> None:
-        return None
-
-    runtime = await create_local_runtime(
-        workspace, model, emit=_emit, session_id="local"
-    )
-    runtime.emit_snapshot()
-    console.print("[dim]Local chat mode. Type 'exit' to quit.[/dim]")
-    try:
-        while True:
-            user_text = await asyncio.to_thread(input, "\nYou> ")
-            if user_text.strip().lower() in {"exit", "quit"}:
-                break
-            await runtime.send_text(user_text)
-            while True:
-                out = await runtime.poll_outbound()
-                if out.chat_id == runtime.session_id and not (out.metadata or {}).get(
-                    "progress"
-                ):
-                    console.print(f"Clawlet> {out.content}")
-                    break
-    finally:
-        await runtime.stop()

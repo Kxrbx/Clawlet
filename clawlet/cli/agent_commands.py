@@ -11,7 +11,6 @@ from clawlet.cli.runtime_ui import (
     run_agent_command,
     run_agent_restart_command,
     run_agent_stop_command,
-    run_chat_command,
     run_logs_command,
 )
 
@@ -77,14 +76,6 @@ def register_agent_commands(
             print_sakura_banner_fn=print_sakura_banner_fn,
             sakura_light=sakura_light,
         )
-
-    @app.command()
-    def chat(
-        workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-        model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
-    ):
-        """* Start a local interactive chat session in the terminal."""
-        run_chat_command(workspace=workspace, model=model, get_workspace_path_fn=get_workspace_path_fn)
 
     @app.command()
     def logs(

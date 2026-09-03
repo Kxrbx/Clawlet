@@ -225,9 +225,6 @@ clawlet agent --model anthropic/claude-sonnet-4-20250514
 
 # Validate setup before starting optional surfaces
 clawlet validate
-
-# Start dashboard after installing frontend deps in dashboard/
-clawlet dashboard
 ```
 
 ---
@@ -239,8 +236,6 @@ clawlet dashboard
 | `clawlet onboard` | Interactive guided setup |
 | `clawlet init` | Quick setup with defaults |
 | `clawlet agent` | Start the agent |
-| `clawlet dashboard` | Launch web dashboard |
-| `clawlet status` | Show workspace status |
 | `clawlet health` | Run health checks |
 | `clawlet validate` | Validate config |
 | `clawlet config` | View configuration |
@@ -250,7 +245,6 @@ clawlet dashboard
 | `clawlet cron pause/resume` | Pause/resume scheduler job |
 | `clawlet cron run-now` | Execute a scheduler job immediately |
 | `clawlet cron runs` | Inspect scheduler run history |
-| `clawlet migrate-heartbeat` | Normalize legacy heartbeat keys |
 | `clawlet --help` | Show all commands |
 
 ---
