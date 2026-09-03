@@ -11,5 +11,3 @@ python-telegram-bot==21.11.1
 fastapi==0.115.6
 uvicorn==0.32.0
 questionary==2.0.1
-# Optional: tenacity for retries (not yet used)
-tenacity==9.0.0

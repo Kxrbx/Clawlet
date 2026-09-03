@@ -13,20 +13,32 @@ from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
-from telegram import BotCommand, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
-from telegram.error import BadRequest, RetryAfter, TimedOut
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
 
 try:
-    from telegram import MenuButtonCommands
-except ImportError:  # pragma: no cover - depends on python-telegram-bot build
+    from telegram import BotCommand, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+    from telegram.error import BadRequest, RetryAfter, TimedOut
+    from telegram.ext import (
+        Application,
+        CallbackQueryHandler,
+        CommandHandler,
+        ContextTypes,
+        MessageHandler,
+        filters,
+    )
+
+    try:
+        from telegram import MenuButtonCommands
+    except ImportError:  # pragma: no cover - depends on python-telegram-bot build
+        MenuButtonCommands = None
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+    from typing import Any as _TelegramAny
+
+    BotCommand = InlineKeyboardMarkup = ReplyKeyboardMarkup = Update = _TelegramAny
+    BadRequest = RetryAfter = TimedOut = _TelegramAny
+    Application = CallbackQueryHandler = CommandHandler = _TelegramAny
+    ContextTypes = MessageHandler = filters = _TelegramAny
     MenuButtonCommands = None
 
 from clawlet.bus.queue import InboundMessage, MessageBus, OutboundMessage
@@ -35,7 +47,7 @@ from clawlet.channels.telegram_callbacks import dispatch_callback_query
 from clawlet.channels.base import BaseChannel
 from clawlet.channels.telegram_menu import resolve_text_menu_action
 from clawlet.channels.telegram_ui import build_inline_keyboard, default_reply_keyboard, main_menu_markup, settings_menu_markup
-from clawlet.cli.runtime_paths import get_default_workspace_path
+from clawlet.paths import get_default_workspace_path
 
 
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
@@ -91,6 +103,10 @@ class TelegramChannel(BaseChannel):
     def __init__(self, bus: MessageBus, config: dict, agent=None):
         super().__init__(bus, config, agent)
 
+        if not TELEGRAM_AVAILABLE:
+            raise RuntimeError(
+                "python-telegram-bot not installed. Run: pip install clawlet[channels-telegram]"
+            )
         self.token = (config.get("token") or "").strip()
         if not self.token:
             raise ValueError("Telegram token not configured")

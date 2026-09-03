@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clawlet.cli.runtime_paths import get_default_workspace_path
+from clawlet.paths import get_default_workspace_path
 from clawlet.skills.installer import SkillInstallerService
 from clawlet.tools.registry import BaseTool, ToolResult
 from clawlet.workspace_layout import WorkspaceLayout, get_workspace_layout

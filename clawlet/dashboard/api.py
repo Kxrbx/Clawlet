@@ -29,13 +29,16 @@ from clawlet.health import HealthChecker, quick_health_check
 from clawlet.exceptions import ClawletError
 from clawlet.providers.models_cache import get_models_cache
 from clawlet.metrics import format_prometheus
-from clawlet.cli.runtime_paths import get_default_workspace_path, get_workspace_layout_for
+from clawlet.paths import get_default_workspace_path, get_workspace_layout_for
+from clawlet.rate_limit import RateLimit, RateLimiter
 
 
 # Pydantic models
 
+
 class HealthResponse(BaseModel):
     """Health check response."""
+
     status: str
     timestamp: str
     checks: list[dict]
@@ -43,6 +46,7 @@ class HealthResponse(BaseModel):
 
 class AgentStatus(BaseModel):
     """Agent status."""
+
     running: bool
     provider: str
     model: str
@@ -52,6 +56,7 @@ class AgentStatus(BaseModel):
 
 class SettingsResponse(BaseModel):
     """Settings response."""
+
     provider: str
     model: str
     storage: str
@@ -62,6 +67,7 @@ class SettingsResponse(BaseModel):
 
 class SettingsUpdate(BaseModel):
     """Settings update request."""
+
     provider: Optional[str] = None
     model: Optional[str] = None
     max_iterations: Optional[int] = None
@@ -71,12 +77,14 @@ class SettingsUpdate(BaseModel):
 
 class ModelsResponse(BaseModel):
     """Models list response."""
+
     models: List[dict]
     updated_at: str
 
 
 class CacheInfoResponse(BaseModel):
     """Cache info response."""
+
     updated_at: Optional[str] = None
     model_count: int
     is_expired: bool
@@ -100,55 +108,29 @@ DASHBOARD_TOKEN: Optional[str] = None
 # Security scheme for Bearer token
 security = HTTPBearer(auto_error=False)
 
-# Simple in-memory rate limiter for API endpoints
-class APIRateLimiter:
-    """Simple rate limiter for API requests."""
-    def __init__(self, max_requests: int = 100, window_seconds: int = 60):
-        self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self._requests: dict[str, list[float]] = {}
-    
-    def is_allowed(self, client_id: str) -> tuple[bool, float]:
-        """Check if request is allowed for client."""
-        import time
-        now = time.time()
-        
-        # Clean old requests
-        if client_id in self._requests:
-            self._requests[client_id] = [
-                ts for ts in self._requests[client_id] 
-                if now - ts < self.window_seconds
-            ]
-        else:
-            self._requests[client_id] = []
-        
-        # Check limit
-        if len(self._requests[client_id]) >= self.max_requests:
-            retry_after = self.window_seconds - (now - self._requests[client_id][0])
-            return False, max(0, retry_after)
-        
-        # Record request
-        self._requests[client_id].append(now)
-        return True, 0.0
-
-# Global rate limiter instance
-api_rate_limiter = APIRateLimiter(max_requests=100, window_seconds=60)
+# Global rate limiter instance (shared sliding-window implementation)
+api_rate_limiter = RateLimiter(
+    default_limit=RateLimit(max_requests=100, window_seconds=60)
+)
 
 
 async def rate_limit_middleware(request, call_next):
     """Rate limiting middleware."""
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
-    
+
     # Check rate limit (skip for health endpoint)
     if request.url.path != "/health":
         allowed, retry_after = api_rate_limiter.is_allowed(client_ip)
         if not allowed:
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Rate limit exceeded", "retry_after": int(retry_after)}
+                content={
+                    "detail": "Rate limit exceeded",
+                    "retry_after": int(retry_after),
+                },
             )
-    
+
     response = await call_next(request)
     return response
 
@@ -203,7 +185,7 @@ def _tail_lines(path: Path, limit: int) -> list[str]:
 
 
 async def verify_api_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> str:
     """
     Verify API token from Authorization header.
@@ -261,7 +243,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Clawlet Dashboard API",
     description="API for Clawlet dashboard",
-    version="0.4.7",
+    version="0.6.0a0",
     lifespan=lifespan,
 )
 
@@ -279,6 +261,7 @@ app.add_middleware(
 
 
 # Health endpoints
+
 
 @app.get("/health", response_model=HealthResponse)
 async def get_health():
@@ -330,6 +313,7 @@ async def get_detailed_health(token: str = Depends(verify_api_token)):
 
 # Agent endpoints
 
+
 @app.get("/agent/status", response_model=AgentStatus)
 async def get_agent_status(token: str = Depends(verify_api_token)):
     """Get current agent status."""
@@ -340,42 +324,57 @@ async def get_agent_status(token: str = Depends(verify_api_token)):
 async def start_agent(token: str = Depends(verify_api_token)):
     """Start the agent."""
     global agent_process
-    
+
     if agent_status["running"]:
         return {"success": False, "message": "Agent already running"}
-    
+
     # Load config to get workspace
     config = load_config()
     workspace = get_default_workspace_path()
-    
+
     # Start agent as subprocess
     import subprocess
     import sys
+
     try:
         # Use sys.executable to ensure we use the same Python interpreter
         agent_process = subprocess.Popen(
             [sys.executable, "-m", "clawlet"],
             cwd=workspace,
-            env={**os.environ, "CLAWLET_CONFIG": str(config.config_path) if hasattr(config, 'config_path') else ""}
+            env={
+                **os.environ,
+                "CLAWLET_CONFIG": str(config.config_path)
+                if hasattr(config, "config_path")
+                else "",
+            },
         )
         agent_status["running"] = True
         agent_status["uptime_seconds"] = 0
         agent_status["pid"] = agent_process.pid
-        
+
         # Start uptime counter
         asyncio.create_task(update_uptime())
-        
+
         logger.info("Agent started via API")
         return {"success": True, "message": f"Agent started (PID: {agent_process.pid})"}
     except FileNotFoundError as e:
         logger.error(f"Failed to start agent: Python executable not found - {e}")
-        return {"success": False, "message": "Python executable not found. Please ensure Python is properly installed."}
+        return {
+            "success": False,
+            "message": "Python executable not found. Please ensure Python is properly installed.",
+        }
     except PermissionError as e:
         logger.error(f"Failed to start agent: Permission denied - {e}")
-        return {"success": False, "message": "Permission denied when starting agent process."}
+        return {
+            "success": False,
+            "message": "Permission denied when starting agent process.",
+        }
     except subprocess.SubprocessError as e:
         logger.error(f"Failed to start agent: Subprocess error - {e}")
-        return {"success": False, "message": f"Failed to start agent subprocess: {str(e)}"}
+        return {
+            "success": False,
+            "message": f"Failed to start agent subprocess: {str(e)}",
+        }
     except Exception as e:
         logger.error(f"Failed to start agent: {e}")
         return {"success": False, "message": f"Unexpected error: {str(e)}"}
@@ -385,10 +384,10 @@ async def start_agent(token: str = Depends(verify_api_token)):
 async def stop_agent(token: str = Depends(verify_api_token)):
     """Stop the agent."""
     global agent_process, agent_status
-    
+
     if not agent_status["running"]:
         return {"success": False, "message": "Agent not running"}
-    
+
     if agent_process and agent_process.poll() is None:
         try:
             agent_process.terminate()
@@ -399,25 +398,28 @@ async def stop_agent(token: str = Depends(verify_api_token)):
         except Exception as e:
             logger.error(f"Error stopping agent: {e}")
             return {"success": False, "message": f"Error stopping agent: {e}"}
-    
+
     agent_status["running"] = False
     agent_status["pid"] = None
-    
+
     logger.info("Agent stopped via API")
     return {"success": True, "message": "Agent stopped"}
 
 
 # Settings endpoints
 
+
 @app.get("/settings", response_model=SettingsResponse)
 async def get_settings(token: str = Depends(verify_api_token)):
     """Get current settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
-    
+
     return SettingsResponse(
         provider=config.provider.primary,
-        model=config.provider.openrouter.model if config.provider.openrouter else "default",
+        model=config.provider.openrouter.model
+        if config.provider.openrouter
+        else "default",
         storage=config.storage.backend,
         max_iterations=config.agent.max_iterations,
         max_tool_calls_per_message=config.agent.max_tool_calls_per_message,
@@ -427,13 +429,12 @@ async def get_settings(token: str = Depends(verify_api_token)):
 
 @app.post("/settings")
 async def update_settings(
-    settings: SettingsUpdate,
-    token: str = Depends(verify_api_token)
+    settings: SettingsUpdate, token: str = Depends(verify_api_token)
 ):
     """Update settings."""
     if config is None:
         raise HTTPException(status_code=503, detail="Config not loaded")
-    
+
     # Update config (in-memory only)
     if settings.provider:
         config.provider.primary = settings.provider
@@ -443,10 +444,10 @@ async def update_settings(
         config.agent.max_tool_calls_per_message = settings.max_tool_calls_per_message
     if settings.temperature is not None:
         config.agent.temperature = settings.temperature
-    
+
     config.to_yaml(config.config_path)
     logger.info(f"Settings updated: {settings}")
-    
+
     return {"success": True, "message": "Settings updated"}
 
 
@@ -463,10 +464,7 @@ async def get_config_yaml(token: str = Depends(verify_api_token)):
 
 
 @app.post("/config/yaml")
-async def update_config_yaml(
-    content: dict,
-    token: str = Depends(verify_api_token)
-):
+async def update_config_yaml(content: dict, token: str = Depends(verify_api_token)):
     """Update config.yaml entirely."""
     global config
     if config is None:
@@ -486,49 +484,54 @@ async def update_config_yaml(
 
 # Models endpoints
 
+
 @app.get("/models", response_model=ModelsResponse)
 async def get_models(
     provider: str = "openrouter",
     force_refresh: bool = False,
-    token: str = Depends(verify_api_token)
+    token: str = Depends(verify_api_token),
 ):
     """Get available models for a provider."""
     if provider == "openrouter":
         from clawlet.providers.openrouter import OpenRouterProvider
-        
+
         cache = get_models_cache()
         models = cache.get_models(force_refresh=force_refresh)
         cache_info = cache.get_cache_info() or {}
         updated_at = cache_info.get("updated_at", "")
-        
+
         return ModelsResponse(models=models, updated_at=updated_at)
     else:
-        raise HTTPException(status_code=400, detail=f"Provider {provider} not supported")
+        raise HTTPException(
+            status_code=400, detail=f"Provider {provider} not supported"
+        )
 
 
 @app.get("/models/cache-info", response_model=CacheInfoResponse)
 async def get_cache_info(
-    provider: str = "openrouter",
-    token: str = Depends(verify_api_token)
+    provider: str = "openrouter", token: str = Depends(verify_api_token)
 ):
     """Get models cache information."""
     if provider == "openrouter":
         cache = get_models_cache()
         info = cache.get_cache_info()
-        
+
         if info is None:
             return CacheInfoResponse(model_count=0, is_expired=True)
-        
+
         return CacheInfoResponse(
             updated_at=info.get("updated_at"),
             model_count=info.get("model_count", 0),
             is_expired=info.get("is_expired", False),
         )
     else:
-        raise HTTPException(status_code=400, detail=f"Provider {provider} not supported")
+        raise HTTPException(
+            status_code=400, detail=f"Provider {provider} not supported"
+        )
 
 
 # Logs endpoint
+
 
 @app.get("/logs")
 async def get_logs(limit: int = 100, token: str = Depends(verify_api_token)):
@@ -548,7 +551,9 @@ async def get_logs(limit: int = 100, token: str = Depends(verify_api_token)):
                 timestamp = parts[0]
                 level = parts[1]
                 message = parts[2]
-                logs.append({"level": level, "message": message, "timestamp": timestamp})
+                logs.append(
+                    {"level": level, "message": message, "timestamp": timestamp}
+                )
                 continue
         logs.append({"level": level, "message": line, "timestamp": ""})
 
@@ -561,6 +566,7 @@ async def get_logs(limit: int = 100, token: str = Depends(verify_api_token)):
 
 
 # Console endpoint (WebSocket would be better, but HTTP for now)
+
 
 @app.get("/console")
 async def get_console_output(token: str = Depends(verify_api_token)):
@@ -575,6 +581,7 @@ async def get_console_output(token: str = Depends(verify_api_token)):
 
 
 # Root
+
 
 @app.get("/metrics")
 async def get_metrics(token: str = Depends(verify_api_token)):
@@ -618,7 +625,10 @@ def _read_automation_status(workspace: Path) -> dict:
                     if str(entry.get("status")) == "failed":
                         failed_runs += 1
                     completed = entry.get("completed_at")
-                    if completed and (last_completed_at is None or str(completed) > str(last_completed_at)):
+                    if completed and (
+                        last_completed_at is None
+                        or str(completed) > str(last_completed_at)
+                    ):
                         last_completed_at = completed
         except Exception:
             continue
@@ -659,7 +669,9 @@ async def get_automation_status(token: str = Depends(verify_api_token)):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load automation status: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load automation status: {e}"
+        )
 
 
 @app.get("/")
@@ -667,12 +679,13 @@ async def root():
     """Root endpoint."""
     return {
         "name": "Clawlet Dashboard API",
-        "version": "0.1.0",
+        "version": "0.6.0a0",
         "status": "running",
     }
 
 
 # Helper functions
+
 
 async def update_uptime():
     """Update agent uptime every second."""
@@ -684,10 +697,12 @@ async def update_uptime():
 async def start_dashboard_server(host: str = "0.0.0.0", port: int = 8000):
     """Start the dashboard API server."""
     import uvicorn
+
     uvicorn.run(app, host=host, port=port)
 
 
 # Run server
+
 
 def run_server(port: int = 8000):
     """Run the dashboard API server."""

@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from clawlet.cli.runtime_paths import get_default_workspace_path
+from clawlet.paths import get_default_workspace_path
 from clawlet.skills.base import BaseSkill, ToolDefinition
 from clawlet.skills.installer import SkillInstallerService
 from clawlet.skills.loader import SkillLoader, discover_skills

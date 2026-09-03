@@ -5,39 +5,53 @@ Tool registry and base tool interface.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Dict, Union
-import json
-import time
-from collections import defaultdict
 
 from loguru import logger
 
 from clawlet.exceptions import ValidationError, validate_not_empty, validate_type
+from clawlet.rate_limit import RateLimiter as _SharedRateLimiter, RateLimit
 
 
 class RateLimiter:
-    """Simple rate limiter for tool execution."""
-    
+    """Per-tool rate limiter for tool execution.
+
+    Thin compatibility wrapper around the shared sliding-window
+    :class:`clawlet.rate_limit.RateLimiter` (single implementation).
+    Keeps the historic ``check(key) -> (bool, str)`` interface used by
+    :class:`ToolRegistry` and existing tests.
+    """
+
     def __init__(self, max_calls: int = 10, window_seconds: float = 60.0):
         self.max_calls = max_calls
         self.window_seconds = window_seconds
-        self._calls: dict[str, list[float]] = defaultdict(list)
-    
+        self._inner = _SharedRateLimiter(
+            default_limit=RateLimit(
+                max_requests=max_calls, window_seconds=window_seconds
+            ),
+            tool_limit=RateLimit(
+                max_requests=max_calls, window_seconds=window_seconds
+            ),
+        )
+        self._limit = RateLimit(
+            max_requests=max_calls, window_seconds=window_seconds
+        )
+
     def check(self, key: str) -> tuple[bool, str]:
         """Check if a key is within rate limits."""
-        now = time.time()
-        # Clean old calls outside the window
-        self._calls[key] = [t for t in self._calls[key] if now - t < self.window_seconds]
-        
-        if len(self._calls[key]) >= self.max_calls:
-            return False, f"Rate limit exceeded: {self.max_calls} calls per {self.window_seconds}s"
-        
-        self._calls[key].append(now)
-        return True, ""
-    
+        allowed, retry_after = self._inner.is_allowed(f"tool:{key}", self._limit)
+        if allowed:
+            return True, ""
+        return (
+            False,
+            f"Rate limit exceeded: {self.max_calls} calls per {self.window_seconds}s "
+            f"(retry in {retry_after:.1f}s)",
+        )
+
     def reset(self, key: str) -> None:
         """Reset rate limit for a key."""
-        if key in self._calls:
-            del self._calls[key]
+        entry_key = f"tool:{key}"
+        if entry_key in self._inner._entries:
+            del self._inner._entries[entry_key]
 
 
 @dataclass

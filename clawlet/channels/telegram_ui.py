@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+try:
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+except ImportError:  # optional dependency: clawlet[channels-telegram]
+    InlineKeyboardButton = InlineKeyboardMarkup = ReplyKeyboardMarkup = Any
 
 
 def default_reply_keyboard() -> ReplyKeyboardMarkup:

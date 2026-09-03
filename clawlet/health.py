@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from loguru import logger
-from clawlet.cli.runtime_paths import get_default_workspace_path, get_workspace_layout_for
+from clawlet.paths import get_default_workspace_path, get_workspace_layout_for
 
 
 class HealthStatus(str, Enum):
