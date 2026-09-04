@@ -74,6 +74,7 @@ include = ["clawlet*"]
 
 [tool.setuptools.package-data]
 clawlet = ["py.typed"]
+"clawlet.tui" = ["*.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "clawlet/tests"]

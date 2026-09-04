@@ -1,0 +1,170 @@
+/* Sakura theme for the Clawlet TUI. All widget chrome lives here. */
+
+$sakura-bg: #14101A;
+$sakura-pink-panel: #1E1826;
+$sakura-pink-panel-alt: #241C2E;
+$sakura-text: #F5EDF3;
+$sakura-muted: #A898AC;
+$sakura-pink: #FF69B4;
+$sakura-pink-light: #FFB7C5;
+$sakura-pink-accent-dark: #8E2F5C;
+$sakura-border: #4A3442;
+$sakura-ok: #34D399;
+$sakura-warn: #FBBF24;
+$sakura-err: #F87171;
+$sakura-cyan: #7DD3FC;
+
+Screen {
+    background: $sakura-bg;
+    color: $sakura-text;
+}
+
+Header {
+    background: $sakura-pink-panel-alt;
+    color: $sakura-pink-light;
+}
+
+Footer {
+    background: $sakura-pink-panel-alt;
+    color: $sakura-muted;
+}
+
+#chat-panel {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+#chat-scroll {
+    height: 1fr;
+}
+
+#thinking-line {
+    height: 1;
+    color: $sakura-pink;
+    display: none;
+    padding: 0 1;
+}
+
+#status-bar {
+    height: 1;
+    color: $sakura-muted;
+    padding: 0 1;
+}
+
+#input-bar {
+    height: auto;
+}
+
+#command-input {
+    background: $sakura-bg;
+    color: $sakura-text;
+    border: tall $sakura-pink-accent-dark;
+}
+
+#command-input:focus {
+    border: tall $sakura-pink;
+}
+
+#slash-scroll {
+    max-height: 8;
+    height: auto;
+    display: none;
+}
+
+#slash-hint {
+    height: auto;
+    color: $sakura-muted;
+    padding: 0 1;
+}
+
+.panel-title {
+    color: $sakura-pink;
+    text-style: bold;
+}
+
+.warning-title {
+    color: $sakura-warn;
+    text-style: bold;
+}
+
+.success { color: $sakura-ok; }
+.warning { color: $sakura-warn; }
+.cyan { color: $sakura-cyan; }
+.error { color: $sakura-err; }
+.muted { color: $sakura-muted; }
+
+ApprovalModal {
+    align: center middle;
+}
+
+ApprovalModal > #approval-box {
+    width: 64;
+    height: auto;
+    max-height: 24;
+    background: $sakura-pink-panel-alt;
+    border: heavy $sakura-warn;
+    padding: 1 2;
+}
+
+ApprovalModal .approval-tool {
+    color: $sakura-pink-light;
+    text-style: bold;
+}
+
+#replay-screen, #context-screen {
+    background: $sakura-bg;
+    color: $sakura-text;
+    padding: 1 2;
+}
+
+#replay-id {
+    background: $sakura-bg;
+    color: $sakura-text;
+    border: tall $sakura-pink-accent-dark;
+    margin-bottom: 1;
+}
+
+#replay-id:focus {
+    border: tall $sakura-pink;
+}
+
+#replay-log, #context-log {
+    height: 1fr;
+    background: $sakura-pink-panel;
+    border: round $sakura-border;
+    padding: 0 1;
+}
+
+#session-search {
+    background: $sakura-bg;
+    color: $sakura-text;
+    border: tall $sakura-pink-accent-dark;
+    margin-bottom: 1;
+}
+
+#session-search:focus {
+    border: tall $sakura-pink;
+}
+
+#sessions-split {
+    height: 1fr;
+}
+
+#session-list {
+    height: 40%;
+    background: $sakura-pink-panel;
+    border: round $sakura-border;
+}
+
+#session-view {
+    height: 1fr;
+    background: $sakura-pink-panel;
+    border: round $sakura-border;
+    padding: 0 1;
+}
+
+.screen-hint {
+    color: $sakura-muted;
+    margin-top: 1;
+}

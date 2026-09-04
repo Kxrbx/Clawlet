@@ -17,4 +17,35 @@ def test_tui_store_reduces_core_events():
     assert state.pending_approval is not None
     assert state.brain.provider == 'openai'
     assert state.heartbeat.enabled is True
-    assert state.logs
+    assert not hasattr(state, 'logs')
+
+
+def _tool(name, status, summary):
+    return ToolLifecycle(session_id='local', tool_name=name, status=status, summary=summary)
+
+
+def test_tool_same_title_morphs_in_place():
+    from clawlet.tui.state import TuiStore
+
+    store = TuiStore('/tmp/ws')
+    store.reduce(_tool('shell', 'RUNNING', 'Executing tool.'))
+    store.reduce(_tool('shell', 'RUNNING', 'Executing tool.'))
+    assert len(store.state.transcript) == 1
+    store.reduce(_tool('shell', 'SUCCESS', 'listed 4 files'))
+    assert len(store.state.transcript) == 1
+    assert store.state.transcript[0].status == 'SUCCESS'
+    assert store.state.transcript[0].body == 'listed 4 files'
+    store.reduce(_tool('shell', 'RUNNING', 'Executing tool.'))
+    assert len(store.state.transcript) == 2  # new call after terminal state
+
+
+def test_exact_duplicate_messages_skipped():
+    from clawlet.tui.state import TuiStore
+
+    store = TuiStore('/tmp/ws')
+    store.reduce(UserSubmitted(session_id='local', content='hi'))
+    store.reduce(UserSubmitted(session_id='local', content='hi'))
+    store.reduce(AssistantMessage(session_id='local', content='hello'))
+    store.reduce(AssistantMessage(session_id='local', content='hello'))
+    store.reduce(AssistantMessage(session_id='local', content='different'))
+    assert [e.body for e in store.state.transcript] == ['hi', 'hello', 'different']

@@ -1,31 +1,91 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
-from textual.widgets import Static
+from rich.console import Group
+from rich.markdown import Markdown as RichMarkdown
+from rich.text import Text
+from textual.containers import Container
+from textual.widgets import Collapsible, Static
 
 from clawlet.tui.models import TranscriptEntry
-from clawlet.tui.theme import CYAN, ERROR, SUCCESS, WARNING
+from clawlet.tui.theme import CYAN, ERROR, MUTED, SAKURA, SUCCESS, WARNING
+
+ROLE_COLORS = {"user": CYAN, "assistant": SAKURA, "warning": WARNING}
+EXPANDED_STATUSES = {"FAILED", "REQUIRES APPROVAL"}
 
 
-class ChatPanel(Static):
-    def update_entries(self, entries: list[TranscriptEntry]) -> None:
-        lines: list[str] = ["[bold #7C3AED]1. CHAT & TOOL TRACES[/bold #7C3AED]"]
-        for entry in entries[-80:]:
-            timestamp = entry.timestamp.strftime("%H:%M:%S")
-            if entry.kind == "tool":
-                status_color = {"SUCCESS": SUCCESS, "FAILED": ERROR, "REQUIRES APPROVAL": WARNING}.get(entry.status, CYAN)
-                lines.append(f"[{timestamp}] [bold]{entry.title}[/bold] [[{status_color}]{entry.status}[/{status_color}]]")
-                lines.append(f"  [#06B6D4]{entry.body}[/#06B6D4]")
-                raw = entry.metadata.get("raw") or {}
-                args = entry.metadata.get("arguments") or {}
-                if args:
-                    lines.append(f"  args: [#06B6D4]{json.dumps(args, ensure_ascii=False)}[/#06B6D4]")
-                if raw:
-                    lines.append("  ▼ raw")
-                    lines.append(f"  {json.dumps(raw, ensure_ascii=False, indent=2)[:600]}")
-            else:
-                lines.append(f"[{timestamp}] [bold]{entry.title}[/bold]")
-                lines.append(f"{entry.body}")
-            lines.append("")
-        self.update("\n".join(lines))
+def _header(timestamp: str, title: str, kind: str) -> Text:
+    head = Text(f"[{timestamp}] ", style="dim")
+    color = ROLE_COLORS.get(kind)
+    head.append(title, style=f"bold {color}" if color else "bold")
+    return head
+
+
+def _assistant_group(entry: TranscriptEntry) -> Group:
+    """Header (+ task badge) + Markdown body. Pure, directly unit-testable."""
+    head = _header(entry.timestamp.strftime("%H:%M:%S"), entry.title, entry.kind)
+    task_kind = entry.metadata.get("task_kind") or entry.metadata.get("delegated_kind")
+    if task_kind:
+        head.append(f" · task: {task_kind}", style=MUTED)
+    return Group(head, RichMarkdown(entry.body or "…", code_theme="monokai"))
+
+
+def _plain_text(entry: TranscriptEntry) -> Text:
+    out = _header(entry.timestamp.strftime("%H:%M:%S"), entry.title + "\n", entry.kind)
+    out.append(f"{entry.body}\n")
+    args = entry.metadata.get("arguments") or {}
+    if args:
+        out.append(f"  args: {json.dumps(args, ensure_ascii=False)}\n", style="dim")
+    raw = entry.metadata.get("raw") or {}
+    if raw:
+        out.append("  raw:\n", style="dim")
+        out.append(f"  {json.dumps(raw, ensure_ascii=False, indent=2)[:600]}\n", style="dim")
+    return out
+
+
+def _tool_body(entry: TranscriptEntry) -> Text:
+    status_color = {"SUCCESS": SUCCESS, "FAILED": ERROR, "REQUIRES APPROVAL": WARNING}.get(entry.status, CYAN)
+    out = Text(f"{entry.status}\n", style=status_color)
+    out.append(f"{entry.body}\n")
+    args = entry.metadata.get("arguments") or {}
+    if args:
+        out.append(f"args: {json.dumps(args, ensure_ascii=False)}\n", style="dim")
+    return out
+
+
+class ChatPanel(Container):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # ponytail: (entry, widget) pairs — bare id() keys go stale on GC id-reuse
+        self._widgets: dict[int, tuple[object, object]] = {}
+        # ponytail: lock, NOT exclusive workers — cancelling between mount()
+        # and dict registration leaves orphan duplicates mounted forever
+        self._sync_lock = asyncio.Lock()
+
+    def _build_entry(self, entry: TranscriptEntry):
+        if entry.kind == "tool":
+            return Collapsible(
+                Static(_tool_body(entry)),
+                title=f"{entry.title} · {entry.status}",
+                collapsed=entry.status not in EXPANDED_STATUSES,
+            )
+        if entry.kind == "assistant":
+            return Static(_assistant_group(entry))
+        return Static(_plain_text(entry))
+
+    async def sync_entries(self, entries: list[TranscriptEntry]) -> None:
+        """Incrementally mount new entries; drop trimmed ones. Call from a worker."""
+        async with self._sync_lock:
+            window = entries[-80:]
+            live = {id(entry): entry for entry in window}
+            for cached_id, (cached_entry, widget) in list(self._widgets.items()):
+                if live.get(cached_id) is not cached_entry:
+                    await widget.remove()
+                    del self._widgets[cached_id]
+            for entry in window:
+                if id(entry) not in self._widgets:
+                    widget = self._build_entry(entry)
+                    await self.mount(widget)
+                    self._widgets[id(entry)] = (entry, widget)

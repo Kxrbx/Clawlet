@@ -25,14 +25,6 @@ class ApprovalState:
 
 
 @dataclass(slots=True)
-class LogLine:
-    level: str
-    channel: str
-    message: str
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-@dataclass(slots=True)
 class BrainState:
     provider: str = ""
     model: str = ""
@@ -61,7 +53,4 @@ class TuiState:
     transcript: list[TranscriptEntry] = field(default_factory=list)
     brain: BrainState = field(default_factory=BrainState)
     heartbeat: HeartbeatState = field(default_factory=HeartbeatState)
-    logs: list[LogLine] = field(default_factory=list)
     pending_approval: ApprovalState | None = None
-    active_log_tab: str = "chat"
-    log_filter: str = ""

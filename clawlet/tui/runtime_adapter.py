@@ -50,6 +50,7 @@ class LocalRuntimeHandle:
     poll_outbound: Callable[[], Awaitable[OutboundMessage]]
     stop: Callable[[], Awaitable[None]]
     emit_snapshot: Callable[[], None]
+    get_raw_history: Callable[[], list[dict[str, Any]]] = lambda: []  # ponytail: in-memory read, storage query if richer view needed
 
 
 async def create_local_runtime(workspace: Path, model: Optional[str], emit: EventSink, session_id: str = "local") -> LocalRuntimeHandle:
@@ -84,9 +85,10 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
     async def _progress_override(self, event_type: str, text: str, *, detail: str = "", final: bool = False) -> None:
         if not text.strip():
             return
+        # ponytail: tool_started/completed already covered (richer) by
+        # InstrumentedToolRegistry; only rejections (tool_failed pre-execution)
+        # and approvals have no registry emit.
         event_map = {
-            "tool_started": "RUNNING",
-            "tool_completed": "SUCCESS",
             "tool_failed": "FAILED",
             "approval_required": "REQUIRES APPROVAL",
         }
@@ -100,6 +102,23 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
 
     agent_task = asyncio.create_task(agent.run())
     emit(RuntimeStatus(status="IDLE", detail="Runtime booted."))
+
+    def get_raw_history() -> list[dict[str, Any]]:
+        key = f"cli:{session_id}"
+        convo = getattr(agent, "_conversations", {}).get(key)
+        history = getattr(convo, "history", None) if convo is not None else None
+        if not history:
+            return []
+        entries: list[dict[str, Any]] = []
+        for message in history:
+            entries.append(
+                {
+                    "role": getattr(message, "role", "?"),
+                    "content": getattr(message, "content", ""),
+                    "tool_calls": getattr(message, "tool_calls", None),
+                }
+            )
+        return entries
 
     def emit_snapshot() -> None:
         memory = [
@@ -151,7 +170,6 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
 
     async def send_text(text: str) -> None:
         emit(RuntimeStatus(status="RUNNING", detail="Processing user message."))
-        emit(LogEvent(level="CHAT", channel="chat", message=text))
         await bus.publish_inbound(InboundMessage(channel="cli", chat_id=session_id, content=text))
 
     async def poll_outbound() -> OutboundMessage:
@@ -195,4 +213,5 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
         poll_outbound=poll_outbound,
         stop=stop,
         emit_snapshot=emit_snapshot,
+        get_raw_history=get_raw_history,
     )
