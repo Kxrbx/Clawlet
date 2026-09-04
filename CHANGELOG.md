@@ -2,31 +2,111 @@
 
 All notable changes to Clawlet will be documented in this file.
 
-## [0.6.0a0] - v2 revamp (alpha, branch `v2-revamp`)
+## [0.6.0a8] - 2026-09-04 — ponytail cleanup, drop dead code/docs/deps (-9992)
+
+Commit `2f9b121`. Net **-9,992 lines** across 56 files.
+
+### Removed
+
+- **Web dashboard deleted** (backend `clawlet/dashboard/api.py` + whole React frontend `dashboard/` incl. 5k-line `package-lock.json`) — TUI is now the single console.
+- **Benchmarks suite deleted** (`coding_loop`, `context_cache`, `corpus`, `determinism`, `event_schema`, `failure_taxonomy`, `lanes`, `release_gate`, `remote_parity`, `replay_reexecution`, `replay_retention`) — superseded by `clawlet benchmark run` slim path + `tasks test-routing`.
+- **`release_readiness.py`, `config_migration_matrix.py`** deleted; `retry.py`, `rate_limit.py`, `tools/__init__.py`, `channels/__init__.py` slimmed; stale root `requirements-*.txt` and kilo plan doc removed.
+- **Pyproject dep prune** — unused pins dropped from core.
+
+## [0.6.0a7] - 2026-09-04 — TUI sakura rework
+
+Commit `be1157f`. Full-screen terminal console becomes the default surface.
+
+### New Features
+
+- **TUI screens** — `main`, `sessions`, `replay`, `raw_context` + command palette (`commands.py`) and approval modal.
+- **Sakura theme** (`sakura.tcss`) + status bar, session export (`export.py`), runtime adapter fixes, chat panel rework.
+- **Bare `clawlet` launches the TUI** (no subcommand needed); `textual` promoted to core dependency.
+
+### Tests
+
+- New `clawlet/tests/unit/test_tui.py` (425 lines) + `tests/test_tui_store.py` refresh.
+
+## [0.6.0a6] - 2026-09-03 — CLI cull, TUI by default
+
+Commit `dd8326f`. Net -1,761 lines.
+
+### Removed
+
+- Deleted `benchmark_ui`, `dashboard_ui`, `migration_ui`, `release_ui` (-979 lines of CLI panels); slimmed `benchmark`, `plugin`, `workspace`, `agent`, `runtime_ui` commands.
+- **Migration script + test removed** (`scripts/migrate_v1_to_v2.py`, `tests/unit/test_migration.py`) — v1→v2 is now a documented manual edit (see `docs/runtime-v2.md`) + `clawlet validate`.
+
+### Changed
+
+- `clawlet` with no subcommand launches the TUI; `textual` is a core dep; `QUICKSTART.md` trimmed.
+
+## [0.6.0a5] - 2026-09-03 — docs rewrite, Hermes naming dropped
+
+Commit `cc8a8fd`.
+
+### Changed
+
+- **Root README rewritten for v2** (lean, user-facing); `docs/runtime-v2.md` rewritten as the canonical runtime doc.
+- Plan renamed `PLAN_V2_HERMES_REVAMP.md` → `PLAN_V2_REVAMP.md`; `ARCHITECTURE.md`, skills/session/toolset docstrings de-Hermesed.
+
+## [0.6.0a4] - 2026-09-03 — compression, memory auto-consolidation, per-task onboard
+
+Commit `5ed3ab4`. 102 tests green.
+
+### New Features
+
+- **HistoryTrimmer char budget** — single trim funnel trims by count (100 msgs) OR chars (200k); big tool outputs capped in place (2000c) before any summary work, no LLM call just to trim.
+- **Memory auto-consolidation** — `maybe_run_memory_maintenance` curates recent daily notes into durable memory at most 1×/day from the heartbeat tick (flagged, never raises, state in `maintenance-state.json`).
+- **Onboard Task Models step** — writes `task_profiles` from one shared provider table.
+
+## [0.6.0a3] - 2026-09-03 — dead-code audit removals and doc resync
+
+Commit `688fc1f`. Net -3,521 lines.
+
+### Removed
+
+- Unwired `clawlet/webhooks/` package (handlers/models/server, ~1.2k lines) + `docs/webhooks.md`.
+- Legacy `HeartbeatScheduler` (`heartbeat/scheduler.py`), `AgentRouter` (`agent/router.py`, 300 lines), `WorkspaceManager`, nested `clawlet/README.md`, `docs/multi-agent.md`, `docs/telegram-compatibility-plan.md`, root `requirements.txt`.
+
+### Changed
+
+- Root README, channels guide, `ARCHITECTURE.md` resynced with the v2 runtime; revamp plan recorded as `PLAN_V2_HERMES_REVAMP.md`.
+
+## [0.6.0a2] - 2026-09-03 — always-on orchestrator, per-task profiles, SessionDB
+
+Commit `ef61caf`. The core v2 feature drop (+3,131 / -2,575).
+
+### New Features
+
+- **Always-on orchestrator** — every non-trivial request is classified (hybrid rules + optional LLM) and delegated to an isolated sub-agent with its own provider/model/toolset/budget; trivial messages use a traced direct fallback (`agent/orchestrator.py`, `task_router.py`, `subagent.py`, `run_orchestrator.py` forwarder).
+- **Per-task profiles** — fixed yet overridable taxonomy (`code`, `plan`, `research`, `browser`, `memory`, `review`, `ops-tool`, `chat`, `scheduled`) with inheritance `task_profiles[kind] → defaults → provider.primary` (`agent/task_profiles.py`, single `provider_factory.py`).
+- **Toolsets** — `minimal/coding/browser/memory-only/full` named views over the tool registry (`tools/toolsets.py`).
+- **SessionDB** — `sessions` table (parent lineage, task kind, profile snapshot, system prompt, source) + FTS5 `session_search` with LIKE fallback in the same `clawlet.db` (`storage/session_db.py`).
+- **Skills progressive disclosure** — compact `name: description` index with token budget + keyword matching (`skills/index.py`).
+- **`clawlet tasks` CLI** — `list` / `show <kind>` resolved profiles, `test-routing "<text>"` offline classification.
+
+### Improvements
+
+- **10 OpenAI-compatible providers factorized** onto `OpenAICompatibleProvider` (~1,700 lines removed); 13 provider `*Config` validators collapsed onto one `APIKeyConfig` base; duplicate provider ladders dropped.
+
+### Breaking Changes
+
+- **`runtime.engine: hybrid_rust` removed** — only `python` is accepted.
+
+## [0.6.0a1] - 2026-09-03 — v2 alpha foundation and lean packaging
+
+Commit `803514f`. Version sync + hygiene baseline.
 
 ### Breaking Changes
 
 - **Python 3.11+ required** (was 3.10+).
-- **`runtime.engine: hybrid_rust` removed** — only `python` is accepted. Run `python scripts/migrate_v1_to_v2.py --write` to normalize old configs.
-- **Heavy dependencies are now optional extras** — fresh installs need `pip install clawlet[full]` for the old all-included footprint (`channels`, `providers`, `storage-postgres`, `tui`). Core install stays lean.
-- **Version sync** — `pyproject.toml`, `clawlet.__version__` and the dashboard API all report `0.6.0a0`.
-
-### New Features
-
-- **Always-on orchestrator** — every non-trivial request is classified (hybrid rules + optional LLM) and delegated to an isolated sub-agent with its own provider/model/toolset/budget; trivial messages use a traced direct fallback. Configure per task kind (`code`, `plan`, `research`, `browser`, `memory`, `review`, `ops-tool`, `chat`, `scheduled`) via `task_profiles` in `config.yaml`.
-- **`clawlet tasks` CLI** — `list` / `show <kind>` resolved profiles, `test-routing "<text>"` offline classification.
-- **Toolsets** — `minimal/coding/browser/memory-only/full` named views over the tool registry (`clawlet/tools/toolsets.py`).
-- **SessionDB** — `sessions` table (parent lineage, task kind, profile snapshot, system prompt, source) + FTS5 `session_search` with LIKE fallback, alongside the existing `messages` table in the same `clawlet.db`.
-- **Skills progressive disclosure** — compact `name: description` index with token budget + keyword matching (`clawlet/skills/index.py`).
-- **Migration helper** — `python scripts/migrate_v1_to_v2.py [--write]` (dry-run by default).
+- **Heavy dependencies are now optional extras** — fresh installs need `pip install clawlet[full]` for the old all-included footprint (`channels`, `storage-postgres`, `tui`, `monitoring`). Core install stays lean. Root `requirements.txt` deleted; unused pins (`openai`, `anthropic`, `twilio`, `pydantic-settings`, `tenacity`, `mypy`, `types-requests`, `pre-commit`) dropped.
+- **Version sync** — `pyproject.toml` and `clawlet.__version__` report the v2 alpha line.
 
 ### Improvements
 
-- **9 OpenAI-compatible providers factorized** onto `OpenAICompatibleProvider` (~1700 lines removed).
-- **Single RateLimiter implementation** (`tools/registry.py` now wraps `rate_limit.py`).
-- **Dead-code audit removals** (~2900 lines): deleted the unwired `clawlet/webhooks/` package + docs, legacy `HeartbeatScheduler`, `AgentRouter`, 17 `create_*_provider` factories, `TokenBucket`, Copilot duplication (now on the shared base), the `runtime_ui` provider ladder (delegates to `provider_factory`), the dashboard's private rate limiter (uses the shared one), 13 duplicated provider `*Config` validators (one `APIKeyConfig` base), stale nested README/requirements/plan docs; pruned unused pins (`openai`, `anthropic`, `twilio`, `pydantic-settings`, `tenacity`, `mypy`, `types-requests`, `pre-commit`).
-- **Import-cycle fixes** — lazy `clawlet.agent` package, CLI-independent `clawlet.paths`, optional `python-telegram-bot` import guard.
-- **Shared HTTP pool sizing** via public manager config (no more private `_client._limits` access).
+- **Import-cycle fixes** — new CLI-independent `clawlet.paths`, lazy `clawlet.agent` package, optional `python-telegram-bot` import guard.
+- **Single RateLimiter** shared by dashboard API and tool registry; shared HTTP pool sizing via public manager config; zero-caller `TokenBucket` removed.
 
 ## [0.5.0] - 2026-04-04
 

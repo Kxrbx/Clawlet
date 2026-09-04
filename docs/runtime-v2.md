@@ -1,4 +1,4 @@
-# Clawlet v2 — Runtime (`0.6.0a0`)
+# Clawlet v2 — Runtime (`0.6.0a8`)
 
 > One loop, one registry, one SessionDB. Every non-trivial request goes through
 > `Orchestrator → sub-agent(kind) → synthesis`. Desktop is out of scope (deferred).

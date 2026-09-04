@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="Clawlet v2 banner">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#241019"/>
+      <stop offset="0.55" stop-color="#1a0f1e"/>
+      <stop offset="1" stop-color="#101828"/>
+    </linearGradient>
+    <linearGradient id="petal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF69B4"/>
+      <stop offset="1" stop-color="#FFB7C5"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FFB7C5"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="420" rx="24" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="1197" height="417" rx="22.5" fill="none" stroke="#FF69B4" stroke-opacity="0.35" stroke-width="3"/>
+
+  <!-- soft petals -->
+  <g fill="url(#petal)" opacity="0.16">
+    <ellipse cx="1020" cy="70" rx="150" ry="60" transform="rotate(-18 1020 70)"/>
+    <ellipse cx="150" cy="350" rx="170" ry="62" transform="rotate(-14 150 350)"/>
+    <circle cx="600" cy="40" r="90"/>
+  </g>
+  <g fill="#FF69B4" opacity="0.5">
+    <circle cx="112" cy="88" r="5"/>
+    <circle cx="178" cy="140" r="3.5"/>
+    <circle cx="1064" cy="320" r="5"/>
+    <circle cx="1104" cy="252" r="3.5"/>
+    <circle cx="600" cy="352" r="3.5"/>
+  </g>
+
+  <!-- blossom mark -->
+  <g transform="translate(120,96)">
+    <g fill="none" stroke="url(#petal)" stroke-width="7" stroke-linecap="round">
+      <ellipse cx="0" cy="-34" rx="20" ry="34"/>
+      <ellipse cx="32" cy="-11" rx="20" ry="34" transform="rotate(72 32 -11)"/>
+      <ellipse cx="20" cy="28" rx="20" ry="34" transform="rotate(144 20 28)"/>
+      <ellipse cx="-20" cy="28" rx="20" ry="34" transform="rotate(216 -20 28)"/>
+      <ellipse cx="-32" cy="-11" rx="20" ry="34" transform="rotate(288 -32 -11)"/>
+    </g>
+    <circle r="14" fill="#FF69B4"/>
+    <circle r="6" fill="#1a0f1e"/>
+  </g>
+
+  <text x="240" y="172" font-family="Segoe UI, Verdana, sans-serif" font-size="76" font-weight="700" fill="url(#title)" letter-spacing="1">Clawlet v2</text>
+  <text x="242" y="218" font-family="Segoe UI, Verdana, sans-serif" font-size="27" fill="#FFB7C5" letter-spacing="0.5">one loop &#183; one registry &#183; one SessionDB</text>
+
+  <!-- pills -->
+  <g font-family="Segoe UI, Verdana, sans-serif" font-size="21" font-weight="600">
+    <g>
+      <rect x="242" y="248" width="196" height="46" rx="23" fill="#FF69B4" fill-opacity="0.16" stroke="#FF69B4" stroke-opacity="0.7" stroke-width="2"/>
+      <text x="340" y="278" text-anchor="middle" fill="#FFD3E3">orchestrator</text>
+    </g>
+    <g>
+      <rect x="450" y="248" width="212" height="46" rx="23" fill="#FF69B4" fill-opacity="0.16" stroke="#FF69B4" stroke-opacity="0.7" stroke-width="2"/>
+      <text x="556" y="278" text-anchor="middle" fill="#FFD3E3">per-task models</text>
+    </g>
+    <g>
+      <rect x="674" y="248" width="140" height="46" rx="23" fill="#FF69B4" fill-opacity="0.16" stroke="#FF69B4" stroke-opacity="0.7" stroke-width="2"/>
+      <text x="744" y="278" text-anchor="middle" fill="#FFD3E3">toolsets</text>
+    </g>
+    <g>
+      <rect x="826" y="248" width="180" height="46" rx="23" fill="#FF69B4" fill-opacity="0.16" stroke="#FF69B4" stroke-opacity="0.7" stroke-width="2"/>
+      <text x="916" y="278" text-anchor="middle" fill="#FFD3E3">auto-memory</text>
+    </g>
+  </g>
+
+  <text x="242" y="340" font-family="Consolas, monospace" font-size="24" fill="#8b93a7">clawlet onboard  &#8594;  clawlet  &#8594;  just chat</text>
+  <text x="1050" y="96" font-family="Segoe UI, Verdana, sans-serif" font-size="26" font-weight="700" fill="#FF69B4" text-anchor="middle">0.6.0a8</text>
+</svg>
