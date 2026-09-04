@@ -1,7 +1,7 @@
 """Provider factory — build a provider instance from a task profile.
 
 Centralizes the provider-construction ladder (previously duplicated in
-``cli/models_ui.py``) so the orchestrator, CLI and dashboard share one
+``cli/models_ui.py``) so the orchestrator and CLI share one
 code path: ``(provider_name, model_override, ProviderConfig) -> provider``.
 """
 

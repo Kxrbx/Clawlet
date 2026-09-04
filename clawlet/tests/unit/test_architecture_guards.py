@@ -25,7 +25,6 @@ def test_runtime_modules_do_not_hardcode_global_workspace_paths():
     protected_files = [
         REPO_ROOT / "clawlet" / "channels" / "telegram.py",
         REPO_ROOT / "clawlet" / "cli" / "runtime_ui.py",
-        REPO_ROOT / "clawlet" / "dashboard" / "api.py",
         REPO_ROOT / "clawlet" / "health.py",
         REPO_ROOT / "clawlet" / "providers" / "models_cache.py",
         REPO_ROOT / "clawlet" / "skills" / "__init__.py",

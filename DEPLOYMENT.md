@@ -9,7 +9,6 @@ Clawlet can be deployed in a minimal setup with:
 - the `clawlet` Python runtime
 - an optional database backend (`sqlite` by default, `postgres` optional)
 - optional channels such as Telegram, Discord, Slack, or WhatsApp
-- optional dashboard/frontend components if you use them
 
 ## 1. Clone And Install
 
@@ -20,14 +19,6 @@ cd Clawlet
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
-
-Optional dashboard/frontend dependencies:
-
-```bash
-pip install -e ".[dashboard]"
-cd dashboard
-npm install
 ```
 
 ## 2. Initialize Workspace

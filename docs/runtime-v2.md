@@ -86,12 +86,7 @@ Same `clawlet.db`, new tables, backward compatible (`messages` untouched):
 
 ## v1 → v2 migration (full-break, no shim)
 
-```bash
-python scripts/migrate_v1_to_v2.py            # dry-run
-python scripts/migrate_v1_to_v2.py --write    # hybrid_rust→python, .bak first
-```
-
-- `runtime.engine: hybrid_rust` removed (only `python` accepted).
+- `runtime.engine: hybrid_rust` removed (only `python` accepted; update the key by hand).
 - `orchestrator` / `task_profiles` sections optional (built-ins apply when absent).
 - DB: nothing to migrate, SessionDB tables are created next to `messages`.
 

@@ -625,17 +625,17 @@ class Scheduler:
     
     async def _execute_health_check(self, task: ScheduledTask) -> str:
         """Execute a health check."""
-        from clawlet.health import run_health_checks
-        
-        checks = task.params.get("checks", [])
-        results = await run_health_checks(checks)
-        
+        from clawlet.health import quick_health_check
+
+        report = await quick_health_check()
+        checks = report.get("checks", [])
+
         # Check if any failed
-        failed = [r for r in results if not r.healthy]
+        failed = [str(c.get("name", "?")) for c in checks if c.get("status") != "healthy"]
         if failed:
-            raise ValueError(f"Health checks failed: {', '.join(r.name for r in failed)}")
-        
-        return f"All {len(results)} health checks passed"
+            raise ValueError(f"Health checks failed: {', '.join(failed)}")
+
+        return f"All {len(checks)} health checks passed"
     
     async def _execute_skill(self, task: ScheduledTask) -> str:
         """Execute a skill."""

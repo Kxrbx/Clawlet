@@ -152,36 +152,6 @@ class RateLimiter:
             retry_after = oldest + limit.window_seconds - now
             return False, max(0, retry_after)
 
-    def check_message(self, user_id: str, channel: str) -> tuple[bool, float]:
-        """Check if a message is allowed."""
-        key = f"msg:{channel}:{user_id}"
-        return self.is_allowed(key, self.default_limit)
-
-    def check_tool(self, tool_name: str, user_id: str) -> tuple[bool, float]:
-        """Check if a tool execution is allowed."""
-        key = f"tool:{tool_name}:{user_id}"
-        return self.is_allowed(key, self.tool_limit)
-
-    def record_message(self, user_id: str, channel: str) -> None:
-        """Record a message (bypasses check)."""
-        key = f"msg:{channel}:{user_id}"
-        self._get_or_create_entry(key).record()
-
-    def record_tool(self, tool_name: str, user_id: str) -> None:
-        """Record a tool execution."""
-        key = f"tool:{tool_name}:{user_id}"
-        self._get_or_create_entry(key).record()
-
-    def _get_or_create_entry(self, key: str) -> RateLimitEntry:
-        """Get an entry and update its LRU position."""
-        entry = self._entries.get(key)
-        if entry is None:
-            entry = RateLimitEntry()
-            self._entries[key] = entry
-        else:
-            self._entries.move_to_end(key)
-        return entry
-
     def _ensure_capacity(self, incoming_key: str, now: float) -> bool:
         """Make room for a new key using bounded cleanup and LRU eviction."""
         if self.max_entries <= 0:
@@ -234,27 +204,3 @@ class RateLimiter:
 
         self._last_cleanup = current_time
         logger.debug(f"Rate limiter cleanup: {len(self._entries)} active keys")
-
-    def get_stats(self) -> dict:
-        """Get rate limiter statistics."""
-        return {
-            "active_keys": len(self._entries),
-            "default_limit": {
-                "max_requests": self.default_limit.max_requests,
-                "window_seconds": self.default_limit.window_seconds,
-            },
-            "tool_limit": {
-                "max_requests": self.tool_limit.max_requests,
-                "window_seconds": self.tool_limit.window_seconds,
-            },
-        }
-
-    def reset(self, key: Optional[str] = None) -> None:
-        """Reset rate limits for a key (or all if key is None)."""
-        if key:
-            if key in self._entries:
-                del self._entries[key]
-        else:
-            self._entries.clear()
-
-        logger.info(f"Rate limits reset: {key or 'all'}")

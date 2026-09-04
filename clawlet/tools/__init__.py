@@ -54,28 +54,6 @@ FULL_EXEC_COMMANDS = [
     "rg",
 ]
 
-# Convenience alias for all file operations
-class FileTool:
-    """Composite tool providing all file operations."""
-    
-    def __init__(self, allowed_dir=None, use_rust_core: bool = True):
-        """Initialize all file tools."""
-        # Convert string to Path if needed
-        from pathlib import Path
-        if allowed_dir is not None and not isinstance(allowed_dir, Path):
-            allowed_dir = Path(allowed_dir)
-        
-        self.read = ReadFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.write = WriteFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.edit = EditFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.patch = ApplyPatchTool(allowed_dir, use_rust_core=use_rust_core)
-        self.list = ListDirTool(allowed_dir, use_rust_core=use_rust_core)
-    
-    @property
-    def tools(self) -> list:
-        """Get all file tools."""
-        return [self.read, self.write, self.edit, self.patch, self.list]
-
 def create_default_tool_registry(
     allowed_dir: str = None,
     config=None,
@@ -107,7 +85,6 @@ __all__ = [
     "WriteFileTool",
     "EditFileTool",
     "ListDirTool",
-    "FileTool",
     "ShellTool",
     "ApplyPatchTool",
     "FetchUrlTool",
