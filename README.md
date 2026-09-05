@@ -1,86 +1,134 @@
-# 🌸 Clawlet v2 (`0.6.0a8`)
+# 🌸 Clawlet (`0.6.0a9`)
 
 <div align="center">
 
-![Clawlet v2 — one loop, one registry, one SessionDB](docs/assets/clawlet-v2-banner.svg)
+![Clawlet — one loop, one registry, one SessionDB](docs/assets/clawlet-v2-banner.svg)
 
 **A lightweight AI agent framework with identity awareness**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.6.0a8-magenta.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.0a9-magenta.svg)](CHANGELOG.md)
 
-*Your agent now picks the right brain, the right tools, and the right budget — for every single request.*
+*Your agent picks the right brain, the right tools, and the right budget — for every single request.*
 
-[Quick Start](#-quick-start) • [What changed from v1](#-v1--v2-what-actually-changed-for-you) • [Per-task models](#-one-agent-many-brains--per-task-models) • [Migration](#-migrating-from-v1) • [Changelog](CHANGELOG.md)
+[Quick Start](#-quick-start) • [How it works](#-how-it-works) • [TUI](#-tui) • [Config](#-config) • [Commands](#-commands) • [Providers](#-providers) • [Docs](#-docs)
 
 </div>
 
 ---
 
-## TL;DR — should you upgrade?
+## Why Clawlet?
 
-**Yes, if you want a cheaper, safer, more capable agent with zero extra work.**
+Clawlet is a **lightweight** agent framework for developers who want an assistant that knows who it is and acts on its own — without a heavy platform:
 
-| v1 | v2 |
-|---|---|
-| One model for everything | A specialist per task: strong coder for code, cheap/fast model for chat, local model for memory |
-| One big toolbox, always fully loaded | Filtered toolboxes per task (`coding`, `browser`, `memory-only`…) — fewer mistakes, lower cost |
-| You curate memory by hand | Memory curates itself every 24h, history compresses automatically |
-| ~200MB install even for local-only use | Lean core, heavy stuff opt-in (`pip install clawlet[full]` restores the old footprint) |
-| Dashboard in the browser, aging CLI menu | Just type `clawlet` — full-screen Sakura TUI with chat, sessions, palette, replay |
-| Opaque routing | `clawlet tasks list / show / test-routing` — see exactly which brain handles what |
-
-No database migration. No forced rewrite. Missing `orchestrator` / `task_profiles` sections in your `config.yaml` simply fall back to sensible built-ins.
+- 🏠 **Local-first** — run Ollama or LM Studio, no cloud required
+- 🎭 **Identity awareness** — the agent reads `SOUL.md`, `USER.md`, `MEMORY.md`
+- 🧠 **A specialist per task** — strong model for code, cheap/fast model for chat, local model for memory
+- 🧰 **Least-privilege tools** — each task only sees the tools it needs
+- 💾 **Memory that maintains itself** — auto-consolidation every 24h, automatic history compression
+- 🌸 **Terminal-native console** — just type `clawlet`, no browser tab needed
+- 🔒 **Security-first** — hardened shell tool, secret masking, safe defaults
+- 🌐 **Web search** — Brave Search API integration for up-to-date answers
+- 🔌 **Skills** — modular capabilities loaded on demand, never stuffed into every prompt
 
 ---
 
 ## 🚀 Quick Start
+
+### Install
 
 ```bash
 git clone https://github.com/Kxrbx/Clawlet.git
 cd Clawlet
 git checkout v2-revamp
 
-pip install -e .          # lean core (local-first, no 200MB of chat SDKs)
+uv sync                  # lean core — local-first, no 200MB of chat SDKs
 # or
-pip install -e ".[full]"  # the old all-included v1 footprint
+uv sync --extra full    # everything: channels, postgres, monitoring
+
+uv tool install -e .    # expose bare `clawlet` everywhere (editable, tracks this repo)
 ```
 
+Then just type `clawlet` from any terminal — no activation, no `uv run` prefix.
+Need a channel backend in the global install? Add it with `--with`:
+
 ```bash
-clawlet onboard     # now 8 steps — step 7-8: per-task models
+uv tool install --force -e . --with 'python-telegram-bot>=21.11.1,<22'
+```
+
+All commands below assume `clawlet` is on your PATH (via the tool install above).
+Otherwise activate the venv or prefix with `uv run`, e.g. `uv run clawlet onboard`.
+
+Pick extras à la carte instead:
+
+```bash
+uv sync --extra channels-telegram
+uv sync --extra channels-discord
+uv sync --extra storage-postgres
+uv sync --extra monitoring
+```
+
+### Set up (recommended)
+
+```bash
+clawlet onboard
+```
+
+The 8-step wizard walks you through:
+
+1. Provider choice (16+ options)
+2. API keys or local model settings
+3. Default model
+4. Execution mode (`safe` or `full_exec`)
+5. Channels (Telegram / Discord)
+6. Identity (name, personality)
+7. **Per-task models** — e.g. strong model for code, cheap for chat, local for memory
+8. Workspace creation (all files generated)
+
+Or go fast:
+
+```bash
+clawlet init
+# then edit ~/.clawlet/config.yaml
+```
+
+### Run
+
+```bash
 clawlet validate
-clawlet             # launches the TUI — no subcommand needed
+clawlet             # full-screen console — no subcommand needed
 
 # or headless / channel mode:
 clawlet agent [--channel telegram] [--toolsets coding,browser]
 ```
 
-Your workspace stays familiar:
+Your workspace:
 
 ```
 ~/.clawlet/
 ├── config.yaml
 ├── SOUL.md / USER.md / MEMORY.md / HEARTBEAT.md
+├── tasks/QUEUE.md
 └── memory/
-    └── clawlet.db   # sessions + messages + memory, all in one place
+    └── clawlet.db   # sessions + messages + memory, one file
 ```
 
 ---
 
-## 🆚 v1 → v2: what actually changed for you
+## 🧠 How it works
 
-### 1. 🧠 One agent, many brains — per-task models
+```
+Inbound → Orchestrator (classify) → spawn(task kind) → sub-agent → synthesize → outbound
+```
 
-**Before (v1):** one global `provider.primary` + one model. Your expensive Claude Sonnet answered "ok 👍" and your cheap local model struggled with a refactor. Same brain, every job.
+Every non-trivial message is classified and handed to an **isolated sub-agent** with its own provider, model, tools, and budget. Small talk ("thanks!", "ok 👍") skips the machinery via a fast traced fallback. Sub-agents get a clean slice of history — never your full log — and their lineage is recorded, so sessions and `replay` show parent → child.
 
-**Now (v2):** every non-trivial message is classified and handed to an **isolated sub-agent** with its own provider, model, tools, and budget. Small talk skips the machinery entirely (fast traced fallback).
+### One agent, many brains — per-task models
 
-9 task kinds, fixed taxonomy, fully overridable:
+Nine task kinds, fixed taxonomy, fully overridable:
 
 `code · plan · research · browser · memory · review · ops-tool · chat · scheduled`
-
-Concrete example:
 
 ```yaml
 provider:
@@ -95,9 +143,9 @@ task_profiles:
   memory: {provider: ollama, model: llama3.2, toolset: memory-only}
 ```
 
-Result: code gets the strong model, chit-chat gets the cheap one, memory work stays local and free. Sub-agents get a clean slice of history (never your full log), their own budget, and their lineage is recorded — `replay` and sessions show parent → child.
+Resolution per request: `task_profiles[<kind>] → task_profiles.defaults → provider.primary`. Omit anything — sensible built-ins apply.
 
-Inspect it live, no network needed:
+See exactly which brain handles what, offline:
 
 ```bash
 clawlet tasks list
@@ -105,92 +153,65 @@ clawlet tasks show code
 clawlet tasks test-routing "fix the login bug"
 ```
 
-> Want the details? `docs/runtime-v2.md` is the canonical runtime doc.
+### The right tools, nothing more
 
-### 2. 🧰 Toolsets — the right tools, nothing more
-
-**Before:** the agent always saw everything. More tools = more confusion, more accidental writes, more tokens burned.
-
-**Now:** named views over the same registry. Same tools, filtered per task:
+Named views over one registry — same tools, filtered per task:
 
 | Toolset | Sees | Used for |
 |---|---|---|
-| `full` | everything | ops, scheduled jobs (the only one that auto-includes future tools) |
-| `coding` | read + write/edit/shell/http + skills | `code` tasks |
-| `browser` | fetch / web search / http | `research`, `browser` tasks |
+| `full` | everything (only one that auto-includes future tools) | ops, scheduled jobs |
+| `coding` | read + write/edit/shell/http + skills | `code` |
+| `browser` | fetch / web search / http | `research`, `browser` |
 | `minimal` | read-only + read memory + skill list | `plan`, `review`, `chat` |
-| `memory-only` | remember / recall / search / curate / status | `memory` tasks |
+| `memory-only` | remember / recall / search / curate / status | `memory` |
 
 ```bash
 clawlet agent --toolsets coding,browser
 ```
 
-Each profile already declares its toolset, so in practice you configure once and forget it.
+Each profile already declares its toolset — configure once, forget it.
 
-### 3. 💾 Memory that maintains itself
+### Memory that maintains itself
 
-**Before:** hybrid memory (SQLite + `MEMORY.md` + daily notes) worked, but *you* had to remember to curate it. Long sessions eventually overflowed.
+- **Auto-consolidation (24h):** recent daily notes (`memory/YYYY-MM-DD.md`) are promoted into durable memory on their own. Failures are logged, never break your heartbeat tick.
+- **Automatic compression:** history compresses by count *or* size (100 msgs / 200k chars). Big tool outputs are capped first, then a short summary + anchor is kept — no LLM call just to trim.
+- **Skills on demand:** the prompt carries a one-line-per-skill index (~630 tokens for 50 skills); full skill content loads only when matched.
+- **Searchable sessions:** one `clawlet.db` with a `sessions` table (parent lineage, task kind, profile snapshot) and instant full-text search.
 
-**Now:**
+Same tools throughout: `remember / recall / search / recent / review / curate / status`.
 
-- **Auto-consolidation (24h):** recent daily notes (`memory/YYYY-MM-DD.md`) are promoted into durable memory on their own. Never breaks your heartbeat tick — failures are logged, not raised.
-- **Two-threshold compression:** history compresses by count *or* size (defaults 100 msgs / 200k chars). Big tool outputs are capped first, then a short summary + anchor is kept. No LLM call just to trim.
-- **Skills on demand:** instead of stuffing all 50 skills into every prompt, the agent sees a one-line-per-skill index (~630 tokens) and loads the full skill only when needed. More room for *your* conversation.
-- **Searchable sessions:** same `clawlet.db`, new `sessions` table (parent lineage, task kind, profile snapshot) + instant full-text `session_search` with fallback when FTS5 is missing. Old `messages` table untouched — nothing to migrate.
+### Heartbeat & scheduling
 
-Same files, same tools (`remember / recall / search / review / curate / status`), far less babysitting.
+The autonomous loop is driven by `HEARTBEAT.md`:
 
-### 4. 🪶 Lighter install, faster start
-
-**Before:** `pip install` dragged in Telegram, Discord, Slack, Twilio, Textual… ~200MB even if you only used Ollama locally.
-
-**Now:** lean core (pydantic, YAML, httpx, typer, rich, croniter, aiosqlite…), everything heavy is an extra:
+- Empty or comment-only file → heartbeat stays quiet, no API burn
+- State persisted under `memory/heartbeat-state.json`
+- Cron jobs for recurring work (`clawlet cron list / add / run-now / runs`)
 
 ```bash
-pip install -e ".[channels-telegram]"
-pip install -e ".[channels-discord]"
-pip install -e ".[storage-postgres]"
-pip install -e ".[tui]"
-pip install -e ".[monitoring]"
-pip install -e ".[full]"   # v1-style everything
+clawlet heartbeat status
+clawlet heartbeat last
+clawlet heartbeat enable
+clawlet heartbeat disable
 ```
 
-Python **3.11+** required (was 3.10+). Under the hood ~1,700 lines of copy-pasted providers were factorized into one `OpenAICompatibleProvider`, duplicate rate limiters merged, dead code dropped (~10k lines total). You feel it as faster `--version`, faster `tools`, fewer weird import errors.
+---
 
-### 5. 🌸 TUI first
+## 🌸 TUI
 
-**Before:** TUI existed but the CLI menu was the entry point; dashboard lived in the browser (React + FastAPI, separate `npm install`).
+Bare `clawlet` opens the full-screen Sakura console: chat, sessions, command palette, replay views, approval prompts, log tail.
 
-**Now:**
-
-- Bare `clawlet` launches the **full-screen Sakura TUI** — chat, sessions, command palette, replay views.
-- Web dashboard deleted (7k+ lines gone, frontend + backend). One console to maintain, no second stack.
-- CLI culled to what you actually use daily: `onboard / agent / tasks / sessions / cron / heartbeat / replay / recovery / benchmark / health / validate / config / models`.
-
-### 6. 🧭 Onboarding that asks about *how you work*
-
-`clawlet onboard` is now 8 steps: providers, keys, channels, identity… **plus per-task models**. Answer "strong model for code, cheap for chat, local for memory" once, and v2 writes the `task_profiles` section for you.
+```bash
+clawlet
+clawlet tui --workspace ~/.clawlet --model anthropic/claude-sonnet-4-20250514
+clawlet logs
+```
 
 ---
 
-## 📋 Commands
+## ⚙️ Config
 
-| Command | What it does |
-|---|---|
-| `clawlet` / `clawlet tui` | Full-screen terminal console |
-| `clawlet onboard` / `init` | Guided (8 steps) / quick setup |
-| `clawlet agent [--channel telegram] [--toolsets coding,browser]` | Run the runtime |
-| `clawlet tasks list / show <kind> / test-routing "<text>"` | **New.** See and test routing offline |
-| `clawlet sessions` | List / export stored sessions (with lineage) |
-| `clawlet heartbeat status\|last\|enable\|disable` | Heartbeat ops |
-| `clawlet replay <run_id>` / `recovery list` | Replay events / resume interrupted runs |
-| `clawlet cron list / add / run-now / runs` | Scheduling |
-| `clawlet benchmark run` / `corpus` | Perf gates |
-| `clawlet health [--deep]` / `validate` / `config` | Diagnostics |
-
----
-
-## ⚙️ Config reference (minimal v2)
+Minimal complete example:
 
 ```yaml
 provider:
@@ -207,58 +228,69 @@ orchestrator:
 task_profiles:
   code: {provider: anthropic, model: claude-sonnet-5-20260203, toolset: coding}
 
-runtime: {engine: python}   # only value accepted in v2
+runtime: {engine: python}
 heartbeat: {enabled: true, interval_minutes: 30}
 ```
 
-Resolution order per request: `task_profiles[<kind>] → task_profiles.defaults → provider.primary`. Anything you omit inherits cleanly — a v1 config without these keys still boots.
-
----
-
-## 🔄 Migrating from v1
-
-**Breaking, but small:**
-
-1. **Python 3.11+.** Upgrade your interpreter first.
-2. **`runtime.engine: hybrid_rust` is gone.** Only `python` is accepted. Edit the key by hand (one line).
-3. **Re-install with extras if you need them.** Fresh `pip install -e .` no longer includes Telegram/Discord/Slack/Postgres/TUI-heavy deps. Use `pip install -e ".[full]"` to get the v1 footprint back, or pick à la carte (see above).
-4. **Database: nothing to do.** SessionDB tables are created next to your existing `messages`. Your history survives.
-5. **Webhooks / web dashboard are gone.** See below.
-
 ```bash
-clawlet validate   # run this after editing config.yaml — it catches all of the above
+clawlet validate   # catches bad keys, missing credentials, bad task kinds
+clawlet config     # view (secrets redacted)
 ```
 
+### Customizing your agent
+
+`SOUL.md` — personality, values, tone. `USER.md` — your name, timezone, preferences. Plain Markdown, no code changes. See [QUICKSTART.md](QUICKSTART.md) for examples.
+
 ---
 
-## 🗑️ What was removed — and what to use instead
+## 📋 Commands
 
-We deleted ~13k lines. Deliberately. Less code = fewer bugs, faster installs, one maintained path.
-
-| Removed in v2 | Why | Use instead |
-|---|---|---|
-| Web dashboard (React + FastAPI backend) | Second stack, separate `npm install`, untested | Built-in Sakura **TUI** (`clawlet`) — chat, sessions, palette, replay |
-| `clawlet/webhooks/` (GitHub/Stripe/custom server) | Unwired, 1.2k lines, security surface | `http_request` tool + `cron` jobs, or your own tiny forwarder |
-| `HeartbeatScheduler` legacy, `AgentRouter` (channel→workspace router) | Replaced | **Orchestrator** (request→task-kind→sub-agent) + `cron_scheduler` |
-| `benchmark equivalence`, Rust-bridge, plugin SDK stub, nested READMEs, old migration matrix | Dead / speculative | `benchmark run`, `tasks test-routing`, `release_smoke.py` |
-| 17 `create_*_provider` factories, 13 duplicated `*Config` validators, private rate limiters | Duplication | One `provider_factory` + one `APIKeyConfig` + shared `RateLimiter` |
-| Unused pins (`openai`, `anthropic`, `twilio`, `tenacity`…) from core | Forced weight | Install via the matching extra only when you use that backend |
-
-Out of scope for v2.0 (v2.1 backlog): 30+ platform gateway, kanban-swarm multi-agents, natural-language cron, Tauri Desktop.
+| Command | What it does |
+|---|---|
+| `clawlet` / `clawlet tui` | Full-screen terminal console |
+| `clawlet onboard` / `init` | Guided (8 steps) / quick setup |
+| `clawlet agent [--channel telegram] [--toolsets coding,browser]` | Run the runtime |
+| `clawlet tasks list / show <kind> / test-routing "<text>"` | Inspect and test routing offline |
+| `clawlet sessions` | List / export stored sessions |
+| `clawlet heartbeat status\|last\|enable\|disable` | Heartbeat ops |
+| `clawlet replay <run_id>` / `recovery list` | Replay events / resume interrupted runs |
+| `clawlet cron list / add / run-now / runs` | Scheduling |
+| `clawlet benchmark run` | Perf gates |
+| `clawlet models [--list\|--current]` | Browse / switch models |
+| `clawlet health [--deep]` / `validate` / `config` | Diagnostics |
 
 ---
 
 ## 🤖 Providers
 
-Same 16+ providers you know — OpenRouter, OpenAI, Anthropic, Gemini, Ollama, LM Studio, MiniMax, Moonshot, Qwen, Z.AI, Copilot, Vercel, OpenCode Zen, Xiaomi, Synthetic, Venice — now sharing one codebase, one HTTP pool, and global secret masking. No config change needed on your side.
+16+ providers, one shared codebase, one HTTP pool, global secret masking:
 
-Local-first still works exactly as before:
+**Cloud** — OpenRouter (100+ models, recommended for variety), OpenAI, Anthropic, Google Gemini, MiniMax, Moonshot (Kimi), Qwen, Z.AI (GLM), GitHub Copilot, Vercel AI, OpenCode Zen, Xiaomi, Synthetic, Venice (uncensored).
+
+**Local (free)** — Ollama, LM Studio.
 
 ```yaml
+# OpenRouter
+provider:
+  primary: openrouter
+  openrouter: {api_key: "${OPENROUTER_API_KEY}", model: "anthropic/claude-sonnet-4-20250514"}
+
+# Local
 provider:
   primary: ollama
   ollama: {base_url: "http://localhost:11434", model: "llama3.2"}
 ```
+
+Web search via Brave: `web_search: {api_key: "${BRAVE_SEARCH_API_KEY}", enabled: true}`. Structured API calls go through `http_request` with explicit `http_auth_profiles` — credentials are never inferred or logged. See [QUICKSTART.md](QUICKSTART.md) for every provider.
+
+---
+
+## 🔒 Security
+
+- Hardened shell tool (15+ dangerous patterns blocked, `shlex`-parsed, no raw shell)
+- Secrets masked in logs, redacted in `clawlet config`, stored with `0600` config permissions
+- Least-privilege toolsets per task; approvals for dangerous commands
+- Rate limiting + circuit breaker + exponential-backoff retries on providers
 
 ---
 
@@ -266,13 +298,31 @@ provider:
 
 | Doc | For |
 |---|---|
-| `docs/runtime-v2.md` | **Canonical** v2 runtime (pipeline, profiles, toolsets, SessionDB) |
+| [QUICKSTART.md](QUICKSTART.md) | Provider-by-provider setup, channels, troubleshooting |
+| `docs/runtime-v2.md` | Canonical runtime (pipeline, profiles, toolsets, SessionDB) |
 | `clawlet/ARCHITECTURE.md` | Components + data flow deep dive |
 | `docs/skills.md`, `docs/skills-api.md` | Skills system |
 | `docs/channels.md`, `docs/scheduling.md` | Channels, cron |
-| `QUICKSTART.md`, `DEPLOYMENT.md` | Setup, production |
-| `CHANGELOG.md` | Full version history (v2 alpha on top) |
-| `PLAN_V2_REVAMP.md` | Implementation tracker (P0–P4 done, 101 tests green) |
+| `DEPLOYMENT.md` | Production deployment |
+| [CHANGELOG.md](CHANGELOG.md) | Full version history |
+
+---
+
+## 🔄 Coming from v1?
+
+Short version — four breaking changes, no data loss:
+
+1. **Python 3.11+** required (was 3.10+).
+2. **`runtime.engine: hybrid_rust` removed** — only `python` is accepted; edit the one line by hand.
+3. **Heavy backends are opt-in extras.** A fresh install no longer includes Telegram/Discord/Slack/Postgres. Run `uv sync --extra full` to restore the old footprint, or pick extras à la carte.
+4. **Web dashboard and webhooks removed.** The Sakura **TUI** (`clawlet`) replaces the React dashboard; `http_request` + `cron` cover webhook use cases. ~13k lines deleted deliberately — one console, one stack.
+5. **Database: nothing to do.** New tables sit next to the existing `messages`; history survives. Missing `orchestrator` / `task_profiles` keys fall back to built-ins.
+
+```bash
+clawlet validate   # run after editing config.yaml — it catches all of the above
+```
+
+Full per-alpha history: [CHANGELOG.md](CHANGELOG.md) (`0.6.0a1` → `0.6.0a8`). Out of scope for now (v2.1 backlog): 30+ platform gateway, kanban-swarm multi-agents, natural-language cron, Tauri Desktop.
 
 ---
 
@@ -292,6 +342,6 @@ MIT — see [LICENSE](LICENSE).
 
 <div align="center">
 
-Built with 💕 by the Clawlet team · v2: one loop, one registry, one SessionDB.
+Built with 💕 by the Clawlet team · one loop, one registry, one SessionDB.
 
 </div>

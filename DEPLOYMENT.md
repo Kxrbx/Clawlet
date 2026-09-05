@@ -16,9 +16,8 @@ Clawlet can be deployed in a minimal setup with:
 git clone https://github.com/Kxrbx/Clawlet.git
 cd Clawlet
 
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync
+uv tool install -e .   # bare `clawlet` available in every terminal (editable install)
 ```
 
 ## 2. Initialize Workspace

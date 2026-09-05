@@ -152,7 +152,7 @@ export DISCORD_BOT_TOKEN="your-bot-token-here"
 Discord requires an additional package:
 
 ```bash
-pip install discord.py
+uv sync --extra channels-discord
 ```
 
 ### Features
@@ -180,7 +180,7 @@ clawlet agent --channel discord
 
 | Issue | Solution |
 |-------|----------|
-| "discord.py not installed" | Run `pip install discord.py` |
+| "discord.py not installed" | Run `uv sync --extra channels-discord` |
 | Bot not seeing messages | Enable Message Content Intent |
 | Permission errors | Check bot role permissions in server |
 
@@ -279,7 +279,7 @@ channels:
 Slack requires additional packages:
 
 ```bash
-pip install slack-bolt aiohttp
+uv sync --extra channels-slack
 ```
 
 ### Socket Mode (Recommended)
@@ -342,7 +342,7 @@ clawlet agent --channel slack
 
 | Issue | Solution |
 |-------|----------|
-| "slack-bolt not installed" | Run `pip install slack-bolt` |
+| "slack-bolt not installed" | Run `uv sync --extra channels-slack` |
 | Bot not responding | Check bot is invited to channel |
 | Socket connection failed | Verify app_token is correct |
 | Signature verification failed | Check signing_secret |
