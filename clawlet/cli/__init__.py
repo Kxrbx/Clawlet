@@ -272,7 +272,7 @@ def onboard():
         console.print("\n[yellow]Setup cancelled.[/yellow]")
     except ImportError as e:
         console.print(f"[red]Error loading onboarding: {e}[/red]")
-        console.print("[yellow]Try running 'pip install questionary' first.[/yellow]")
+        console.print("[yellow]Try running 'uv sync' first.[/yellow]")
         raise typer.Exit(1)
 
 
@@ -296,7 +296,7 @@ def tui(
         from clawlet.tui import run_tui_app
     except ImportError as e:
         console.print(f"[red]Error: TUI dependencies are not installed: {e}[/red]")
-        console.print('Install with: [magenta]pip install "clawlet[tui]"[/magenta]')
+        console.print('Install with: [magenta]uv sync --extra tui[/magenta]')
         raise typer.Exit(1)
     run_tui_app(workspace=workspace_path, model=model)
 

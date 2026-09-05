@@ -83,7 +83,7 @@ def run_models_command(
         console.print("\n[yellow]Cancelled.[/yellow]")
     except ImportError as e:
         console.print(f"[red]Error: {e}[/red]")
-        console.print("[yellow]Try running 'pip install questionary' first.[/yellow]")
+        console.print("[yellow]Try running 'uv sync' first.[/yellow]")
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

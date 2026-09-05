@@ -75,7 +75,7 @@ class SlackChannel(BaseChannel):
         """Initialize Slack channel."""
         if not SLACK_BOLT_AVAILABLE:
             raise RuntimeError(
-                "slack_bolt not installed. Run: pip install slack_bolt slack_sdk"
+                "slack_bolt not installed. Run: uv sync --extra channels-slack"
             )
         
         super().__init__(bus, config)

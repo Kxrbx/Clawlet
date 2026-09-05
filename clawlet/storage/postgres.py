@@ -48,7 +48,7 @@ class PostgresStorage:
             max_pool_size: Maximum connection pool size
         """
         if not POSTGRES_AVAILABLE:
-            raise RuntimeError("asyncpg not installed. Run: pip install asyncpg")
+            raise RuntimeError("asyncpg not installed. Run: uv sync --extra storage-postgres")
         
         self.host = host
         self.port = port

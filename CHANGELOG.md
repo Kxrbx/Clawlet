@@ -2,6 +2,17 @@
 
 All notable changes to Clawlet will be documented in this file.
 
+## [0.6.0a9] - 2026-09-04 — pip → uv packaging upgrade
+
+### Changed
+
+- **Build backend setuptools → hatchling** — `uv build` verified, Sakura theme (`sakura.tcss`) still ships in the wheel (199 files).
+- **Pinned Python 3.12** via `.python-version` (matches CI); `requires-python >= 3.11` unchanged.
+- **Committed `uv.lock`** (63 packages) — reproducible installs across dev/CI/prod; `uv sync` replaces the `venv + pip` dance, `uv run` needs no venv activation.
+- **Docs switched to uv** — `README.md`, `DEPLOYMENT.md`, `docs/channels.md` install/extras/troubleshooting blocks; in-code install hints (`telegram`, `discord`, `slack`, `postgres`, CLI) reworded to `uv sync --extra …`.
+- **CI on `astral-sh/setup-uv`** — `release-smoke.yml` installs via `uv sync`, checks via `uv run`.
+- `pip install` keeps working (hatchling is pip-compatible) — rollback is deleting `.python-version` + `uv.lock`.
+
 ## [0.6.0a8] - 2026-09-04 — ponytail cleanup, drop dead code/docs/deps (-9992)
 
 Commit `2f9b121`. Net **-9,992 lines** across 56 files.

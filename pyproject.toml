@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "clawlet"
-version = "0.6.0a8"
+version = "0.6.0a9"
 description = "A lightweight AI agent framework with identity awareness"
 readme = "README.md"
 license = {text = "MIT"}
@@ -64,13 +64,8 @@ dev = [
 [project.scripts]
 clawlet = "clawlet.cli:app"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["clawlet*"]
-
-[tool.setuptools.package-data]
-clawlet = ["py.typed"]
-"clawlet.tui" = ["*.tcss"]
+[tool.hatch.build.targets.wheel]
+packages = ["clawlet"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "clawlet/tests"]

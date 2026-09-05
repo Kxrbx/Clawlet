@@ -43,7 +43,7 @@ class DiscordChannel(BaseChannel):
             agent: Optional agent loop for command handling
         """
         if not DISCORD_AVAILABLE:
-            raise RuntimeError("discord.py not installed. Run: pip install discord.py")
+            raise RuntimeError("discord.py not installed. Run: uv sync --extra channels-discord")
         
         super().__init__(bus, config, agent)
         

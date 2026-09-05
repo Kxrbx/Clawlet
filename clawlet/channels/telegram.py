@@ -105,7 +105,7 @@ class TelegramChannel(BaseChannel):
 
         if not TELEGRAM_AVAILABLE:
             raise RuntimeError(
-                "python-telegram-bot not installed. Run: pip install clawlet[channels-telegram]"
+                "python-telegram-bot not installed. Run: uv sync --extra channels-telegram"
             )
         self.token = (config.get("token") or "").strip()
         if not self.token:
@@ -152,7 +152,7 @@ class TelegramChannel(BaseChannel):
                 logger.error(
                     "Telegram startup failed due to an incompatible python-telegram-bot build "
                     f"(detected version={ptb_version}). Reinstall with: "
-                    "pip install -U 'python-telegram-bot>=21.11.1,<22'"
+                    "uv sync --extra channels-telegram"
                 )
             self._running = False
             raise
