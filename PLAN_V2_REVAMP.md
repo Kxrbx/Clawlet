@@ -1,6 +1,6 @@
 # Clawlet v2 — Plan Revamp complet
 
-> **État d'implémentation (branche `v2-revamp`) :** P0 ✅ · P1 ✅ · Orchestrateur ✅ · P2 ✅ · P3 ✅ · P4 ✅ (index skills + docs ; boucle de consolidation mémoire auto → suivi) · **Desktop exclu du périmètre sur demande (reporté)**. 101 tests verts, smoke release OK.
+> **État d'implémentation (branche `v2-revamp`, `0.6.0a9`) :** P0 ✅ · P1 ✅ · Orchestrateur ✅ · P2 ✅ · P3 ✅ · P4 ✅ (index skills + docs ; boucle de consolidation mémoire auto → suivi) · stabilisation ✅ (124 tests verts, CI pytest+coverage report-only, smoke+regression OK) · suppressions a6-a9 : dashboard web, benchmarks, webhooks, `AgentRouter`, migration v1→v2 scriptée (manuelle + `validate`) · TUI Sakura par défaut · packaging `uv`/hatchling · **Desktop exclu du périmètre sur demande (reporté)**.
 
 > **Décisions figées :** nom `Clawlet` conservé · même repo `Kxrbx/Clawlet`, branche `v2-revamp` · full-break autorisé (Python ≥3.11, deps optionnelles, dashboard refonte autorisée) · priorités P1 One-loop+registry, P2 SessionDB+perfs, P3 Skills+mémoire auto · orchestrateur systématique · Desktop Tauri 2 + React full-admin.
 > **Hors-scope v2.0 (backlog v2.1) :** gateway 30+ plateformes, kanban-swarm multi-agents, cron langage naturel.

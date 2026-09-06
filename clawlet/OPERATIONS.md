@@ -10,9 +10,7 @@ _How to run, monitor, debug, and maintain a Clawlet agent._
 
 ```bash
 cd /path/to/clawlet
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-core.txt
+uv sync
 ```
 
 2. **Create workspace** (if not already)
@@ -42,8 +40,7 @@ clawlet agent
 ### Manual (foreground)
 
 ```bash
-source .venv/bin/activate
-clawlet agent
+uv run clawlet agent
 ```
 
 Use `Ctrl+C` to stop (graceful shutdown).
@@ -151,10 +148,10 @@ Set `LOG_JSON=1` to output logs as JSON lines (easier for ELK/Graylog).
 
 ## Monitoring
 
-### Health endpoint (if dashboard enabled)
+### Health checks (`clawlet health`, no dashboard in v2)
 
 ```
-GET http://localhost:8000/health
+uv run clawlet health
 ```
 
 Returns:
@@ -207,13 +204,8 @@ SELECT COUNT(*) FROM messages;
 
 From another terminal:
 
-```bash
-curl -X POST http://localhost:8000/agent/message \
-  -H "Content-Type: application/json" \
-  -d '{"content":"Test"}'
-```
-
-(If you expose an API; otherwise use Telegram.)
+Send a test message from the TUI (`clawlet`) or a connected channel
+(Telegram). There is no HTTP ingest endpoint since the dashboard was removed in v2.
 
 ---
 
@@ -267,8 +259,7 @@ tar czf clawlet-backup-$(date +%F).tar.gz \
 ```bash
 cd /path/to/clawlet
 git pull
-source .venv/bin/activate
-pip install -r requirements-core.txt --upgrade
+uv sync
 # Optional: run migrations if schema changed
 systemctl restart clawlet
 ```
@@ -277,7 +268,7 @@ systemctl restart clawlet
 
 ## Metrics (if metrics endpoint enabled)
 
-`GET /metrics` (Prometheus format) – currently only available when dashboard is running.
+`GET /metrics` (Prometheus format) – unavailable since the dashboard was removed in v2.
 
 Metrics include:
 
@@ -303,7 +294,7 @@ Metrics include:
 
 - [ ] `config.yaml` permissions: `chmod 600 ~/.clawlet/config.yaml`
 - [ ] Use strong, unique API keys
-- [ ] Do not expose dashboard port (8000) to public internet (bind to 127.0.0.1 or use firewall)
+- [ ] No inbound ports to protect (web dashboard removed in v2; TUI is local-only)
 - [ ] Regularly rotate API keys
 - [ ] Keep system packages updated
 
@@ -311,4 +302,4 @@ Metrics include:
 
 ## Support
 
-For bugs and feature requests, visit the repository: https://github.com/your‑org/clawlet
+For bugs and feature requests, visit the repository: https://github.com/Kxrbx/Clawlet

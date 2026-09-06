@@ -67,6 +67,11 @@ clawlet = "clawlet.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["clawlet"]
 
+[tool.coverage.run]
+source = ["clawlet"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+# ponytail: report-only, no fail_under until core coverage is measured green
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "clawlet/tests"]
 asyncio_mode = "auto"

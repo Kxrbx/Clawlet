@@ -16,11 +16,17 @@ _Deep dive into the core components and data flows._
 │                         MessageBus (async queues)                  │
 ├─────────────────────────────────────────────────────────────────────┤
 │   inbound_queue  │  outbound_queue  │  max_size=1000                │
-└─────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────┬─────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         AgentLoop                                   │
+│   Orchestrator (classify → spawn sub-agent → synthesize)           │
+│   trivial messages use a traced direct fallback                     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │ isolated sub-agent per task-kind
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         AgentLoop (classic pipeline)               │
 ├─────────────────────────────────────────────────────────────────────┤
 │  - History (RAM, capped MAX_HISTORY=100)                          │
 │  - MemoryManager (SQLite + MEMORY.md projection + daily notes)   │
@@ -64,9 +70,12 @@ Simple async queue for decoupling channels from the agent.
 
 ---
 
-### 2. AgentLoop
+### 2. AgentLoop (classic pipeline, driven by the orchestrator)
 
-The heart of Clawlet. Runs a continuous loop:
+Every non-trivial inbound message is first classified by the orchestrator
+(`agent/orchestrator.py` + `task_router.py`) into a task-kind, then executed
+by a freshly spawned `AgentLoop` (see "v2 runtime" below) with its own
+provider/model/toolset/budget. The loop itself runs a continuous cycle:
 
 1. Wait for inbound message
 2. Build context (system prompt + recent history)
@@ -120,8 +129,10 @@ When SQLite FTS5 is available, free-text memory search uses it before falling ba
 
 Abstract `StorageBackend` interface with implementations:
 
-- `SQLiteStorage` (default): file-based, uses `aiosqlite`
-- `PostgresStorage`: full PostgreSQL (not fully implemented yet)
+- `SQLiteStorage` (default): file-based, uses `aiosqlite`; v2 adds the
+  `sessions` table (`parent_session_id`, `task_kind`, `profile_snapshot`,
+  `system_prompt`, `source`) plus FTS5 `session_search` (`storage/session_db.py`)
+- `PostgresStorage`: full PostgreSQL via optional `storage-postgres` extra
 
 **Schema (SQLite):**
 
@@ -157,7 +168,8 @@ AgentLoop stores every inbound/outbound message here, enabling session reconstru
 
 **Configuration** (`config.yaml`) loaded via `Config` (Pydantic). Supports:
 
-- Provider selection (`openrouter`, `ollama`, `lmstudio`)
+- Provider selection (16 providers: `openrouter`, `ollama`, `lmstudio`, `anthropic`, `openai`, …)
+- Per-task profiles (`task_profiles.<kind>` → `defaults` → `provider.primary`) + `orchestrator` (cheap classifier model, trivial-bypass, fan-out caps)
 - Channel tokens (Telegram, Discord)
 - Explicit `http_auth_profiles` for structured HTTP credential injection
 - Storage backend (sqlite/postgres)
@@ -231,8 +243,8 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 ## Security Considerations
 
 - Config file checked for world-readable permissions (`chmod 600 ~/.clawlet/config.yaml`)
-- Secrets masked in logs (`mask_secrets()` utility) – currently used in OpenRouter provider
-- No authentication on dashboard (if enabled) – should be bound to localhost only in production
+- Secrets masked in logs (`mask_secrets()` utility, applied across all providers)
+- No inbound network ports in v2 (web dashboard removed; Sakura TUI is local-only)
 - Input validation: user messages truncated at 10 000 characters
 
 ---
@@ -247,7 +259,7 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 
 ---
 
-## v2 Revamp (`v2-revamp` branch)
+## v2 runtime (current)
 
 One loop, one registry, one SessionDB. The v2 runtime keeps the pipeline
 above but changes who runs it:
@@ -272,7 +284,7 @@ Key modules:
 - `agent/task_router.py` — hybrid rules-first classifier, injected LLM
   fallback, never raises.
 - `agent/provider_factory.py` — single `(name, model, ProviderConfig)`
-  construction path shared by CLI, orchestrator and dashboard.
+  construction path shared by CLI, orchestrator and TUI.
 - `agent/subagent.py` — fresh-loop spawning, depth guard (`max_depth=1`).
 - `tools/toolsets.py` — `minimal/coding/browser/memory-only/full` views
   over the tool registry.
@@ -288,7 +300,7 @@ Key modules:
 
 ## Future Improvements (Out of Scope for Current Phases)
 
-- Dashboard authentication (API key / JWT)
+- TUI per-task model picker
 - Metrics endpoint (Prometheus format)
 - Structured JSON logging
 - Rate limiting per user

@@ -81,7 +81,7 @@ Same `clawlet.db`, new tables, backward compatible (`messages` untouched):
 ## Providers & lean packaging
 
 - `OpenAICompatibleProvider` (`providers/openai_compat.py`): 1 class for the 10 near-identical ones (minimax, moonshot, qwen, zai, copilot, vercel, opencode_zen, xiaomi, synthetic, venice) — only `BASE_URL/default_model` differ. ~1700 lines removed.
-- `provider_factory.py`: single `(name, model, config)` path shared by CLI/orchestrator/dashboard. Shared HTTP pool sized via public config. Global `mask_secrets`.
+- `provider_factory.py`: single `(name, model, config)` path shared by CLI/orchestrator/TUI. Shared HTTP pool sized via public config. Global `mask_secrets`.
 - Python ≥3.11. Lean core, heavy stuff in extras (`channels-*`, `tui`, `postgres`, `providers-openai/anthropic`, …). Guarded `python-telegram-bot` import. Lazy `clawlet.agent`, CLI-free `clawlet/paths.py` (cycle fixes).
 
 ## v1 → v2 migration (full-break, no shim)

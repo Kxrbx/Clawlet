@@ -322,7 +322,7 @@ Short version — four breaking changes, no data loss:
 clawlet validate   # run after editing config.yaml — it catches all of the above
 ```
 
-Full per-alpha history: [CHANGELOG.md](CHANGELOG.md) (`0.6.0a1` → `0.6.0a8`). Out of scope for now (v2.1 backlog): 30+ platform gateway, kanban-swarm multi-agents, natural-language cron, Tauri Desktop.
+Full per-alpha history: [CHANGELOG.md](CHANGELOG.md) (`0.6.0a1` → `0.6.0a9`). Out of scope for now (v2.1 backlog): 30+ platform gateway, kanban-swarm multi-agents, natural-language cron, Tauri Desktop.
 
 ---
 
