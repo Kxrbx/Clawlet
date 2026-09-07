@@ -49,7 +49,7 @@ def main() -> int:
                 }
             },
         )
-        explicit_headers = tool._apply_local_auth(
+        explicit_headers, _ = tool._apply_local_auth(
             "https://api.example.com/v1/status",
             {},
             auth_profile="example_service",
@@ -57,7 +57,7 @@ def main() -> int:
         if explicit_headers.get("Authorization") != "Bearer example-token":
             raise SystemExit("Explicit auth_profile did not inject the configured bearer token")
 
-        implicit_headers = tool._apply_local_auth("https://api.example.com/v1/status", {}, auth_profile=None)
+        implicit_headers, _ = tool._apply_local_auth("https://api.example.com/v1/status", {}, auth_profile=None)
         if "Authorization" in implicit_headers:
             raise SystemExit("http_request injected credentials without an explicit auth_profile")
 
@@ -69,7 +69,7 @@ def main() -> int:
         try:
             moltbook_creds_path.write_text('{"api_key":"moltbook-test-token"}', encoding="utf-8")
             os.environ.pop("MOLTBOOK_API_KEY", None)
-            moltbook_headers = tool._apply_local_auth(
+            moltbook_headers, _ = tool._apply_local_auth(
                 "https://www.moltbook.com/api/v1/home",
                 {},
                 auth_profile="moltbook",

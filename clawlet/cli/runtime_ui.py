@@ -134,7 +134,6 @@ def _make_heartbeat_context_loader(workspace: Path, hb_cfg):
 def run_agent_command(
     workspace: Optional[Path],
     model: Optional[str],
-    channel: str,
     log_file: Optional[Path],
     log_level: str,
     daemon: bool,
@@ -168,8 +167,6 @@ def run_agent_command(
             "agent",
             "--workspace",
             str(workspace_path),
-            "--channel",
-            channel,
             "--log-level",
             log_level,
             "--log-file",
@@ -219,14 +216,14 @@ def run_agent_command(
     if os.environ.get("CLAWLET_AGENT_DAEMON_CHILD") != "1":
         print_sakura_banner_fn()
         console.print(
-            f"\n[{sakura_light}]Starting agent with {channel} channel...[/{sakura_light}]"
+            f"\n[{sakura_light}]Starting agent...[/{sakura_light}]"
         )
         console.print("[dim]Press Ctrl+C to stop[/dim]")
 
     _write_agent_pid(workspace_path)
 
     try:
-        asyncio.run(run_agent(workspace_path, model, channel))
+        asyncio.run(run_agent(workspace_path, model))
     except KeyboardInterrupt:
         console.print("\n[yellow]Agent stopped.[/yellow]")
     except Exception as e:
@@ -290,7 +287,6 @@ def run_agent_stop_command(
 def run_agent_restart_command(
     workspace: Optional[Path],
     model: Optional[str],
-    channel: str,
     log_file: Optional[Path],
     log_level: str,
     daemon: bool,
@@ -305,7 +301,6 @@ def run_agent_restart_command(
     run_agent_command(
         workspace=workspace,
         model=model,
-        channel=channel,
         log_file=log_file,
         log_level=log_level,
         daemon=daemon,
@@ -375,8 +370,8 @@ def _create_provider(config, model: Optional[str]):
     return provider, provider.get_default_model()
 
 
-async def run_agent(workspace: Path, model: Optional[str], channel: str):
-    """Run the agent loop with explicit channel routing."""
+async def run_agent(workspace: Path, model: Optional[str]):
+    """Run the agent loop."""
     from clawlet.agent.identity import IdentityLoader
     from clawlet.agent.loop import AgentLoop
     from clawlet.bus.queue import MessageBus
@@ -478,84 +473,13 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         heartbeat_task = asyncio.create_task(heartbeat_runner.start())
         logger.info("Heartbeat runner initialized")
 
-    runtime_channel = None
-    if channel == "telegram":
-        telegram_cfg = config.channels.get("telegram")
-        token = (
-            telegram_cfg.get("token", "")
-            if isinstance(telegram_cfg, dict)
-            else getattr(telegram_cfg, "token", "")
-        )
-        enabled = (
-            telegram_cfg.get("enabled", False)
-            if isinstance(telegram_cfg, dict)
-            else getattr(telegram_cfg, "enabled", False)
-        )
-        if not enabled:
-            raise ValueError("Telegram channel is disabled in config")
-        if not token:
-            raise ValueError("Telegram token is missing in config")
-        from clawlet.channels.telegram import TelegramChannel
-
-        if isinstance(telegram_cfg, dict):
-            telegram_channel_config = dict(telegram_cfg)
-        else:
-            telegram_channel_config = {
-                "enabled": getattr(telegram_cfg, "enabled", False),
-                "token": getattr(telegram_cfg, "token", ""),
-                "stream_mode": getattr(telegram_cfg, "stream_mode", "progress"),
-                "stream_update_interval_seconds": getattr(
-                    telegram_cfg, "stream_update_interval_seconds", 1.5
-                ),
-                "disable_web_page_preview": getattr(
-                    telegram_cfg, "disable_web_page_preview", True
-                ),
-                "use_reply_keyboard": getattr(telegram_cfg, "use_reply_keyboard", True),
-                "register_commands": getattr(telegram_cfg, "register_commands", True),
-            }
-        telegram_channel_config["heartbeat"] = {
-            "enabled": getattr(hb_cfg, "enabled", False),
-            "interval_minutes": getattr(hb_cfg, "interval_minutes", 30),
-            "quiet_hours_start": getattr(hb_cfg, "quiet_hours_start", 0),
-            "quiet_hours_end": getattr(hb_cfg, "quiet_hours_end", 0),
-            "target": getattr(hb_cfg, "target", "last"),
-            "ack_max_chars": getattr(hb_cfg, "ack_max_chars", 24),
-            "proactive_enabled": getattr(hb_cfg, "proactive_enabled", False),
-        }
-        runtime_channel = TelegramChannel(bus, telegram_channel_config, agent)
-        await runtime_channel.start()
-    elif channel == "discord":
-        discord_cfg = config.channels.get("discord")
-        token = (
-            discord_cfg.get("token", "")
-            if isinstance(discord_cfg, dict)
-            else getattr(discord_cfg, "token", "")
-        )
-        enabled = (
-            discord_cfg.get("enabled", False)
-            if isinstance(discord_cfg, dict)
-            else getattr(discord_cfg, "enabled", False)
-        )
-        if not enabled:
-            raise ValueError("Discord channel is disabled in config")
-        if not token:
-            raise ValueError("Discord token is missing in config")
-        from clawlet.channels.discord import DiscordChannel
-
-        runtime_channel = DiscordChannel(bus, {"token": token}, agent)
-        await runtime_channel.start()
-    else:
-        raise ValueError(
-            f"Unsupported channel '{channel}'. Supported: telegram, discord"
-        )
-
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(
             sig,
             lambda s=sig: asyncio.create_task(
                 shutdown_agent(
-                    agent, runtime_channel, heartbeat_runner, heartbeat_task, s
+                    agent, heartbeat_runner, heartbeat_task, s
                 )
             ),
         )
@@ -582,7 +506,7 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
 
 
 async def shutdown_agent(
-    agent, runtime_channel, heartbeat_runner, heartbeat_task, signum
+    agent, heartbeat_runner, heartbeat_task, signum
 ):
     """Shutdown agent gracefully on signal."""
     logger.info(f"Received signal {signum}, shutting down...")
@@ -597,14 +521,6 @@ async def shutdown_agent(
             await heartbeat_task
         except asyncio.CancelledError:
             pass
-
-    if runtime_channel is not None:
-        try:
-            logger.info("Stopping Telegram channel...")
-            await runtime_channel.stop()
-            logger.info("Telegram channel stopped")
-        except Exception as e:
-            logger.error(f"Error stopping Telegram channel: {e}")
 
     await agent.close()
     logger.info("Agent shutdown complete")

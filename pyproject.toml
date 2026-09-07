@@ -41,17 +41,10 @@ dependencies = [
 monitoring = [
     "psutil>=5.9.0",
 ]
-# v2: heavy backends are opt-in (lazy-installed). Local-only agents skip ~200MB.
-channels-telegram = ["python-telegram-bot>=21.11.1,<22"]
-channels-discord = ["discord.py>=2.3.0"]
-channels-slack = ["slack_bolt>=1.18.0"]
-channels = [
-    "clawlet[channels-telegram,channels-discord,channels-slack]",
-]
 storage-postgres = ["asyncpg>=0.29.0"]
 tui = ["textual>=0.76.0"]
 full = [
-    "clawlet[channels,storage-postgres,tui,monitoring]",
+    "clawlet[storage-postgres,tui,monitoring]",
 ]
 dev = [
     "pytest>=7.0.0",

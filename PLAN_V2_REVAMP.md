@@ -1,6 +1,6 @@
 # Clawlet v2 — Plan Revamp complet
 
-> **État d'implémentation (branche `v2-revamp`, `0.6.0a9`) :** P0 ✅ · P1 ✅ · Orchestrateur ✅ · P2 ✅ · P3 ✅ · P4 ✅ (index skills + docs ; boucle de consolidation mémoire auto → suivi) · stabilisation ✅ (124 tests verts, CI pytest+coverage report-only, smoke+regression OK) · suppressions a6-a9 : dashboard web, benchmarks, webhooks, `AgentRouter`, migration v1→v2 scriptée (manuelle + `validate`) · TUI Sakura par défaut · packaging `uv`/hatchling · **Desktop exclu du périmètre sur demande (reporté)**.
+> **État d'implémentation (branche `v2-revamp`, `0.6.0a9`) :** P0 ✅ · P1 ✅ · Orchestrateur ✅ · P2 ✅ · P3 ✅ · P4 ✅ (index skills + docs ; boucle de consolidation mémoire auto → suivi) · stabilisation ✅ (124 tests verts, CI pytest+coverage report-only, smoke+regression OK) · suppressions a6-a9 : dashboard web, benchmarks, webhooks, `AgentRouter`, migration v1→v2 scriptée (manuelle + `validate`), purge channels + notes → §14 · TUI Sakura par défaut · packaging `uv`/hatchling · **Desktop exclu du périmètre sur demande (reporté)**.
 
 > **Décisions figées :** nom `Clawlet` conservé · même repo `Kxrbx/Clawlet`, branche `v2-revamp` · full-break autorisé (Python ≥3.11, deps optionnelles, dashboard refonte autorisée) · priorités P1 One-loop+registry, P2 SessionDB+perfs, P3 Skills+mémoire auto · orchestrateur systématique · Desktop Tauri 2 + React full-admin.
 > **Hors-scope v2.0 (backlog v2.1) :** gateway 30+ plateformes, kanban-swarm multi-agents, cron langage naturel.
@@ -302,3 +302,23 @@ Socle partagé : même `~/.clawlet/` que CLI (config, keys, sessions, skills, m�
 8. Backlog v2.1 : gateway multi-plateformes (`platforms/base.py`), cron NL, kanban-swarm.
 
 **Critères succès v2.0 :** 1 boucle / 1 registry / 1 SessionDB · `loop.py` <300l · 0 provider dupliqué · 0 `hasattr` storage · 100% non-trivial via `orchestrateur → subagent(kind) → synthèse` loggé · cold-start et coûts en baisse mesurés · smoke+regression+gate verts · Desktop 1-click → premier message <30s.
+
+---
+
+## 14. v2.1 — Purge channels v1 + tool notes (en cours)
+
+> **Décision :** full-break v2.1 — les 4 channels v1 (telegram/discord/slack/whatsapp + helpers `telegram_*`) et le tool `notes` sont supprimés. `channels/base.py` reste seul comme contrat pour le futur gateway multi-plateformes (backlog §13.8, `platforms/base.py`). Raison : god objects couplés au runtime v1 (`telegram.py` 891l, `slack.py` 713l), deps opt-in devenues mortes (python-telegram-bot, discord.py, slack_bolt, twilio), et `--channel` n'a plus de sens en v2 où les surfaces sont TUI/serve.
+
+### Fait (working tree, non commité)
+
+* Supprimés : `channels/{telegram,telegram_actions,telegram_callbacks,telegram_menu,telegram_ui,discord,slack,whatsapp}.py`, `tools/notes.py` — **−3 295 l**.
+* `cli/runtime_ui.py` : bloc démarrage channel + stop channel supprimés, `run_agent(channel)` → `run_agent()`, `shutdown_agent` allégé ; `agent_commands.py` : option `--channel/-c` retirée de `agent` et `agent restart`.
+* `tools/{__init__,assembly}.py` : `NotesTools` + `register_notes_tools` retirés.
+* `pyproject.toml` : extras `channels-telegram/discord/slack` et `channels` supprimés, `full` réajusté.
+* `test_architecture_guards.py` : refs `channels/telegram.py` + test delegation supprimés. **123 tests verts.**
+
+### Reste à faire
+
+* [ ] Commiter la purge sur `v2-revamp`.
+* [ ] Resync docs mentionnant encore `--channel telegram` : `README.md`, `QUICKSTART.md`, `DEPLOYMENT.md`, `docs/channels.md`, `docs/runtime-v2.md`, `ARCHITECTURE.md`, `skills/templates/README.md`.
+* [ ] Trier le sort de `channels/base.py` + `bus/` (contrat gateway futur vs suppression) au moment de `platforms/`.

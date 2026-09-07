@@ -1,11 +1,5 @@
 """
-Channels module - Communication backends.
-
-Available channels:
-- TelegramChannel: Telegram bot
-- DiscordChannel: Discord bot
-- WhatsAppChannel: WhatsApp Business API
-- SlackChannel: Slack using Slack Bolt
+Channels module - Communication backends (v2.1: only the base contract ships).
 """
 
 from clawlet.channels.base import BaseChannel
