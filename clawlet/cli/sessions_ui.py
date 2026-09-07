@@ -25,26 +25,15 @@ def run_sessions_command(workspace_path: Path, export: Optional[Path], limit: in
     try:
         import aiosqlite
         from clawlet.config import Config
-        from clawlet.storage.postgres import PostgresStorage
         from clawlet.storage.sqlite import SQLiteStorage
 
         config = Config.from_yaml(config_path)
 
-        if config.storage.backend == "sqlite":
-            db_path = Path(config.storage.sqlite.path).expanduser()
-            storage = SQLiteStorage(db_path)
-        elif config.storage.backend == "postgres":
-            pg = config.storage.postgres
-            storage = PostgresStorage(
-                host=pg.host,
-                port=pg.port,
-                database=pg.database,
-                user=pg.user,
-                password=pg.password,
-            )
-        else:
+        if config.storage.backend != "sqlite":
             console.print(f"[red]Unsupported storage backend: {config.storage.backend}[/red]")
             raise typer.Exit(1)
+        db_path = Path(config.storage.sqlite.path).expanduser()
+        storage = SQLiteStorage(db_path)
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

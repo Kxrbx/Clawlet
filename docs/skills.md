@@ -300,7 +300,7 @@ Be clear about what the skill cannot do.
 Start Clawlet and verify the skill is loaded:
 
 ```bash
-clawlet agent --channel telegram
+clawlet agent
 # Look for: "Discovered skill 'my_skill' from ..."
 ```
 

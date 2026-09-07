@@ -7,8 +7,7 @@ This guide describes a generic production deployment flow for Clawlet after clon
 Clawlet can be deployed in a minimal setup with:
 
 - the `clawlet` Python runtime
-- an optional database backend (`sqlite` by default, `postgres` optional)
-- optional channels such as Telegram, Discord, Slack, or WhatsApp
+- a SQLite database (created automatically, no extra backend)
 
 ## 1. Clone And Install
 
@@ -64,14 +63,6 @@ heartbeat:
 
 ```bash
 clawlet agent
-```
-
-Channel-specific examples:
-
-```bash
-# Use these only after configuring the channel in config.yaml
-clawlet agent --channel telegram
-clawlet agent --channel discord
 ```
 
 ## 5. Heartbeat Operations
@@ -141,7 +132,6 @@ WantedBy=multi-user.target
 ## 8. Pre-Deployment Checklist
 
 - provider API keys configured
-- channel tokens configured if channels are enabled
 - `clawlet validate` passes
 - `clawlet health` passes
 - `HEARTBEAT.md` reviewed before enabling autonomous background work

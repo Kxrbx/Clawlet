@@ -43,19 +43,14 @@ git clone https://github.com/Kxrbx/Clawlet.git
 cd Clawlet
 git checkout v2-revamp
 
-uv sync                  # lean core — local-first, no 200MB of chat SDKs
+uv sync                  # lean core — local-first
 # or
-uv sync --extra full    # everything: channels, postgres, monitoring
+uv sync --extra full    # core + monitoring
 
 uv tool install -e .    # expose bare `clawlet` everywhere (editable, tracks this repo)
 ```
 
 Then just type `clawlet` from any terminal — no activation, no `uv run` prefix.
-Need a channel backend in the global install? Add it with `--with`:
-
-```bash
-uv tool install --force -e . --with 'python-telegram-bot>=21.11.1,<22'
-```
 
 All commands below assume `clawlet` is on your PATH (via the tool install above).
 Otherwise activate the venv or prefix with `uv run`, e.g. `uv run clawlet onboard`.
@@ -63,9 +58,6 @@ Otherwise activate the venv or prefix with `uv run`, e.g. `uv run clawlet onboar
 Pick extras à la carte instead:
 
 ```bash
-uv sync --extra channels-telegram
-uv sync --extra channels-discord
-uv sync --extra storage-postgres
 uv sync --extra monitoring
 ```
 
@@ -75,16 +67,15 @@ uv sync --extra monitoring
 clawlet onboard
 ```
 
-The 8-step wizard walks you through:
+The 7-step wizard walks you through:
 
 1. Provider choice (16+ options)
 2. API keys or local model settings
 3. Default model
-4. Execution mode (`safe` or `full_exec`)
-5. Channels (Telegram / Discord)
-6. Identity (name, personality)
+4. Web search (optional)
+5. Identity (name, personality)
+6. Execution mode (`safe` or `full_exec`)
 7. **Per-task models** — e.g. strong model for code, cheap for chat, local for memory
-8. Workspace creation (all files generated)
 
 Or go fast:
 
@@ -99,8 +90,8 @@ clawlet init
 clawlet validate
 clawlet             # full-screen console — no subcommand needed
 
-# or headless / channel mode:
-clawlet agent [--channel telegram] [--toolsets coding,browser]
+# or headless:
+clawlet agent [--toolsets coding,browser]
 ```
 
 Your workspace:
@@ -248,8 +239,8 @@ clawlet config     # view (secrets redacted)
 | Command | What it does |
 |---|---|
 | `clawlet` / `clawlet tui` | Full-screen terminal console |
-| `clawlet onboard` / `init` | Guided (8 steps) / quick setup |
-| `clawlet agent [--channel telegram] [--toolsets coding,browser]` | Run the runtime |
+| `clawlet onboard` / `init` | Guided / quick setup |
+| `clawlet agent [--toolsets coding,browser]` | Run the runtime headless |
 | `clawlet tasks list / show <kind> / test-routing "<text>"` | Inspect and test routing offline |
 | `clawlet sessions` | List / export stored sessions |
 | `clawlet heartbeat status\|last\|enable\|disable` | Heartbeat ops |
@@ -298,11 +289,11 @@ Web search via Brave: `web_search: {api_key: "${BRAVE_SEARCH_API_KEY}", enabled:
 
 | Doc | For |
 |---|---|
-| [QUICKSTART.md](QUICKSTART.md) | Provider-by-provider setup, channels, troubleshooting |
+| [QUICKSTART.md](QUICKSTART.md) | Provider-by-provider setup, troubleshooting |
 | `docs/runtime-v2.md` | Canonical runtime (pipeline, profiles, toolsets, SessionDB) |
 | `clawlet/ARCHITECTURE.md` | Components + data flow deep dive |
 | `docs/skills.md`, `docs/skills-api.md` | Skills system |
-| `docs/channels.md`, `docs/scheduling.md` | Channels, cron |
+| `docs/scheduling.md` | Cron |
 | `DEPLOYMENT.md` | Production deployment |
 | [CHANGELOG.md](CHANGELOG.md) | Full version history |
 
@@ -314,7 +305,7 @@ Short version — four breaking changes, no data loss:
 
 1. **Python 3.11+** required (was 3.10+).
 2. **`runtime.engine: hybrid_rust` removed** — only `python` is accepted; edit the one line by hand.
-3. **Heavy backends are opt-in extras.** A fresh install no longer includes Telegram/Discord/Slack/Postgres. Run `uv sync --extra full` to restore the old footprint, or pick extras à la carte.
+3. **Channels, Postgres and the plugin SDK removed.** The surfaces are the TUI and headless `clawlet agent`; storage is SQLite only. Legacy `channels:`/`postgres:`/`plugins:` config keys are ignored — delete them from config.yaml.
 4. **Web dashboard and webhooks removed.** The Sakura **TUI** (`clawlet`) replaces the React dashboard; `http_request` + `cron` cover webhook use cases. ~13k lines deleted deliberately — one console, one stack.
 5. **Database: nothing to do.** New tables sit next to the existing `messages`; history survives. Missing `orchestrator` / `task_profiles` keys fall back to built-ins.
 

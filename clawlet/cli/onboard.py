@@ -70,33 +70,6 @@ CUSTOM_STYLE = Style(
 console = Console()
 
 
-def _merge_channel_tokens_into_config(
-    config: Config, telegram_token: str | None = None, discord_token: str | None = None
-) -> None:
-    """Apply channel tokens into the config using the canonical nested channels shape."""
-    channels = dict(getattr(config, "channels", {}) or {})
-
-    def _channel_dict(name: str) -> dict:
-        current = channels.get(name, {})
-        if hasattr(current, "model_dump"):
-            return current.model_dump(mode="python")
-        return dict(current or {})
-
-    telegram = _channel_dict("telegram")
-    discord = _channel_dict("discord")
-
-    if telegram_token:
-        telegram["enabled"] = True
-        telegram["token"] = telegram_token
-    if discord_token:
-        discord["enabled"] = True
-        discord["token"] = discord_token
-
-    channels["telegram"] = telegram
-    channels["discord"] = discord
-    config.channels = channels
-
-
 def print_sakura_header():
     """Print ASCII art header with sakura petals."""
     console.clear()
@@ -474,7 +447,6 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         "Provider",
         "API Key",
         "Web Search",
-        "Channel",
         "Identity",
         "Execution Mode",
         "Task Models",
@@ -1001,7 +973,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 3: Brave Search API (Optional)
     # ============================================
-    print_step_indicator(3, 6, steps)
+    print_step_indicator(3, 7, steps)
     print_section("Web Search", "Enable web search for your agent?")
 
     brave_use = await questionary.confirm(
@@ -1021,48 +993,9 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Brave Search configured")
 
     # ============================================
-    # Step 4: Channel Setup
-    # ============================================
-    print_step_indicator(4, 6, steps)
-    print_section("Messaging Channels", "Where should your agent respond?")
-    console.print("│")
-    console.print("│  [dim]You can skip this and set up channels later[/dim]")
-    console.print("│")
-    print_option("n", "Skip", "No channels right now")
-    print_option("t", "Telegram", "Connect a Telegram bot")
-    print_option("d", "Discord", "Connect a Discord bot")
-    print_option("b", "Both", "Telegram + Discord")
-    print_footer()
-
-    channel_choice = Prompt.ask("\n  Select", choices=["n", "t", "d", "b"], default="n")
-
-    telegram_token = None
-    discord_token = None
-
-    if channel_choice in ["t", "b"]:
-        console.print()
-        console.print("  [dim]Create a bot with @BotFather on Telegram[/dim]")
-        telegram_token = await questionary.password(
-            "  Telegram bot token:",
-            style=CUSTOM_STYLE,
-        ).ask_async()
-        if telegram_token:
-            console.print("  [green]✓[/green] Telegram configured")
-
-    if channel_choice in ["d", "b"]:
-        console.print()
-        console.print("  [dim]Create a bot in Discord Developer Portal[/dim]")
-        discord_token = await questionary.password(
-            "  Discord bot token:",
-            style=CUSTOM_STYLE,
-        ).ask_async()
-        if discord_token:
-            console.print("  [green]✓[/green] Discord configured")
-
-    # ============================================
     # Step 4: Agent Identity
     # ============================================
-    print_step_indicator(5, 6, steps)
+    print_step_indicator(4, 7, steps)
     print_section("Agent Identity", "Give your agent a personality")
     console.print("│")
 
@@ -1085,9 +1018,9 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     print_footer()
 
     # ============================================
-    # Step 6: Execution Mode
+    # Step 5: Execution Mode
     # ============================================
-    print_step_indicator(6, 7, steps)
+    print_step_indicator(5, 7, steps)
     print_section("Execution Mode", "Choose capability level for your agent")
     console.print("│")
     print_option("s", "safe", "Workspace-restricted tools (recommended)")
@@ -1115,7 +1048,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 7: Per-Task Models
     # ============================================
-    print_step_indicator(7, 8, steps)
+    print_step_indicator(6, 7, steps)
     print_section(
         "Models Per Task", "Optionally give each task type its own provider and model"
     )
@@ -1160,7 +1093,7 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
     # ============================================
     # Step 8: Create Workspace
     # ============================================
-    print_step_indicator(8, 8, steps)
+    print_step_indicator(7, 7, steps)
     print_section("Creating Workspace", "Setting up your files...")
     console.print()
 
@@ -1190,11 +1123,6 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             )
             if brave_use
             else BraveSearchConfig(),
-        )
-        _merge_channel_tokens_into_config(
-            config,
-            telegram_token=telegram_token,
-            discord_token=discord_token,
         )
         config.save(workspace / "config.yaml")
         progress.update(task, advance=1, description="Creating identity files...")

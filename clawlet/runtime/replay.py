@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -18,7 +20,6 @@ from clawlet.runtime.events import (
 )
 from clawlet.runtime.policy import READ_ONLY_TOOLS, RuntimePolicyEngine
 from clawlet.runtime.recovery import RecoveryManager
-from clawlet.runtime.rust_bridge import fast_hash
 from clawlet.tools.registry import ToolRegistry
 
 
@@ -390,7 +391,7 @@ def _collect_recorded_outcomes(events: list[RuntimeEvent]) -> dict[str, dict[str
 
 
 def _hash_text(value: str) -> str:
-    return fast_hash(value or "")
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
 def _run_async(coro):

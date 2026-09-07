@@ -8,7 +8,7 @@ _Deep dive into the core components and data flows._
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Channels (Telegram, Discord, ...)          │
+│              Surfaces (TUI, headless CLI, cron/heartbeat)           │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │ inbound/outbound messages
                                 ▼
@@ -30,7 +30,7 @@ _Deep dive into the core components and data flows._
 ├─────────────────────────────────────────────────────────────────────┤
 │  - History (RAM, capped MAX_HISTORY=100)                          │
 │  - MemoryManager (SQLite + MEMORY.md projection + daily notes)   │
-│  - Storage (SQLite/Postgres for message history)                 │
+│  - Storage (SQLite for message history)                          │
 │  - Provider (OpenRouter/Ollama/LMStudio)                          │
 │  - Tools (registry)                                               │
 │  - Circuit breaker + retry/backoff                               │
@@ -41,7 +41,7 @@ _Deep dive into the core components and data flows._
                 ▼                               ▼
      ┌───────────────────┐       ┌────────────────────────┐
      │  LLM Provider     │       │   Storage Backend      │
-     │  (OpenRouter)     │       │   (SQLite/Postgres)    │
+     │  (OpenRouter)     │       │   (SQLite)             │
      └───────────────────┘       └────────────────────────┘
                 │                               │
                 └───────────────┬───────────────┘
@@ -129,10 +129,7 @@ When SQLite FTS5 is available, free-text memory search uses it before falling ba
 
 Abstract `StorageBackend` interface with implementations:
 
-- `SQLiteStorage` (default): file-based, uses `aiosqlite`; v2 adds the
-  `sessions` table (`parent_session_id`, `task_kind`, `profile_snapshot`,
-  `system_prompt`, `source`) plus FTS5 `session_search` (`storage/session_db.py`)
-- `PostgresStorage`: full PostgreSQL via optional `storage-postgres` extra
+- `SQLiteStorage`: file-based, uses `aiosqlite` — the only backend
 
 **Schema (SQLite):**
 
@@ -168,11 +165,9 @@ AgentLoop stores every inbound/outbound message here, enabling session reconstru
 
 **Configuration** (`config.yaml`) loaded via `Config` (Pydantic). Supports:
 
-- Provider selection (16 providers: `openrouter`, `ollama`, `lmstudio`, `anthropic`, `openai`, …)
-- Per-task profiles (`task_profiles.<kind>` → `defaults` → `provider.primary`) + `orchestrator` (cheap classifier model, trivial-bypass, fan-out caps)
-- Channel tokens (Telegram, Discord)
+- Provider selection (`openrouter`, `ollama`, `lmstudio`)
 - Explicit `http_auth_profiles` for structured HTTP credential injection
-- Storage backend (sqlite/postgres)
+- Storage path (SQLite)
 - Agent settings (max_iterations, context_window, temperature)
 - Heartbeat interval
 
@@ -180,15 +175,9 @@ AgentLoop stores every inbound/outbound message here, enabling session reconstru
 
 ---
 
-### 6. Channels
+### 6. Surfaces
 
-Each channel implements `BaseChannel`:
-
-- `start()` – connect to service (e.g., Telegram bot polling)
-- `stop()` – disconnect
-- `send(OutboundMessage)` – transmit reply
-
-Channels publish inbound messages to the bus and consume outbound messages to send them.
+The TUI, the headless `clawlet agent` CLI and the cron/heartbeat scheduler all feed the same loop through the bus. There are no external messaging integrations in v2 — future multi-platform gateways would re-introduce them as thin publishers on top of `MessageBus`.
 
 ---
 
@@ -207,7 +196,7 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 ## Data Flow Example
 
 1. User sends "What's the weather?"
-2. TelegramChannel receives update → `InboundMessage` → `bus.publish_inbound()`
+2. TUI converts input → `InboundMessage` → `bus.publish_inbound()`
 3. AgentLoop `consume_inbound()` → `_process_message()`
 4. Add user message to `_history` + `storage.store_message()` + `memory.remember()`
 5. Build context (system prompt + last 20 messages)
@@ -217,7 +206,7 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 9. Tool result appended to history + persisted
 10. Loop continues → LLM generates final response "It's 20°C in Paris."
 11. Final response appended to history + persisted, sent to `bus.publish_outbound()`
-12. TelegramChannel consumes outbound → `send_message(chat_id, text)`
+12. TUI consumes outbound → renders the reply
 
 ---
 
@@ -232,9 +221,8 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 
 ## Extensibility Points
 
-- Add new channels: subclass `BaseChannel`, register in CLI
 - Add new tools: create function, decorate with `@tool`, register in `ToolRegistry`
-- Add new storage backends: implement `StorageBackend` abstract methods
+- Add new surfaces: publish `InboundMessage` / consume `OutboundMessage` on `MessageBus`
 - Custom identity: edit `SOUL.md` and `USER.md` without code changes
 - Custom provider: implement `BaseProvider` (methods `complete`, `stream`, `close`)
 

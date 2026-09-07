@@ -252,16 +252,6 @@ class AgentLoop:
         if storage_config.backend == "sqlite":
             db_path = Path(storage_config.sqlite.path).expanduser()
             self.storage = SQLiteStorage(db_path)
-        elif storage_config.backend == "postgres":
-            from clawlet.storage.postgres import PostgresStorage
-            pg = storage_config.postgres
-            self.storage = PostgresStorage(
-                host=pg.host,
-                port=pg.port,
-                database=pg.database,
-                user=pg.user,
-                password=pg.password,
-            )
         else:
             raise ValueError(f"Unsupported storage backend: {storage_config.backend}")
         
@@ -345,7 +335,6 @@ class AgentLoop:
             policy=self._runtime_policy,
             enable_idempotency=self.runtime_config.enable_idempotency_cache,
             engine=self._runtime_engine,
-            remote_executor=self._build_remote_executor(),
             lane_defaults=dict(self.runtime_config.policy.lanes),
         )
         self._context_engine = ContextEngine(
@@ -434,27 +423,6 @@ class AgentLoop:
                 self.max_tool_calls_per_message,
             )
         )
-
-    def _build_remote_executor(self):
-        """Create optional remote executor (local-first fallback when unavailable)."""
-        remote_cfg = getattr(self.runtime_config, "remote", None)
-        if not remote_cfg or not getattr(remote_cfg, "enabled", False):
-            return None
-        endpoint = str(getattr(remote_cfg, "endpoint", "") or "").strip()
-        if not endpoint:
-            logger.warning("runtime.remote.enabled=true but endpoint is empty; remote execution disabled")
-            return None
-        api_key_env = str(getattr(remote_cfg, "api_key_env", "CLAWLET_REMOTE_API_KEY") or "CLAWLET_REMOTE_API_KEY")
-        api_key = os.environ.get(api_key_env, "")
-        timeout_seconds = float(getattr(remote_cfg, "timeout_seconds", 60.0) or 60.0)
-        try:
-            from clawlet.runtime.remote import RemoteToolExecutor
-
-            logger.info(f"Remote executor enabled at {endpoint}")
-            return RemoteToolExecutor(endpoint=endpoint, api_key=api_key, timeout_seconds=timeout_seconds)
-        except Exception as e:
-            logger.warning(f"Remote executor unavailable; using local-only execution: {e}")
-            return None
 
     def _queue_persist(self, session_id: str, role: str, content: str, metadata: Optional[dict] = None) -> None:
         """Queue persistence task with lifecycle tracking."""
@@ -2327,10 +2295,6 @@ class AgentLoop:
                 detail=error_msg,
             )
             return ToolResult(success=False, output="", error=error_msg)
-        if execution_target == "remote" and getattr(self._tool_runtime, "remote_executor", None) is None:
-            logger.warning("Remote execution requested but remote executor is unavailable; using local target")
-            execution_target = "local"
-
         envelope = ToolCallEnvelope(
             run_id=self._current_run_id or self._next_run_id(self._session_id or "session"),
             session_id=self._session_id or "session",

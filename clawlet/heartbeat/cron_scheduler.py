@@ -3,6 +3,7 @@ Enhanced scheduler with cron expression support.
 """
 
 import asyncio
+import inspect
 import json
 import re
 from datetime import datetime, timedelta
@@ -502,7 +503,7 @@ class Scheduler:
             raise ValueError(f"Task '{task.name}' has no callback function")
         
         callback = task.callback
-        if asyncio.iscoroutinefunction(callback):
+        if inspect.iscoroutinefunction(callback):
             result = await callback(**task.params)
         else:
             result = callback(**task.params)

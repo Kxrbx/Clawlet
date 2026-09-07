@@ -38,7 +38,6 @@ from clawlet.tools.assembly import (
     register_file_and_shell_tools,
     register_memory_tools,
     register_network_tools,
-    register_plugin_tools,
     register_skill_tools,
 )
 if TYPE_CHECKING:
@@ -71,7 +70,6 @@ def create_default_tool_registry(
     register_network_tools(registry, allowed_dir=allowed_dir, config=config)
     register_skill_tools(registry, skill_registry=skill_registry)
     register_memory_tools(registry, memory_manager=memory_manager)
-    register_plugin_tools(registry, allowed_dir=allowed_dir, config=config)
     return registry
 
 __all__ = [

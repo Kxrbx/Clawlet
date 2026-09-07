@@ -21,7 +21,6 @@ from clawlet.runtime.events import (
 )
 from clawlet.runtime.failures import classify_error_text, to_payload
 from clawlet.runtime.policy import RuntimePolicyEngine
-from clawlet.runtime.rust_bridge import fast_hash
 from clawlet.runtime.types import ToolCallEnvelope, ToolExecutionMetadata
 from clawlet.tools.registry import ToolRegistry, ToolResult
 
@@ -36,7 +35,6 @@ class DeterministicToolRuntime:
         policy: RuntimePolicyEngine,
         enable_idempotency: bool = True,
         engine: str = "python",
-        remote_executor=None,
         lane_defaults: Optional[dict[str, str]] = None,
     ):
         self.registry = registry
@@ -44,7 +42,6 @@ class DeterministicToolRuntime:
         self.policy = policy
         self.enable_idempotency = enable_idempotency
         self.engine = engine
-        self.remote_executor = remote_executor
         self._idempotency_cache: dict[str, ToolResult] = {}
         self._lane_locks: dict[str, asyncio.Lock] = {}
         self._lane_defaults = dict(lane_defaults or {})
@@ -113,10 +110,10 @@ class DeterministicToolRuntime:
 
         lane_lock = self._lane_lock(lane)
         if lane_lock is None:
-            last_result, metadata, use_remote = await self._execute_inner(envelope, args, lane)
+            last_result, metadata = await self._execute_inner(envelope, args, lane)
         else:
             async with lane_lock:
-                last_result, metadata, use_remote = await self._execute_inner(envelope, args, lane)
+                last_result, metadata = await self._execute_inner(envelope, args, lane)
 
         if last_result.success:
             if cacheable:
@@ -130,7 +127,7 @@ class DeterministicToolRuntime:
                         "tool_call_id": envelope.tool_call_id,
                         "tool_name": envelope.tool_name,
                         "lane": lane,
-                        "engine": f"{self.engine}:remote" if use_remote else self.engine,
+                        "engine": self.engine,
                         "metadata": asdict(metadata),
                         "success": True,
                         "output": last_result.output,
@@ -143,7 +140,7 @@ class DeterministicToolRuntime:
                 "tool_call_id": envelope.tool_call_id,
                 "tool_name": envelope.tool_name,
                 "lane": lane,
-                "engine": f"{self.engine}:remote" if use_remote else self.engine,
+                "engine": self.engine,
                 "metadata": asdict(metadata),
                 "error": last_result.error,
                 **to_payload(failure),
@@ -199,10 +196,7 @@ class DeterministicToolRuntime:
             sort_keys=True,
             separators=(",", ":"),
         )
-        try:
-            return fast_hash(raw)
-        except Exception:
-            return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _is_retryable_error(error: Optional[str]) -> bool:
@@ -253,7 +247,6 @@ class DeterministicToolRuntime:
             )
         )
 
-        use_remote = envelope.execution_target == "remote" and self.remote_executor is not None
         tool = self.registry.get(envelope.tool_name)
         exec_args = dict(args)
         if tool is not None:
@@ -261,42 +254,28 @@ class DeterministicToolRuntime:
 
         for attempt in range(max(1, envelope.max_retries + 1)):
             attempts += 1
-            if use_remote:
-                try:
-                    result = await self.remote_executor.execute(envelope)
-                except Exception as e:
-                    result = ToolResult(success=False, output="", error=f"Remote execution exception: {e}")
-            else:
-                try:
-                    result = await asyncio.wait_for(
-                        self.registry.execute(envelope.tool_name, **exec_args),
-                        timeout=max(0.1, float(envelope.timeout_seconds)),
-                    )
-                except asyncio.TimeoutError:
-                    result = ToolResult(
-                        success=False,
-                        output="",
-                        error=f"Tool execution timed out after {envelope.timeout_seconds:.1f}s",
-                    )
+            try:
+                result = await asyncio.wait_for(
+                    self.registry.execute(envelope.tool_name, **exec_args),
+                    timeout=max(0.1, float(envelope.timeout_seconds)),
+                )
+            except asyncio.TimeoutError:
+                result = ToolResult(
+                    success=False,
+                    output="",
+                    error=f"Tool execution timed out after {envelope.timeout_seconds:.1f}s",
+                )
             last_result = result
             if result.success or not self._is_retryable_error(result.error):
                 break
 
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         metadata = ToolExecutionMetadata(duration_ms=elapsed_ms, attempts=attempts, cached=False)
-        return last_result, metadata, use_remote
+        return last_result, metadata
 
     def _runtime_context_args(self, tool, envelope: ToolCallEnvelope) -> dict[str, str]:
         """Inject runtime-only kwargs only when the tool contract can accept them."""
         extra = {"_workspace_path": envelope.workspace_path}
-        try:
-            from clawlet.plugins.sdk import PluginTool
-
-            if isinstance(tool, PluginTool):
-                extra["_run_id"] = envelope.run_id
-                extra["_session_id"] = envelope.session_id
-        except Exception:
-            pass
 
         try:
             params = inspect.signature(tool.execute).parameters.values()

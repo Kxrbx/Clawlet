@@ -128,40 +128,13 @@ provider:
     base_url: "http://localhost:1234"
     model: "local-model"
 
-# Channel Settings
-channels:
-  telegram:
-    enabled: false
-    token: ""
-    stream_mode: "progress"
-    stream_update_interval_seconds: 1.5
-    disable_web_page_preview: true
-    use_reply_keyboard: true
-    register_commands: true
-  
-  discord:
-    enabled: false
-    token: ""
-  
-  whatsapp:
-    enabled: false
-
 # Storage Settings
 storage:
-  # backend: sqlite or postgres
   backend: sqlite
-  
+
   # SQLite settings
   sqlite:
     path: "~/.clawlet/clawlet.db"
-  
-  # PostgreSQL settings
-  postgres:
-    host: "localhost"
-    port: 5432
-    database: "clawlet"
-    user: "clawlet"
-    password: ""
 
 # Optional structured HTTP auth profiles
 # http_auth_profiles:
@@ -264,11 +237,4 @@ benchmarks:
     max_context_cache_warm_ms: 1200
     min_coding_loop_success_rate_pct: 99.0
     max_coding_loop_p95_total_ms: 2500
-
-# Plugin SDK v2
-plugins:
-  auto_load: true
-  directories:
-    - "~/.clawlet/plugins"
-  sdk_version: "2.0.0"
 """

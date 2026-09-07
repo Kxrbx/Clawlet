@@ -305,40 +305,6 @@ class ProviderConfig(BaseModel):
     lmstudio: LMStudioConfig = Field(default_factory=LMStudioConfig)
 
 
-class TelegramConfig(BaseModel):
-    """Telegram channel configuration."""
-
-    enabled: bool = False
-    token: str = ""
-    stream_mode: Literal["off", "progress", "verbose_debug"] = "progress"
-    stream_update_interval_seconds: float = Field(default=1.5, ge=0.2, le=30.0)
-    disable_web_page_preview: bool = True
-    use_reply_keyboard: bool = True
-    register_commands: bool = True
-
-    @field_validator("token")
-    @classmethod
-    def validate_token_if_enabled(cls, v: str, info) -> str:
-        if info.data.get("enabled") and not v:
-            raise ValueError("Telegram token is required when enabled")
-        return v
-
-
-class DiscordConfig(BaseModel):
-    """Discord channel configuration."""
-
-    enabled: bool = False
-    token: str = ""
-    command_prefix: str = "!"
-
-    @field_validator("token")
-    @classmethod
-    def validate_token_if_enabled(cls, v: str, info) -> str:
-        if info.data.get("enabled") and not v:
-            raise ValueError("Discord token is required when enabled")
-        return v
-
-
 class SQLiteConfig(BaseModel):
     """SQLite storage configuration."""
 
@@ -347,22 +313,11 @@ class SQLiteConfig(BaseModel):
     )
 
 
-class PostgresConfig(BaseModel):
-    """PostgreSQL storage configuration."""
-
-    host: str = "localhost"
-    port: int = 5432
-    database: str = "clawlet"
-    user: str = "clawlet"
-    password: str = ""
-
-
 class StorageConfig(BaseModel):
     """Storage configuration."""
 
-    backend: Literal["sqlite", "postgres"] = "sqlite"
+    backend: Literal["sqlite"] = "sqlite"
     sqlite: SQLiteConfig = Field(default_factory=SQLiteConfig)
-    postgres: PostgresConfig = Field(default_factory=PostgresConfig)
 
 
 class AgentSettings(BaseModel):
@@ -634,22 +589,12 @@ class RuntimeReplaySettings(BaseModel):
     validation_mode: Literal["warn", "error"] = "warn"
 
 
-class RuntimeRemoteSettings(BaseModel):
-    """Remote optional worker settings."""
-
-    enabled: bool = False
-    endpoint: str = ""
-    timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
-    api_key_env: str = "CLAWLET_REMOTE_API_KEY"
-
-
 class RuntimeSettings(BaseModel):
     """Runtime engine settings."""
 
     engine: Literal["python"] = "python"
     policy: RuntimePolicySettings = Field(default_factory=RuntimePolicySettings)
     replay: RuntimeReplaySettings = Field(default_factory=RuntimeReplaySettings)
-    remote: RuntimeRemoteSettings = Field(default_factory=RuntimeRemoteSettings)
     enable_idempotency_cache: bool = True
     enable_parallel_read_batches: bool = True
     max_parallel_read_tools: int = Field(default=4, ge=1, le=64)
@@ -682,26 +627,10 @@ class BenchmarksSettings(BaseModel):
     gates: BenchmarkGatesSettings = Field(default_factory=BenchmarkGatesSettings)
 
 
-class PluginSettings(BaseModel):
-    """Plugin SDK settings."""
-
-    auto_load: bool = True
-    directories: list[str] = Field(
-        default_factory=lambda: [str(get_default_workspace_path() / "plugins")]
-    )
-    sdk_version: str = "2.0.0"
-
-
 class Config(BaseModel):
     """Main configuration."""
 
     provider: ProviderConfig
-    channels: dict = Field(
-        default_factory=lambda: {
-            "telegram": TelegramConfig(),
-            "discord": DiscordConfig(),
-        }
-    )
     http_auth_profiles: dict[str, HttpAuthProfileConfig] = Field(default_factory=dict)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     agent: AgentSettings = Field(default_factory=AgentSettings)
@@ -711,7 +640,6 @@ class Config(BaseModel):
     web_search: BraveSearchConfig = Field(default_factory=BraveSearchConfig)
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     benchmarks: BenchmarksSettings = Field(default_factory=BenchmarksSettings)
-    plugins: PluginSettings = Field(default_factory=PluginSettings)
     orchestrator: OrchestratorSettings = Field(default_factory=OrchestratorSettings)
     task_profiles: dict[str, TaskProfile] = Field(default_factory=dict)
 
@@ -748,25 +676,6 @@ class Config(BaseModel):
         return ""
 
     def __init__(self, **data):
-        # Handle root-level telegram/discord fields by moving them to channels dict
-        # This makes the config adaptive to both formats
-        channels_data = dict(data.get("channels") or {})
-
-        # If telegram is at root level, move it to channels
-        if "telegram" in data:
-            if "telegram" not in channels_data or not channels_data.get("telegram"):
-                channels_data["telegram"] = data["telegram"]
-            del data["telegram"]
-
-        # If discord is at root level, move it to channels
-        if "discord" in data:
-            if "discord" not in channels_data or not channels_data.get("discord"):
-                channels_data["discord"] = data["discord"]
-            del data["discord"]
-
-        if channels_data:
-            data["channels"] = channels_data
-
         # Legacy scheduling shape support:
         # - top-level `tasks` -> `scheduler.tasks`
         if "tasks" in data and "scheduler" not in data:

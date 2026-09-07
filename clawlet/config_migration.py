@@ -81,7 +81,6 @@ def analyze_config_migration(config_path: Path) -> ConfigMigrationReport:
         )
         return report
 
-    _check_legacy_channel_shape(raw, report)
     _check_legacy_agent_keys(raw, report)
     _check_provider_shape(raw, report)
     _check_unknown_top_level(raw, report)
@@ -109,33 +108,6 @@ def _load_raw(config_path: Path) -> tuple[Any, str]:
     return raw, ""
 
 
-
-
-def _check_legacy_channel_shape(raw: dict[str, Any], report: ConfigMigrationReport) -> None:
-    legacy_channel_keys = ("telegram", "discord", "whatsapp", "slack")
-    for key in legacy_channel_keys:
-        if key in raw:
-            report.issues.append(
-                MigrationIssue(
-                    severity="warning",
-                    path=key,
-                    message=f"Legacy root-level channel key `{key}` detected",
-                    hint=f"Move `{key}` under `channels.{key}`",
-                    can_autofix=True,
-                )
-            )
-
-    channels = raw.get("channels")
-    if channels is not None and not isinstance(channels, dict):
-        report.issues.append(
-            MigrationIssue(
-                severity="error",
-                path="channels",
-                message="`channels` must be an object",
-                hint="Set `channels` to a map with keys like telegram/discord",
-                can_autofix=False,
-            )
-        )
 
 
 def _check_legacy_agent_keys(raw: dict[str, Any], report: ConfigMigrationReport) -> None:
@@ -208,7 +180,6 @@ def _check_provider_shape(raw: dict[str, Any], report: ConfigMigrationReport) ->
 def _check_unknown_top_level(raw: dict[str, Any], report: ConfigMigrationReport) -> None:
     known = {
         "provider",
-        "channels",
         "storage",
         "agent",
         "heartbeat",
@@ -216,12 +187,6 @@ def _check_unknown_top_level(raw: dict[str, Any], report: ConfigMigrationReport)
         "web_search",
         "runtime",
         "benchmarks",
-        "plugins",
-        # legacy keys handled separately
-        "telegram",
-        "discord",
-        "whatsapp",
-        "slack",
     }
     unknown = sorted(k for k in raw.keys() if k not in known)
     for key in unknown:

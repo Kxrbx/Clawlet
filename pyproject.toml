@@ -41,10 +41,9 @@ dependencies = [
 monitoring = [
     "psutil>=5.9.0",
 ]
-storage-postgres = ["asyncpg>=0.29.0"]
 tui = ["textual>=0.76.0"]
 full = [
-    "clawlet[storage-postgres,tui,monitoring]",
+    "clawlet[tui,monitoring]",
 ]
 dev = [
     "pytest>=7.0.0",

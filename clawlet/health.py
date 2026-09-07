@@ -49,7 +49,6 @@ class HealthChecker:
     Checks:
     - Provider connectivity
     - Storage backend
-    - Channel connections
     - Memory usage (requires optional `psutil` from the `monitoring` extra)
     """
     
@@ -57,11 +56,9 @@ class HealthChecker:
         self,
         provider=None,
         storage=None,
-        channels: dict = None,
     ):
         self.provider = provider
         self.storage = storage
-        self.channels = channels or {}
     
     async def check_all(self) -> dict:
         """
@@ -78,10 +75,6 @@ class HealthChecker:
             self.check_storage(),
             self.check_memory(),
         ]
-        
-        # Add channel checks
-        for name, channel in self.channels.items():
-            checks.append(self.check_channel(name, channel))
         
         check_results = await asyncio.gather(*checks, return_exceptions=True)
         
@@ -191,39 +184,6 @@ class HealthChecker:
                 name="storage",
                 status=HealthStatus.UNHEALTHY,
                 message=f"Storage error: {e}",
-            )
-    
-    async def check_channel(self, name: str, channel) -> HealthCheckResult:
-        """Check a channel's health."""
-        if not channel:
-            return HealthCheckResult(
-                name=f"channel_{name}",
-                status=HealthStatus.DEGRADED,
-                message=f"Channel {name} not configured",
-            )
-        
-        try:
-            # Check if channel has a running bot/client
-            if hasattr(channel, 'bot') and hasattr(channel.bot, 'is_ready'):
-                if channel.bot.is_ready():
-                    return HealthCheckResult(
-                        name=f"channel_{name}",
-                        status=HealthStatus.HEALTHY,
-                        message=f"Channel {name} connected",
-                    )
-            
-            # Generic check
-            return HealthCheckResult(
-                name=f"channel_{name}",
-                status=HealthStatus.DEGRADED,
-                message=f"Channel {name} status unknown",
-            )
-            
-        except Exception as e:
-            return HealthCheckResult(
-                name=f"channel_{name}",
-                status=HealthStatus.UNHEALTHY,
-                message=f"Channel {name} error: {e}",
             )
     
     async def check_memory(self) -> HealthCheckResult:

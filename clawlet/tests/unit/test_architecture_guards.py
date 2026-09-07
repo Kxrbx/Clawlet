@@ -38,13 +38,6 @@ def test_runtime_modules_do_not_hardcode_global_workspace_paths():
             assert literal not in text, f"{path} still contains forbidden workspace literal: {literal}"
 
 
-def test_channels_do_not_use_generic_outbound_consumer():
-    channels_dir = REPO_ROOT / "clawlet" / "channels"
-    for path in channels_dir.glob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        assert "consume_outbound(" not in text, f"{path} should use consume_outbound_for(channel)"
-
-
 def test_skill_registry_no_longer_stores_private_tool_registry_state():
     text = (REPO_ROOT / "clawlet" / "skills" / "registry.py").read_text(encoding="utf-8")
     assert "_tool_registry =" not in text

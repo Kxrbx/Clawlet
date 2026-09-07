@@ -319,6 +319,14 @@ Socle partagé : même `~/.clawlet/` que CLI (config, keys, sessions, skills, m�
 
 ### Reste à faire
 
-* [ ] Commiter la purge sur `v2-revamp`.
-* [ ] Resync docs mentionnant encore `--channel telegram` : `README.md`, `QUICKSTART.md`, `DEPLOYMENT.md`, `docs/channels.md`, `docs/runtime-v2.md`, `ARCHITECTURE.md`, `skills/templates/README.md`.
-* [ ] Trier le sort de `channels/base.py` + `bus/` (contrat gateway futur vs suppression) au moment de `platforms/`.
+* [x] Purge commitée sur `v2-revamp`.
+* [x] Docs resyncées (`README.md`, `QUICKSTART.md`, `DEPLOYMENT.md`, `docs/channels.md` supprimé, `docs/runtime-v2.md`, `ARCHITECTURE.md`).
+
+### v2.2 — Scope-down "core qui marche très bien" (acté)
+
+> **Décision :** périmètre réduit à la base solide, extensions seulement après. Le produit = boucle + orchestrateur + registry outils + SessionDB (SQLite uniquement) + mémoire + skills + TUI/CLI headless + cron/heartbeat.
+
+* **Supprimé** : `channels/` (contrat orphelin), `storage/postgres.py` + extra `storage-postgres` (SQLite = seule vérité), `runtime/rust_bridge.py` (fallbacks Python inlinés — `clawlet_rust_core` n'existe nulle part), `runtime/remote.py` + settings `runtime.remote` (inatteignable sans config, zéro test), `plugins/` + `clawlet plugin` + config `plugins` (SDK sans utilisateur ni test), `docs/channels.md`, step channels de `onboard`, checks channels de `health.py`.
+* **Gelé (zéro investissement)** : `runtime/{replay,recovery,retention}.py` + `cli/replay_ui.py` + `cli/recovery_ui.py` + `tui/screens/replay.py` ; `benchmarks/` corpus (smoke scripts maintenus) ; monolithe `onboard.py` ; décomposition `loop.py` (2812l) — passe dédiée ultérieure.
+* **Durcissement minimal** : 1 test lifecycle heartbeat, 1 test cron add→run-now (sans LLM).
+* **Plus tard** : décomposer `loop.py` (garde <300l jamais atteinte), split `onboard.py`, arbitrer replay/recovery (tester ou supprimer), puis seulement nouvelles surfaces (gateway, desktop).

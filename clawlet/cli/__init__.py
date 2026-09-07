@@ -26,7 +26,6 @@ from clawlet.cli.cron_commands import register_cron_commands
 from clawlet.cli.heartbeat_commands import register_heartbeat_commands
 from clawlet.cli.common_ui import _filter_breach_lines, print_command, print_footer, print_section
 from clawlet.cli.models_ui import run_models_command
-from clawlet.cli.plugin_commands import register_plugin_commands
 from clawlet.cli.recovery_commands import register_recovery_commands
 from clawlet.cli.replay_commands import register_replay_commands
 from clawlet.cli.runtime_paths import get_default_workspace_path
@@ -52,7 +51,6 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 benchmark_app = typer.Typer(help="Performance and regression benchmark commands")
-plugin_app = typer.Typer(help="Plugin SDK v2 commands")
 recovery_app = typer.Typer(help="Interrupted-run recovery commands")
 cron_app = typer.Typer(help="Cron scheduler commands")
 heartbeat_app = typer.Typer(help="Heartbeat commands")
@@ -60,7 +58,6 @@ tasks_app = typer.Typer(help="Per-task orchestration profiles and routing")
 agent_app = typer.Typer(help="Agent runtime commands", invoke_without_command=True, no_args_is_help=False)
 app.add_typer(agent_app, name="agent")
 app.add_typer(benchmark_app, name="benchmark")
-app.add_typer(plugin_app, name="plugin")
 app.add_typer(recovery_app, name="recovery")
 app.add_typer(cron_app, name="cron")
 app.add_typer(heartbeat_app, name="heartbeat")
@@ -158,7 +155,6 @@ register_agent_commands(
 register_heartbeat_commands(heartbeat_app, get_workspace_path_fn=get_workspace_path)
 register_replay_commands(app, get_workspace_path_fn=get_workspace_path)
 register_recovery_commands(recovery_app, get_workspace_path_fn=get_workspace_path)
-register_plugin_commands(plugin_app, get_workspace_path_fn=get_workspace_path)
 register_session_commands(app, get_workspace_path_fn=get_workspace_path)
 register_cron_commands(cron_app, get_workspace_path_fn=get_workspace_path)
 register_tasks_commands(tasks_app, get_workspace_path_fn=get_workspace_path)
@@ -355,7 +351,6 @@ def models(
         list_models=list_models,
     )
 
-# "?"? Plugin SDK commands "?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?
 
 if __name__ == "__main__":
     app()
