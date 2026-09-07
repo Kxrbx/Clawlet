@@ -14,7 +14,7 @@ from dataclasses import asdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 from urllib.parse import urlparse
 from uuid import uuid4
 import httpx
@@ -218,6 +218,7 @@ class AgentLoop:
         max_tool_calls_per_message: Optional[int] = None,
         storage_config: Optional[StorageConfig] = None,
         runtime_config: Optional[RuntimeSettings] = None,
+        stream_callback: Optional[Callable[[str, int], None]] = None,
     ):
         self.bus = bus
         self.workspace = workspace
@@ -230,6 +231,18 @@ class AgentLoop:
             raise ValueError("Model must be a non-empty string")
         self.model = self.model.strip()
         self.max_iterations = max_iterations
+        # Optional live-token sink (used by the TUI). When set, provider calls
+        # stream deltas instead of returning whole responses; CLI/channels leave
+        # it unset and keep the exact `complete()` path. Each streaming call is
+        # tagged with a monotonic sequence so consumers can drop stale deltas.
+        self._stream_callback = stream_callback
+        self._stream_call_seq = 0
+        # Optional usage sink: receives the conversation's current context size
+        # after each provider call. This is the latest call's prompt_tokens —
+        # summing across calls would double-count history that prompt_tokens
+        # already includes.
+        self._usage_callback: Optional[Callable[[int], None]] = None
+        self._context_used_tokens = 0
         self.max_tool_calls_per_message = max(
             1,
             int(max_tool_calls_per_message or self.MAX_TOOL_CALLS_PER_MESSAGE),
@@ -413,17 +426,15 @@ class AgentLoop:
             agent=self,
             heartbeat_handler=self._heartbeat_turn_handler,
         )
-        
+
         logger.info(
             "AgentLoop initialized with provider=%s, model=%s, tools=%s, max_tool_calls_per_message=%s"
             % (
                 provider.name,
                 self.model,
                 len(self.tools.all_tools()),
-                self.max_tool_calls_per_message,
-            )
+                self.max_tool_calls_per_message,            )
         )
-
 
     def _next_run_id(self, session_id: str) -> str:
         """Generate a deterministic-looking unique run identifier."""
@@ -649,13 +660,42 @@ class AgentLoop:
                 if enable_tools:
                     request_kwargs["tools"] = self.tools.to_openai_tools()
                     request_kwargs["tool_choice"] = "auto"
-                response = await self.provider.complete(
-                    messages=messages,
-                    model=self.model,
-                    temperature=0.7,
-                    **request_kwargs,
-                )
+                if self._stream_callback is not None:
+                    # Live streaming (TUI): forward deltas as they arrive and
+                    # accumulate them into the same LLMResponse shape. Tool calls
+                    # are still parsed downstream from the assembled content, so
+                    # provider-native tool blocks are not required.
+                    self._stream_call_seq += 1
+                    stream_seq = self._stream_call_seq
+                    chunks: list[str] = []
+                    async for chunk in self.provider.stream(
+                        messages=messages,
+                        model=self.model,
+                        temperature=0.7,
+                        **request_kwargs,
+                    ):
+                        if chunk:
+                            chunks.append(chunk)
+                            self._stream_callback(chunk, stream_seq)
+                    response = LLMResponse(
+                        content="".join(chunks),
+                        model=self.model,
+                        usage={},
+                    )
+                else:
+                    response = await self.provider.complete(
+                        messages=messages,
+                        model=self.model,
+                        temperature=0.7,
+                        **request_kwargs,
+                    )
                 self._provider_circuit_breaker.record_success()
+                usage = response.usage or {}
+                prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                if prompt_tokens:
+                    self._context_used_tokens = prompt_tokens
+                    if self._usage_callback is not None:
+                        self._usage_callback(prompt_tokens)
                 elapsed = time.time() - start_time
                 if elapsed > 10.0:
                     logger.warning(f"LLM call took {elapsed:.2f}s (exceeds 10s threshold)")

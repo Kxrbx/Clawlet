@@ -39,13 +39,86 @@ Footer {
     height: 1fr;
 }
 
-#thinking-line {
-    height: 1;
-    color: $sakura-pink;
+/* ── agent activity: draft bubble ─────────────────────────────── */
+#draft-bubble {
+    max-height: 8;
+    height: auto;
     display: none;
+    background: $sakura-pink-panel;
+    border: round $sakura-border;
+    margin: 0 1;
     padding: 0 1;
 }
 
+#draft-text {
+    color: $sakura-text;
+}
+
+/* ── agent activity: thinking trace ───────────────────────────── */
+#thinking-trace {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+#thinking-trace > CollapsibleTitle {
+    color: $sakura-pink;
+    text-style: bold;
+    padding: 0 1;
+}
+
+#thinking-trace > CollapsibleTitle:focus {
+    background: $sakura-pink-accent-dark;
+    color: $sakura-pink-light;
+}
+
+#trace-body {
+    color: $sakura-muted;
+    padding: 0 2;
+}
+
+/* ── heartbeat task rows ───────────────────────────────────────── */
+#heartbeat-panel {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+#heartbeat-panel > CollapsibleTitle {
+    color: $sakura-muted;
+    padding: 0 1;
+}
+
+#heartbeat-panel > CollapsibleTitle:focus {
+    background: $sakura-pink-accent-dark;
+    color: $sakura-pink-light;
+}
+
+#hb-body {
+    color: $sakura-muted;
+    padding: 0 2;
+}
+
+/* ── context meter ─────────────────────────────────────────────── */
+#context-meter {
+    height: 1;
+    background: $sakura-pink-panel;
+    display: none;
+    margin: 0 1;
+}
+
+#context-meter > .bar--bar {
+    color: $sakura-pink;
+    background: $sakura-pink-panel;
+}
+
+#context-meter > .bar--complete {
+    background: $sakura-pink-accent-dark;
+}
+
+/* ── status rail ───────────────────────────────────────────────── */
 #status-bar {
     height: 1;
     color: $sakura-muted;
@@ -78,6 +151,41 @@ Footer {
     padding: 0 1;
 }
 
+/* ── compact tool rows ─────────────────────────────────────────── */
+.tool-row {
+    background: transparent;
+    border: none;
+    height: auto;
+    padding: 0;
+    margin: 0;
+}
+
+.tool-row > CollapsibleTitle {
+    color: $sakura-cyan;
+    padding: 0;
+}
+
+.tool-row.status-success > CollapsibleTitle {
+    color: $sakura-ok;
+}
+
+.tool-row.status-failed > CollapsibleTitle {
+    color: $sakura-err;
+}
+
+.tool-row.status-running > CollapsibleTitle {
+    color: $sakura-pink;
+}
+
+.tool-row.status-requires-approval > CollapsibleTitle {
+    color: $sakura-warn;
+}
+
+.tool-row > Contents {
+    color: $sakura-muted;
+    padding: 0 2 1 2;
+}
+
 .panel-title {
     color: $sakura-pink;
     text-style: bold;
@@ -99,9 +207,9 @@ ApprovalModal {
 }
 
 ApprovalModal > #approval-box {
-    width: 64;
+    width: 68;
     height: auto;
-    max-height: 24;
+    max-height: 28;
     background: $sakura-pink-panel-alt;
     border: heavy $sakura-warn;
     padding: 1 2;
@@ -110,6 +218,27 @@ ApprovalModal > #approval-box {
 ApprovalModal .approval-tool {
     color: $sakura-pink-light;
     text-style: bold;
+    margin-top: 1;
+}
+
+ApprovalModal .approval-args {
+    color: $sakura-muted;
+    margin-top: 1;
+}
+
+ApprovalModal .approval-consequence {
+    color: $sakura-text;
+    margin-top: 1;
+}
+
+ApprovalModal .approval-token {
+    color: $sakura-muted;
+    margin-top: 1;
+}
+
+ApprovalModal Horizontal {
+    margin-top: 1;
+    height: auto;
 }
 
 #replay-screen, #context-screen {
@@ -167,4 +296,4 @@ ApprovalModal .approval-tool {
 .screen-hint {
     color: $sakura-muted;
     margin-top: 1;
-}
+}

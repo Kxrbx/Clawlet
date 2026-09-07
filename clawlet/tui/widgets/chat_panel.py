@@ -10,10 +10,18 @@ from textual.containers import Container
 from textual.widgets import Collapsible, Static
 
 from clawlet.tui.models import TranscriptEntry
-from clawlet.tui.theme import CYAN, ERROR, MUTED, SAKURA, SUCCESS, WARNING
+from clawlet.tui.theme import CYAN, MUTED, SAKURA, WARNING
 
 ROLE_COLORS = {"user": CYAN, "assistant": SAKURA, "warning": WARNING}
 EXPANDED_STATUSES = {"FAILED", "REQUIRES APPROVAL"}
+
+TOOL_GLYPHS = {
+    "RUNNING": "…",
+    "SUCCESS": "✓",
+    "FAILED": "✗",
+    "REQUIRES APPROVAL": "⚠",
+    "PENDING": "·",
+}
 
 
 def _header(timestamp: str, title: str, kind: str) -> Text:
@@ -45,14 +53,35 @@ def _plain_text(entry: TranscriptEntry) -> Text:
     return out
 
 
-def _tool_body(entry: TranscriptEntry) -> Text:
-    status_color = {"SUCCESS": SUCCESS, "FAILED": ERROR, "REQUIRES APPROVAL": WARNING}.get(entry.status, CYAN)
-    out = Text(f"{entry.status}\n", style=status_color)
-    out.append(f"{entry.body}\n")
+def _tool_detail(entry: TranscriptEntry) -> Text:
+    """Expandable detail under a compact tool row: status + args + raw."""
+    out = Text()
     args = entry.metadata.get("arguments") or {}
     if args:
-        out.append(f"args: {json.dumps(args, ensure_ascii=False)}\n", style="dim")
+        out.append(f"args: {json.dumps(args, ensure_ascii=False, indent=2)[:600]}\n", style="dim")
+    raw = entry.metadata.get("raw") or {}
+    if raw:
+        out.append(f"raw: {json.dumps(raw, ensure_ascii=False, indent=2)[:400]}\n", style="dim")
+    if out:
+        out.rstrip()  # rich Text.rstrip() mutates in place, returns None
     return out
+
+
+def _tool_row(entry: TranscriptEntry) -> Collapsible:
+    """Compact one-line tool chip that expands to what the tool actually did."""
+    glyph = TOOL_GLYPHS.get(entry.status, "·")
+    name = entry.title.split("·", 1)[-1].strip() if "·" in entry.title else entry.title
+    summary = (entry.body or "").strip()
+    title = f"{glyph} {name}"
+    if summary and summary != name:
+        title += f"  ·  {summary[:56]}"
+    status_class = entry.status.lower().replace(" ", "-")
+    return Collapsible(
+        Static(_tool_detail(entry)),
+        title=title,
+        collapsed=entry.status not in EXPANDED_STATUSES,
+        classes=f"tool-row status-{status_class}",
+    )
 
 
 class ChatPanel(Container):
@@ -66,11 +95,7 @@ class ChatPanel(Container):
 
     def _build_entry(self, entry: TranscriptEntry):
         if entry.kind == "tool":
-            return Collapsible(
-                Static(_tool_body(entry)),
-                title=f"{entry.title} · {entry.status}",
-                collapsed=entry.status not in EXPANDED_STATUSES,
-            )
+            return _tool_row(entry)
         if entry.kind == "assistant":
             return Static(_assistant_group(entry))
         return Static(_plain_text(entry))
@@ -88,4 +113,4 @@ class ChatPanel(Container):
                 if id(entry) not in self._widgets:
                     widget = self._build_entry(entry)
                     await self.mount(widget)
-                    self._widgets[id(entry)] = (entry, widget)
+                    self._widgets[id(entry)] = (entry, widget)

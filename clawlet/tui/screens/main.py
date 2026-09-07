@@ -1,22 +1,21 @@
-"""Main chat screen: transcript, status bar, input."""
+"""Main chat screen: transcript, agent activity, status rail, input."""
 
 from __future__ import annotations
 
-import time
+from datetime import datetime, timezone
 
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Static
+from textual.widgets import Footer, Header, Input, ProgressBar, Static
 
 from clawlet.tui.models import TuiState
 from clawlet.tui.widgets.chat_panel import ChatPanel
+from clawlet.tui.widgets.heartbeat_panel import HeartbeatPanel
 from clawlet.tui.widgets.status_bar import StatusBar
-
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
+from clawlet.tui.widgets.thinking_trace import ThinkingTrace
 
 SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("quit", "Quit"),
@@ -93,12 +92,20 @@ class MainScreen(Screen):
         Binding("pagedown", "scroll_chat_down", "Chat down", show=False),
     ]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._last_draft_text: str | None = None
+
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll(id="chat-scroll"):
             yield ChatPanel(id="chat-panel")
-        yield Static("", id="thinking-line")
+        with VerticalScroll(id="draft-bubble"):
+            yield Static("", id="draft-text")
+        yield ThinkingTrace()
+        yield ProgressBar(id="context-meter", total=128000, show_percentage=True)
         yield StatusBar(id="status-bar")
+        yield HeartbeatPanel()
         with Vertical(id="input-bar"):
             yield SlashInput(placeholder=">>> Ask Clawlet anything...  (/ for commands)", id="command-input")
             with VerticalScroll(id="slash-scroll"):
@@ -107,31 +114,57 @@ class MainScreen(Screen):
 
     def refresh_from_store(self, state: TuiState) -> None:
         self.query_one(StatusBar).update_state(state.brain, state.heartbeat)
+        self.query_one(HeartbeatPanel).update_state(state.heartbeat)
+        self._update_context_meter(state)
+        self._update_trace(state)
+        self._update_draft(state)
         self._request_chat_sync()
+
+    def _update_context_meter(self, state: TuiState) -> None:
+        meter = self.query_one("#context-meter", ProgressBar)
+        used = state.brain.context_used_tokens
+        meter.display = used > 0
+        if used > 0:
+            meter.update(progress=used, total=max(1, state.brain.context_max_tokens))
+
+    def _update_trace(self, state: TuiState, now: datetime | None = None) -> None:
+        self.query_one(ThinkingTrace).update_trace(
+            state.thinking_steps,
+            state.thinking_started_at,
+            state.thinking_done_at,
+            active=state.brain.status == "RUNNING",
+            now=now,
+        )
+
+    def _update_draft(self, state: TuiState) -> None:
+        bubble = self.query_one("#draft-bubble", VerticalScroll)
+        text = self.query_one("#draft-text", Static)
+        draft = state.draft
+        if draft is None or not draft.text:
+            bubble.display = False
+            self._last_draft_text = None
+            return
+        rendered = f"drafting…  {draft.text}"
+        if rendered != self._last_draft_text:
+            text.update(rendered)
+            self._last_draft_text = rendered
+        bubble.display = True
+        bubble.scroll_end(animate=False)
 
     def _request_chat_sync(self) -> None:
         state = self.app.controller.store.state
         transcript = list(state.transcript)
-        thinking = state.brain.status == "RUNNING"
         scroll = self.query_one("#chat-scroll", VerticalScroll)
         stick = scroll.scroll_y >= scroll.max_scroll_y - 2
 
         async def _sync_and_stick() -> None:
             await self.query_one(ChatPanel).sync_entries(transcript)
-            self._update_thinking_line(thinking)
             if stick:
                 scroll.scroll_end(animate=False)
 
         # ponytail: no exclusive=True — cancelling a sync between mount() and
         # dict registration orphans duplicates; the panel lock serializes instead
         self.run_worker(_sync_and_stick())
-
-    def _update_thinking_line(self, thinking: bool) -> None:
-        line = self.query_one("#thinking-line", Static)
-        line.display = thinking
-        if thinking:
-            frame = SPINNER[int(time.time() * 4) % len(SPINNER)]
-            line.update(f"{frame} Clawlet is thinking…")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "command-input":
@@ -189,11 +222,13 @@ class MainScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#command-input", Input).focus()
-        self.set_interval(0.25, self._tick_thinking)
+        self.set_interval(0.25, self._tick_activity)
 
-    def _tick_thinking(self) -> None:
-        if self.app.controller.store.state.brain.status == "RUNNING":
-            self._update_thinking_line(True)
+    def _tick_activity(self) -> None:
+        """Animate the trace spinner + elapsed time while the agent works."""
+        state = self.app.controller.store.state
+        if state.brain.status == "RUNNING" or state.thinking_steps:
+            self._update_trace(state, now=datetime.now(timezone.utc))
 
     def action_quit(self) -> None:
         self.app.exit()
@@ -236,4 +271,4 @@ class MainScreen(Screen):
         self.query_one("#chat-scroll", VerticalScroll).scroll_page_up()
 
     def action_scroll_chat_down(self) -> None:
-        self.query_one("#chat-scroll", VerticalScroll).scroll_page_down()
+        self.query_one("#chat-scroll", VerticalScroll).scroll_page_down()

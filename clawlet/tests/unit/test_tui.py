@@ -123,24 +123,22 @@ async def test_main_screen_mounts(tui_workspace: Path) -> None:
 
 
 async def test_thinking_indicator_shows_while_running(tui_workspace: Path) -> None:
-    from textual.widgets import Static
-
-    from clawlet.tui.widgets.chat_panel import ChatPanel
+    from clawlet.tui.widgets.thinking_trace import ThinkingTrace
 
     app = ClawletTuiApp(workspace=tui_workspace)
     async with app.run_test() as pilot:
         await pilot.pause()
-        line = app.screen.query_one("#thinking-line", Static)
-        assert not line.display
+        trace = app.screen.query_one(ThinkingTrace)
+        assert not trace.display
         app.controller.emit(RuntimeStatus(status="RUNNING"))
         await pilot.pause()
         await pilot.pause()
-        assert line.display
-        assert "thinking" in str(line.render())
+        assert trace.display
+        assert "Thinking" in str(trace.title)
         app.controller.emit(RuntimeStatus(status="IDLE"))
         await pilot.pause()
         await pilot.pause()
-        assert not line.display
+        assert not trace.display
 
 
 async def test_chat_scrolls_large_conversation(tui_workspace: Path) -> None:
@@ -389,7 +387,8 @@ async def test_tool_morph_remounts_single_widget(tui_workspace: Path) -> None:
         await pilot.pause()
         tools = chat.query(Collapsible)
         assert len(tools) == 1
-        assert "SUCCESS" in str(tools[0].title)
+        assert "shell" in str(tools[0].title)
+        assert "status-success" in tools[0].classes
 
 
 async def test_concurrent_sync_stays_consistent(tui_workspace: Path) -> None:

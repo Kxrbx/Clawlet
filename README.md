@@ -192,6 +192,8 @@ clawlet heartbeat disable
 
 Bare `clawlet` opens the full-screen Sakura console: chat, sessions, command palette, replay views, approval prompts, log tail.
 
+The agent console separates four layers: your prompt, live agent activity (an expandable **thinking trace** of sanitized steps plus a **drafting** bubble that streams the answer as the model writes it), the answer itself (with compact expandable **tool rows**), and actions (approval card, status rail with context meter, heartbeat task rows). Interaction patterns adapted from [Beautiful UI](https://www.beautifului.dev/) (MIT).
+
 ```bash
 clawlet
 clawlet tui --workspace ~/.clawlet --model anthropic/claude-sonnet-4-20250514

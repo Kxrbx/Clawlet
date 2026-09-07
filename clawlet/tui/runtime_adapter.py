@@ -1,18 +1,41 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 from clawlet.bus.queue import InboundMessage, OutboundMessage
 from clawlet.cli.runtime_ui import _build_effective_heartbeat_context, _create_provider
-from clawlet.tui.events import ApprovalRequest, AssistantMessage, BrainStateUpdate, HeartbeatSnapshot, LogEvent, RuntimeStatus, ToolLifecycle
+from clawlet.tui.events import (
+    ActivityStep,
+    ApprovalRequest,
+    AssistantDelta,
+    AssistantMessage,
+    BrainStateUpdate,
+    HeartbeatSnapshot,
+    LogEvent,
+    RuntimeStatus,
+    ToolLifecycle,
+    UsageUpdate,
+)
 from clawlet.workspace_layout import get_workspace_layout
 
 EventSink = Callable[[object], None]
+
+# Progress event types that surface in the thinking trace. `tool_failed` and
+# `approval_required` additionally produce a ToolLifecycle row (richer than the
+# registry path, which never fires for pre-execution rejections).
+_TRACE_EVENT_TYPES = {
+    "started",
+    "provider_started",
+    "tool_started",
+    "tool_completed",
+    "tool_failed",
+    "finalizing",
+}
 
 
 class InstrumentedToolRegistry:
@@ -50,15 +73,61 @@ class LocalRuntimeHandle:
     poll_outbound: Callable[[], Awaitable[OutboundMessage]]
     stop: Callable[[], Awaitable[None]]
     emit_snapshot: Callable[[], None]
-    get_raw_history: Callable[[], list[dict[str, Any]]] = lambda: []  # ponytail: in-memory read, storage query if richer view needed
+    get_raw_history: Callable[[], list[dict[str, Any]]] = list  # ponytail: in-memory read, storage query if richer view needed
 
 
-async def create_local_runtime(workspace: Path, model: Optional[str], emit: EventSink, session_id: str = "local") -> LocalRuntimeHandle:
+def _heartbeat_task_rows(workspace: Path, config) -> list[tuple[str, str, str]]:
+    """Real scheduled-task rows for the heartbeat panel — no fabricated times.
+
+    Prefers the actual scheduler (next-run datetimes from config/jobs/state);
+    falls back to the heartbeat markdown task lines annotated with the real
+    interval when no scheduler is configured.
+    """
+    try:
+        # Reuse the CLI's scheduler builder rather than re-wiring settings here.
+        from clawlet.cli.cron_ui import _build_scheduler
+
+        rows: list[tuple[str, str, str]] = []
+        for task_id, next_run in _build_scheduler(workspace).get_next_runs(5):
+            meta = next_run.strftime("%H:%M UTC") if next_run.tzinfo else next_run.strftime("%H:%M")
+            rows.append((task_id[:44], meta, "scheduled"))
+        if rows:
+            return rows
+    except (OSError, ValueError):
+        pass
+
+    # Fallback: heartbeat.md task lines with the real interval as metadata.
+    hb_cfg = getattr(config, "heartbeat", None)
+    interval = int(getattr(hb_cfg, "interval_minutes", 0) or 0)
+    enabled = bool(getattr(hb_cfg, "enabled", False))
+    meta = f"every {interval}m" if interval > 0 else "manual"
+    status = "scheduled" if enabled else "paused"
+    rows: list[tuple[str, str, str]] = []
+    layout = get_workspace_layout(workspace)
+    try:
+        heartbeat_raw = layout.heartbeat_path.read_text(encoding="utf-8")
+        heartbeat_text = _build_effective_heartbeat_context(
+            f"## Periodic Tasks\n\n{heartbeat_raw}", hb_cfg
+        ) or "comment-only"
+    except FileNotFoundError:
+        heartbeat_text = "comment-only"
+    for line in heartbeat_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
+            rows.append((stripped[:44], meta, status))
+        if len(rows) >= 5:
+            break
+    if not rows:
+        rows = [("No scheduled heartbeat tasks", "", "idle")]
+    return rows
+
+
+async def create_local_runtime(workspace: Path, model: str | None, emit: EventSink, session_id: str = "local") -> LocalRuntimeHandle:
     from clawlet.agent.identity import IdentityLoader
     from clawlet.agent.loop import AgentLoop
+    from clawlet.bus.queue import MessageBus
     from clawlet.config import load_config
     from clawlet.runtime import build_runtime_services
-    from clawlet.bus.queue import MessageBus
 
     identity = IdentityLoader(workspace).load_all()
     bus = MessageBus()
@@ -86,19 +155,56 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
         if not text.strip():
             return
         # ponytail: tool_started/completed already covered (richer) by
-        # InstrumentedToolRegistry; only rejections (tool_failed pre-execution)
-        # and approvals have no registry emit.
-        event_map = {
-            "tool_failed": "FAILED",
-            "approval_required": "REQUIRES APPROVAL",
-        }
-        status = event_map.get(event_type)
-        if status:
-            emit(ToolLifecycle(session_id=session_id, tool_name=detail or "tool", status=status, summary=text.strip(), raw={"detail": detail, "final": final}))
+        # InstrumentedToolRegistry; tool_failed/approval_required have no
+        # registry emit, so they become ToolLifecycle rows.
+        if event_type in {"tool_failed", "approval_required"}:
+            status = "FAILED" if event_type == "tool_failed" else "REQUIRES APPROVAL"
+            emit(
+                ToolLifecycle(
+                    session_id=session_id,
+                    tool_name=detail or "tool",
+                    status=status,
+                    summary=text.strip(),
+                    raw={"detail": detail, "final": final},
+                )
+            )
+        elif event_type in _TRACE_EVENT_TYPES:
+            emit(ActivityStep(event_type=event_type, text=text.strip(), detail=detail.strip()))
         else:
             emit(LogEvent(level="DEBUG", channel="system", message=f"{event_type}: {text.strip()}"))
 
     agent._publish_progress_update = MethodType(_progress_override, agent)
+
+    def _on_stream_delta(chunk: str, seq: int) -> None:
+        """Forward a streamed token from the agent loop to the TUI via the bus.
+
+        Bus messages are FIFO with the final assistant message, so the draft
+        always resolves in order; stale deltas carry a monotonic seq and are
+        dropped by the store if they arrive after a superseding call.
+        """
+        if not chunk:
+            return
+        run_id = getattr(agent, "_current_run_id", "") or session_id
+        try:
+            asyncio.create_task(
+                bus.publish_outbound(
+                    OutboundMessage(
+                        channel="cli",
+                        chat_id=session_id,
+                        content=chunk,
+                        metadata={"stream": True, "stream_seq": seq, "stream_run_id": run_id},
+                    )
+                )
+            )
+        except (RuntimeError, OSError):
+            pass  # best-effort forwarder: drop a delta on a closed/cancelled bus
+
+    agent.set_stream_callback(_on_stream_delta)
+
+    def _on_usage(cumulative: int) -> None:
+        emit(UsageUpdate(context_used_tokens=cumulative))
+
+    agent.set_usage_callback(_on_usage)
 
     agent_task = asyncio.create_task(agent.run())
     emit(RuntimeStatus(status="IDLE", detail="Runtime booted."))
@@ -133,7 +239,7 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
                 session_id=session_id,
                 provider=provider_name,
                 model=effective_model or "default",
-                context_used_tokens=0,
+                context_used_tokens=getattr(agent, "_context_used_tokens", 0),
                 context_max_tokens=128000,
                 memory=memory,
                 tools=tools,
@@ -142,29 +248,16 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
         )
         hb_cfg = config.heartbeat
         quiet = "Disabled" if int(getattr(hb_cfg, "quiet_hours_start", 0) or 0) == int(getattr(hb_cfg, "quiet_hours_end", 0) or 0) else f"{hb_cfg.quiet_hours_start}:00-{hb_cfg.quiet_hours_end}:00 UTC"
-        layout = get_workspace_layout(workspace)
-        heartbeat_text = "comment-only"
-        try:
-            heartbeat_raw = layout.heartbeat_path.read_text(encoding="utf-8")
-            heartbeat_text = _build_effective_heartbeat_context(f"## Periodic Tasks\n\n{heartbeat_raw}", hb_cfg) or "comment-only"
-        except FileNotFoundError:
-            pass
-        next_runs = []
-        for line in heartbeat_text.splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
-                next_runs.append(f"00:30:00 [task] {stripped[:48]}")
-            if len(next_runs) >= 3:
-                break
+        tasks = _heartbeat_task_rows(workspace, config)
         emit(
             HeartbeatSnapshot(
                 enabled=bool(getattr(hb_cfg, "enabled", False)),
                 interval_minutes=int(getattr(hb_cfg, "interval_minutes", 0) or 0),
                 quiet_hours=quiet,
-                next_runs=next_runs or ["No scheduled heartbeat tasks"],
                 pulse_label=f"{int(getattr(hb_cfg, 'interval_minutes', 0) or 0)}m pulse",
                 last_task="Awaiting first run",
-                active_crons=len(next_runs),
+                active_crons=len(tasks),
+                tasks=tasks,
             )
         )
 
@@ -177,6 +270,15 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
         if message.chat_id != session_id:
             return message
         metadata = message.metadata or {}
+        if metadata.get("stream"):
+            emit(
+                AssistantDelta(
+                    text=message.content,
+                    seq=int(metadata.get("stream_seq") or 0),
+                    run_id=str(metadata.get("stream_run_id") or ""),
+                )
+            )
+            return message
         if metadata.get("telegram_pending_approval") or metadata.get("pending_confirmation"):
             pending = metadata.get("telegram_pending_approval") or metadata.get("pending_confirmation") or {}
             emit(
@@ -214,4 +316,4 @@ async def create_local_runtime(workspace: Path, model: Optional[str], emit: Even
         stop=stop,
         emit_snapshot=emit_snapshot,
         get_raw_history=get_raw_history,
-    )
+    )
