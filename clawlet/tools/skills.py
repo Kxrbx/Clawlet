@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from clawlet.paths import get_default_workspace_path
-from clawlet.skills.installer import SkillInstallerService
+from clawlet.skills.installer import (
+    SKILL_METADATA_FILENAME,
+    SkillInstallerService,
+    skill_name_from_dir as _skill_name_from_dir,
+)
 from clawlet.tools.registry import BaseTool, ToolResult
 from clawlet.workspace_layout import WorkspaceLayout, get_workspace_layout
 

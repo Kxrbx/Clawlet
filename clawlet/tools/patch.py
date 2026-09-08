@@ -12,6 +12,13 @@ from clawlet.tools.files import _secure_resolve
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
+def validate_patch(patch: str) -> tuple[bool, str]:
+    """Reject non-diff input before the applicator runs."""
+    if "@@" not in patch:
+        return False, "Patch must include at least one unified diff hunk (@@ ...)"
+    return True, "ok"
+
+
 class ApplyPatchTool(BaseTool):
     """Apply a unified diff patch to a single file."""
 
