@@ -154,6 +154,98 @@ DEFAULT_OPENROUTER_MODELS = [
 ]
 
 
+async def _select_from_model_ids(
+    model_ids: list[str],
+    *,
+    fallback: str,
+    popular_patterns: tuple[str, ...] = (),
+    max_popular: int = 5,
+) -> str:
+    """Arrow-key model picker over a known id list (OpenRouter-style UX).
+
+    Small lists go straight to selection; long ones get popular shortcuts
+    plus search/show-all. Never returns empty: falls back to `fallback`.
+    """
+    ids = list(dict.fromkeys(m for m in model_ids if m))
+    if not ids:
+        return fallback
+    if not popular_patterns or len(ids) <= 12:
+        selected = await questionary.select(
+            "  Select a model:",
+            choices=ids,
+            style=CUSTOM_STYLE,
+        ).ask_async()
+        return selected or fallback
+
+    popular = [
+        m for m in ids if any(p in m.lower() for p in popular_patterns)
+    ][:max_popular]
+
+    choices = [f"🔍 Search models...", f"📋 Show all ({len(ids)} models)"]
+    choices.extend(popular)
+
+    choice = await questionary.select(
+        "  Select a model:",
+        choices=choices,
+        style=CUSTOM_STYLE,
+    ).ask_async()
+
+    if choice is None:
+        return popular[0] if popular else ids[0]
+    if choice.startswith("🔍"):
+        return await _search_models(ids, fallback)
+    if choice.startswith("📋"):
+        return await _show_all_models(ids, fallback)
+    return choice
+
+
+async def _select_live_model(
+    label: str,
+    provider_cls,
+    auth: dict,
+    *,
+    static_ids: tuple[str, ...] | list[str] = (),
+    popular_patterns: tuple[str, ...] = (),
+    fallback: str,
+) -> str:
+    """Fetch a provider's model list (live or static fallback) then pick.
+
+    The provider is built lazily: a missing key (allowed by onboarding)
+    skips the live call and offers the known static list instead.
+    """
+    print_section("Choose Model", f"Fetching available {label} models...")
+
+    ids: list[str] = []
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(f"Connecting to {label}...", total=100)
+            models = await provider_cls(**auth).list_models()
+            progress.update(task, completed=100, description="Done!")
+
+        raw = [
+            (m if isinstance(m, str) else (m.get("id") or m.get("name", "")))
+            for m in (models or [])
+        ]
+        ids = [m.removeprefix("models/") for m in raw if m]
+        ids = list(dict.fromkeys(ids))
+    except Exception as e:
+        logger.error(f"Failed to fetch {label} models: {e}")
+        ids = list(static_ids)
+
+    if not ids:
+        console.print("  [yellow]! No models found, using default[/yellow]")
+        return fallback
+
+    console.print(f"\n  [green]✓[/green] Found {len(ids)} models")
+    return await _select_from_model_ids(
+        ids, fallback=fallback, popular_patterns=popular_patterns
+    )
+
+
 async def _select_openrouter_model(api_key: str = None) -> str:
     """Select OpenRouter model with arrow key navigation and search."""
     print_section("Choose Model", "Fetching available models...")
@@ -190,49 +282,18 @@ async def _select_openrouter_model(api_key: str = None) -> str:
         # Extract model IDs
         model_ids = [m.get("id", "Unknown") for m in models if m.get("id")]
 
-        # Show top 10 popular models
-        popular_patterns = [
-            "anthropic/claude",
-            "openai/gpt-4",
-            "openai/gpt-4o",
-            "meta-llama/llama",
-            "google/gemini",
-            "mistral/mistral",
-        ]
-
-        popular = []
-        for model_id in model_ids:
-            if any(pattern in model_id.lower() for pattern in popular_patterns):
-                popular.append(model_id)
-            if len(popular) >= 10:
-                break
-
-        # Create choices with search option
-        choices = ["🔍 Search models...", f"📋 Show all ({len(models)} models)"]
-        if popular:
-            choices.extend(popular[:5])
-
-        choice = await questionary.select(
-            "  Select a model:",
-            choices=choices,
-            style=CUSTOM_STYLE,
-        ).ask_async()
-
-        if choice.startswith("🔍"):
-            return await _search_models(models, model_ids)
-        elif choice.startswith("📋"):
-            return await _show_all_models(models, model_ids)
-        elif choice in popular[:5]:
-            return choice
-        else:
-            # Default to first popular model
-            return (
-                popular[0]
-                if popular
-                else model_ids[0]
-                if model_ids
-                else DEFAULT_OPENROUTER_MODELS[0]
-            )
+        return await _select_from_model_ids(
+            model_ids,
+            fallback=DEFAULT_OPENROUTER_MODELS[0],
+            popular_patterns=(
+                "anthropic/claude",
+                "openai/gpt-4",
+                "openai/gpt-4o",
+                "meta-llama/llama",
+                "google/gemini",
+                "mistral/mistral",
+            ),
+        )
 
     except Exception as e:
         logger.error(f"Failed to fetch models: {e}")
@@ -240,11 +301,8 @@ async def _select_openrouter_model(api_key: str = None) -> str:
         return await _use_default_models()
 
 
-async def _search_models(models: list, model_ids: list = None) -> str:
+async def _search_models(model_ids: list[str], fallback: str) -> str:
     """Search and select from available models with arrow key navigation."""
-    if model_ids is None:
-        model_ids = [m.get("id", "Unknown") for m in models if m.get("id")]
-
     console.print()
     search_term = await questionary.text(
         "  🔍 Search models (leave empty to browse all):",
@@ -268,9 +326,9 @@ async def _search_models(models: list, model_ids: list = None) -> str:
             ).ask_async()
 
             if retry:
-                return await _show_all_models(models, model_ids)
+                return await _show_all_models(model_ids, fallback)
             else:
-                return DEFAULT_OPENROUTER_MODELS[0]
+                return fallback
 
         console.print(f"\n  [green]✓[/green] [{len(filtered)} models found]")
 
@@ -281,17 +339,14 @@ async def _search_models(models: list, model_ids: list = None) -> str:
             style=CUSTOM_STYLE,
         ).ask_async()
 
-        return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
+        return selected if selected else fallback
 
     # If no search term, show all models
-    return await _show_all_models(models, model_ids)
+    return await _show_all_models(model_ids, fallback)
 
 
-async def _show_all_models(models: list, model_ids: list = None) -> str:
+async def _show_all_models(model_ids: list[str], fallback: str) -> str:
     """Show all available models with arrow key navigation."""
-    if model_ids is None:
-        model_ids = [m.get("id", "Unknown") for m in models if m.get("id")]
-
     console.print(f"\n  [[{len(model_ids)} models available]]")
 
     # Use select with arrow key navigation for all models
@@ -301,7 +356,7 @@ async def _show_all_models(models: list, model_ids: list = None) -> str:
         style=CUSTOM_STYLE,
     ).ask_async()
 
-    return selected if selected else DEFAULT_OPENROUTER_MODELS[0]
+    return selected if selected else fallback
 
 
 async def _use_default_models() -> str:
@@ -568,23 +623,19 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
         console.print("│  [dim]Install from: ollama.ai[/dim]")
         console.print("│")
 
-        # Check if running
-        print("│  [dim]Checking connection...[/dim]")
-        import httpx
+        from clawlet.providers.ollama import OllamaProvider
 
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await asyncio.wait_for(
-                    client.get("http://localhost:11434/api/tags"), timeout=2.0
-                )
-                response.raise_for_status()
-                console.print("│  [green]✓ Ollama is running[/green]")
-        except:
+        ollama_models = await OllamaProvider().list_models()
+        if ollama_models:
+            console.print("│  [green]✓ Ollama is running[/green]")
+            print_footer()
+            model = await _select_from_model_ids(
+                ollama_models, fallback="llama3.2"
+            )
+        else:
             console.print("│  [yellow]! Could not connect to Ollama[/yellow]")
-
-        print_footer()
-
-        model = Prompt.ask("\n  Model name", default="llama3.2")
+            print_footer()
+            model = Prompt.ask("\n  Model name", default="llama3.2")
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -646,7 +697,16 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="gpt-5")
+        from clawlet.providers.openai import OPENAI_MODELS, OpenAIProvider
+
+        model = await _select_live_model(
+            "OpenAI",
+            OpenAIProvider,
+            {"api_key": api_key},
+            static_ids=OPENAI_MODELS,
+            popular_patterns=("gpt-4o", "gpt-5", "o3", "o4"),
+            fallback="gpt-5",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -672,7 +732,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="claude-sonnet-5-20260203")
+        from clawlet.providers.anthropic import ANTHROPIC_MODELS, AnthropicProvider
+
+        model = await _select_live_model(
+            "Anthropic",
+            AnthropicProvider,
+            {"api_key": api_key},
+            static_ids=ANTHROPIC_MODELS,
+            fallback="claude-sonnet-5-20260203",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -698,7 +766,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="abab7-preview")
+        from clawlet.providers.minimax import MiniMaxProvider
+
+        model = await _select_live_model(
+            "MiniMax",
+            MiniMaxProvider,
+            {"api_key": api_key},
+            static_ids=MiniMaxProvider.DEFAULT_MODELS,
+            fallback="abab7-preview",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -724,7 +800,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="kimi-k2.5")
+        from clawlet.providers.moonshot import MoonshotProvider
+
+        model = await _select_live_model(
+            "Moonshot AI",
+            MoonshotProvider,
+            {"api_key": api_key},
+            static_ids=MoonshotProvider.DEFAULT_MODELS,
+            fallback="kimi-k2.5",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -750,7 +834,16 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="gemini-4-pro")
+        from clawlet.providers.google import GOOGLE_MODELS, GoogleProvider
+
+        model = await _select_live_model(
+            "Google",
+            GoogleProvider,
+            {"api_key": api_key},
+            static_ids=GOOGLE_MODELS,
+            popular_patterns=("gemini-4", "gemini-3"),
+            fallback="gemini-4-pro",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -776,7 +869,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="qwen4")
+        from clawlet.providers.qwen import QwenProvider
+
+        model = await _select_live_model(
+            "Qwen",
+            QwenProvider,
+            {"api_key": api_key},
+            static_ids=QwenProvider.DEFAULT_MODELS,
+            fallback="qwen4",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -802,7 +903,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="glm-5")
+        from clawlet.providers.zai import ZAIProvider
+
+        model = await _select_live_model(
+            "Z.AI",
+            ZAIProvider,
+            {"api_key": api_key},
+            static_ids=ZAIProvider.DEFAULT_MODELS,
+            fallback="glm-5",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -832,7 +941,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Token saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="gpt-4.2")
+        from clawlet.providers.copilot import CopilotProvider
+
+        model = await _select_live_model(
+            "GitHub Copilot",
+            CopilotProvider,
+            {"access_token": access_token},
+            static_ids=CopilotProvider.DEFAULT_MODELS,
+            fallback="gpt-4.2",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -858,7 +975,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="openai/gpt-5")
+        from clawlet.providers.vercel import VercelProvider
+
+        model = await _select_live_model(
+            "Vercel",
+            VercelProvider,
+            {"api_key": api_key},
+            static_ids=VercelProvider.DEFAULT_MODELS,
+            fallback="openai/gpt-5",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -884,7 +1009,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="zen-3.0")
+        from clawlet.providers.opencode_zen import OpenCodeZenProvider
+
+        model = await _select_live_model(
+            "OpenCode Zen",
+            OpenCodeZenProvider,
+            {"api_key": api_key},
+            static_ids=OpenCodeZenProvider.DEFAULT_MODELS,
+            fallback="zen-3.0",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -910,7 +1043,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="mi-agent-2")
+        from clawlet.providers.xiaomi import XiaomiProvider
+
+        model = await _select_live_model(
+            "Xiaomi",
+            XiaomiProvider,
+            {"api_key": api_key},
+            static_ids=XiaomiProvider.DEFAULT_MODELS,
+            fallback="mi-agent-2",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -936,7 +1077,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="synthetic-llm-2")
+        from clawlet.providers.synthetic import SyntheticProvider
+
+        model = await _select_live_model(
+            "Synthetic",
+            SyntheticProvider,
+            {"api_key": api_key},
+            static_ids=SyntheticProvider.DEFAULT_MODELS,
+            fallback="synthetic-llm-2",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
@@ -962,7 +1111,15 @@ async def run_onboarding(workspace: Optional[Path] = None) -> Config:
             console.print("  [green]✓[/green] Key saved")
 
         console.print()
-        model = Prompt.ask("  Model name", default="venice-llama-4")
+        from clawlet.providers.venice import VeniceProvider
+
+        model = await _select_live_model(
+            "Venice AI",
+            VeniceProvider,
+            {"api_key": api_key},
+            static_ids=VeniceProvider.DEFAULT_MODELS,
+            fallback="venice-llama-4",
+        )
         console.print(f"  [green]✓[/green] Model: [bold]{model}[/bold]")
 
         provider_config = ProviderConfig(
