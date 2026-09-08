@@ -138,6 +138,7 @@ class LMStudioProvider(BaseProvider):
         """
         model = model or self.default_model
         client = await self._get_client()
+        self.last_stream_usage = {}
         
         payload = {
             "model": model,

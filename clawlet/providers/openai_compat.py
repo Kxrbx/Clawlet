@@ -125,6 +125,7 @@ class OpenAICompatibleProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         model = model or self.default_model
         client = await self._get_client()
+        self.last_stream_usage = {}
         payload = {
             "model": model,
             "messages": messages,
@@ -133,6 +134,8 @@ class OpenAICompatibleProvider(BaseProvider):
             "stream": True,
             **kwargs,
         }
+        if "stream_options" not in kwargs:
+            payload["stream_options"] = {"include_usage": True}
         try:
             async with client.stream(
                 "POST", "/chat/completions", json=payload
@@ -150,6 +153,12 @@ class OpenAICompatibleProvider(BaseProvider):
                         data = _json.loads(data_str)
                     except ValueError:
                         continue
+                    usage = data.get("usage")
+                    if isinstance(usage, dict):
+                        self.last_stream_usage = {
+                            k: usage.get(k, 0)
+                            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                        }
                     choices = data.get("choices") or []
                     if not choices:
                         continue

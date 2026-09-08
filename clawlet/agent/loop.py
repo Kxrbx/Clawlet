@@ -709,7 +709,7 @@ class AgentLoop(
                     response = LLMResponse(
                         content="".join(chunks),
                         model=self.model,
-                        usage={},
+                        usage=dict(getattr(self.provider, "last_stream_usage", None) or {}),
                     )
                 else:
                     response = await self.provider.complete(

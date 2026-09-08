@@ -159,6 +159,7 @@ class OllamaProvider(BaseProvider):
         """
         model = model or self.default_model
         client = await self._get_client()
+        self.last_stream_usage = {}
         
         payload = {
             "model": model,
@@ -184,6 +185,14 @@ class OllamaProvider(BaseProvider):
                     
                     try:
                         data = json.loads(line)
+                        if data.get("done") and ("prompt_eval_count" in data or "eval_count" in data):
+                            prompt_tokens = data.get("prompt_eval_count", 0) or 0
+                            completion_tokens = data.get("eval_count", 0) or 0
+                            self.last_stream_usage = {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": prompt_tokens + completion_tokens,
+                            }
                         if "message" in data:
                             content = data["message"].get("content", "")
                             if content:

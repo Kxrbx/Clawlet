@@ -147,6 +147,7 @@ class BaseProvider(ABC):
     
     def __init__(self):
         self._http_manager: Optional[HTTPClientManager] = None
+        self.last_stream_usage: Dict[str, Any] = {}
     
     @property
     @abstractmethod
@@ -175,7 +176,12 @@ class BaseProvider(ABC):
         max_tokens: int = 4096,
         **kwargs
     ) -> AsyncIterator[str]:
-        """Stream a chat completion."""
+        """Stream a chat completion.
+
+        Implementations SHOULD record OpenAI-style usage seen during the
+        stream on ``self.last_stream_usage`` (keys prompt_tokens /
+        completion_tokens / total_tokens, default {}).
+        """
         pass
     
     @abstractmethod
