@@ -33,6 +33,11 @@ from clawlet.agent.history_trimmer import HistoryTrimmer
 from clawlet.agent.message_builder import MessageBuilder
 from clawlet.agent.models import ConversationState, Message, ToolCall
 from clawlet.agent.outbound_publisher import OutboundPublisher
+from clawlet.agent.progress_events import ProgressPublishingMixin
+from clawlet.agent.session_persistence import SessionPersistenceMixin
+from clawlet.agent.skill_install_intent import SkillInstallIntentMixin
+from clawlet.agent.tool_pipeline import ToolPipelineMixin
+from clawlet.agent.turn_policy import TurnPolicyMixin
 from clawlet.agent.prompts import (
     AUTONOMOUS_EXECUTION_NUDGE,
     COMMITMENT_FOLLOWTHROUGH_NUDGE,
@@ -84,7 +89,13 @@ from clawlet.runtime.failures import classify_error_text, classify_exception, to
 UTC_TZ = timezone.utc
 
 
-class AgentLoop:
+class AgentLoop(
+    ProgressPublishingMixin,
+    SessionPersistenceMixin,
+    SkillInstallIntentMixin,
+    ToolPipelineMixin,
+    TurnPolicyMixin,
+):
     """
     The agent loop is the core processing engine.
     
@@ -435,6 +446,24 @@ class AgentLoop:
                 len(self.tools.all_tools()),
                 self.max_tool_calls_per_message,            )
         )
+
+    def set_stream_callback(self, callback: Optional[Callable[[str, int], None]]) -> None:
+        """Attach (or detach, with None) a sink receiving streamed text deltas.
+
+        The callback receives ``(chunk, seq)`` where ``seq`` is a monotonic
+        counter incremented once per streaming provider call - callers can use
+        it to ignore deltas from superseded attempts.
+        """
+        self._stream_callback = callback
+
+    def set_usage_callback(self, callback: Optional[Callable[[int], None]]) -> None:
+        """Attach (or detach, with None) a sink receiving context usage.
+
+        Called with the conversation's current token size (the latest call's
+        prompt_tokens) after each provider call; receives only provider-reported
+        usage (never an estimate).
+        """
+        self._usage_callback = callback
 
     def _next_run_id(self, session_id: str) -> str:
         """Generate a deterministic-looking unique run identifier."""
@@ -989,54 +1018,6 @@ class AgentLoop:
             return f"Install failed: {result.error or result.output}"
         # Let the normal reasoning/tool loop handle ambiguous install requests.
         return None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            )
-            await self._publish_progress_update(
-                "tool_failed",
-                f"`{tool_name}` failed.",
-                detail=result.error or result.output[:200],
-            )
-            
-            if is_transient_failure and failures >= self._tool_failure_threshold:
-                # Trip circuit breaker
-                open_until = now + timedelta(seconds=self._tool_circuit_timeout_seconds)
-                self._tool_circuit_open_until[failure_key] = open_until
-                logger.error(
-                    f"Circuit breaker tripped for tool bucket '{failure_key}'! "
-                    f"Open until {open_until.isoformat()}"
-                )
-        
-        return result
-
-
-
 
 
     def _canonicalize_heartbeat_outcome(

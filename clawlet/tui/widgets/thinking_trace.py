@@ -29,11 +29,22 @@ def _elapsed_label(started_at: datetime | None, done_at: datetime | None, now: d
     return f"{int(seconds // 60)}m {int(seconds % 60)}s"
 
 
+def _step_status(step: TraceStep) -> str:
+    # Same mapping as TuiStore._trace_status: status is presentation-only,
+    # derived from event_type so the store keeps only the source of truth.
+    if step.event_type == "tool_completed":
+        return "DONE"
+    if step.event_type == "tool_failed":
+        return "FAILED"
+    return "RUNNING"
+
+
 def _step_line(step: TraceStep) -> Text:
-    if step.status == "DONE":
+    status = _step_status(step)
+    if status == "DONE":
         glyph = "✓"
         color = SUCCESS
-    elif step.status == "FAILED":
+    elif status == "FAILED":
         glyph = "✗"
         color = ERROR
     else:

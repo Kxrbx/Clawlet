@@ -93,7 +93,9 @@ def _heartbeat_task_rows(workspace: Path, config) -> list[tuple[str, str, str]]:
             rows.append((task_id[:44], meta, "scheduled"))
         if rows:
             return rows
-    except (OSError, ValueError):
+    except Exception:
+        # Best-effort panel: missing tz database (Windows without tzdata),
+        # unreadable state, etc. all mean "no scheduler rows" for the UI.
         pass
 
     # Fallback: heartbeat.md task lines with the real interval as metadata.
