@@ -406,6 +406,8 @@ async def run_agent(workspace: Path, model: Optional[str]):
         storage_config=config.storage,
         runtime_config=config.runtime,
     )
+    # ponytail: orchestrator sub-agent spawns read provider/profiles from here; without it every delegation fails with "API key required"
+    agent.full_config = config
 
     heartbeat_runner = None
     heartbeat_task = None

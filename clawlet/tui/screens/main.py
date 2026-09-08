@@ -25,6 +25,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("replay", "Open replay viewer"),
     ("sessions", "Browse past sessions"),
     ("context", "Show raw context"),
+    ("model", "Switch provider/model"),
     ("export", "Export transcript"),
     ("help", "Show this help"),
 )

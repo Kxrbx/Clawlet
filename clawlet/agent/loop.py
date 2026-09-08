@@ -746,7 +746,15 @@ class AgentLoop(
                 }
                 if isinstance(e, httpx.HTTPStatusError):
                     payload["status_code"] = int(getattr(e.response, "status_code", 0) or 0)
-                    error_body = mask_secrets(getattr(e.response, "text", "") or "") or ""
+                    try:
+                        try:
+                            # ponytail: streaming bodies need aread() before .text, else the real error is masked
+                            await e.response.aread()
+                        except Exception:
+                            pass
+                        error_body = mask_secrets(e.response.text or "") or ""
+                    except Exception:
+                        error_body = ""
                     if error_body:
                         if len(error_body) > 2000:
                             error_body = error_body[:2000] + "... [truncated]"

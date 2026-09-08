@@ -91,6 +91,8 @@ class ClawletTuiApp(App):
             from clawlet.tui.screens.raw_context import RawContextScreen
 
             await self.push_screen(RawContextScreen())
+        elif command == "model":
+            await self._open_model_picker()
         elif command == "export":
             await self.export_transcript(Path(arg) if arg else None)
         elif command == "help":
@@ -100,6 +102,67 @@ class ClawletTuiApp(App):
 
     def notify_help(self) -> None:
         self.notify(HELP_TEXT)
+
+    async def _open_model_picker(self) -> None:
+        from clawlet.config import load_config
+        from clawlet.tui.modals.model_picker import configured_providers
+        from clawlet.tui.modals.picker import PickerModal
+
+        try:
+            config = load_config(self.workspace)
+        except Exception as exc:
+            self.notify(f"Cannot load config: {exc}", severity="error")
+            return
+        providers = configured_providers(config)
+        if not providers:
+            self.notify("No providers configured.", severity="warning")
+            return
+        if len(providers) == 1:
+            # ponytail: single provider — skip straight to models
+            await self._push_model_step(config, providers[0].id)
+            return
+        await self.push_screen(
+            PickerModal(
+                "Provider",
+                lambda: providers,
+                placeholder="Filter providers...",
+                allow_custom_input=False,
+                empty_text="No providers match",
+            ),
+            lambda selected: self._on_provider_picked(config, selected),
+        )
+
+    def _on_provider_picked(self, config: object, provider: str | None) -> None:
+        if provider:
+            self.run_worker(self._push_model_step(config, provider))
+
+    async def _push_model_step(self, config: object, provider: str) -> None:
+        from clawlet.tui.modals.model_picker import load_models
+        from clawlet.tui.modals.picker import PickerModal
+
+        await self.push_screen(
+            PickerModal(
+                f"Model · {provider}",
+                lambda: load_models(provider, config),
+                placeholder="Filter or type exact model id...",
+                allow_custom_input=True,
+                empty_text="No models found — type an exact id + Enter",
+            ),
+            lambda selected: self._on_model_picked(provider, selected),
+        )
+
+    def _on_model_picked(self, provider: str, model: str | None) -> None:
+        if model:
+            self.run_worker(self._apply_model(provider, model))
+
+    async def _apply_model(self, provider: str, model: str) -> None:
+        try:
+            old_label, new_label = await self.controller.switch_model(provider, model)
+        except (ValueError, RuntimeError) as exc:
+            self.notify(f"Model switch failed: {exc}", severity="error")
+            return
+        self.notify(f"Model: {old_label} → {new_label}")
+        self.refresh_ui()
 
     async def toggle_pause(self) -> None:
         enabled = self.controller.toggle_pause()

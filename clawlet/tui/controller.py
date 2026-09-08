@@ -84,6 +84,33 @@ class TuiController:
             target, self.store.state.transcript, self.store.state.session_id
         )
 
+    async def switch_model(self, provider: str, model: str) -> tuple[str, str]:
+        """Live-switch provider/model and persist to config.yaml. Returns (old, new) labels."""
+        if self.runtime is None:
+            raise RuntimeError("Runtime not started")
+        old_label, new_label = await self.runtime.switch_model(provider, model)
+        config_path = self.workspace / "config.yaml"
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        providers = raw.setdefault("provider", {})
+        if not isinstance(providers, dict):
+            raise RuntimeError("Invalid provider section in config.yaml")
+        providers["primary"] = provider
+        section = providers.get(provider)
+        if not isinstance(section, dict):
+            section = {}
+            providers[provider] = section
+        section["model"] = model
+        config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        self.emit(
+            LogEvent(
+                level="INFO",
+                channel="system",
+                message=f"Model switched: {old_label} → {new_label}.",
+            )
+        )
+        self.emit_snapshot()
+        return old_label, new_label
+
     def toggle_pause(self) -> bool | None:
         """Flip heartbeat.enabled in config.yaml. Returns new state, None if no config."""
         config_path = self.workspace / "config.yaml"

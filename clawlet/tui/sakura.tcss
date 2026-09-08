@@ -296,4 +296,36 @@ ApprovalModal Horizontal {
 .screen-hint {
     color: $sakura-muted;
     margin-top: 1;
+}
+
+PickerModal {
+    align: center middle;
+}
+
+PickerModal > #picker-box {
+    width: 72;
+    height: auto;
+    max-height: 30;
+    background: $sakura-pink-panel-alt;
+    border: heavy $sakura-pink-accent-dark;
+    padding: 1 2;
+}
+
+PickerModal .picker-title {
+    color: $sakura-pink-light;
+    text-style: bold;
+}
+
+PickerModal #picker-filter {
+    margin-top: 1;
+}
+
+PickerModal #picker-list {
+    height: 12;
+    margin-top: 1;
+}
+
+PickerModal #picker-foot {
+    color: $sakura-muted;
+    margin-top: 1;
 }

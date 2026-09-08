@@ -187,6 +187,11 @@ def _check_unknown_top_level(raw: dict[str, Any], report: ConfigMigrationReport)
         "web_search",
         "runtime",
         "benchmarks",
+        "orchestrator",
+        "task_profiles",
+        "rate_limit",
+        "http_auth_profiles",
+        "config_path",
     }
     unknown = sorted(k for k in raw.keys() if k not in known)
     for key in unknown:

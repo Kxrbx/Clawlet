@@ -85,6 +85,7 @@ class LocalRuntimeHandle:
     poll_outbound: Callable[[], Awaitable[OutboundMessage]]
     stop: Callable[[], Awaitable[None]]
     emit_snapshot: Callable[[], None]
+    switch_model: Callable[[str, str], Awaitable[tuple[str, str]]]
     get_raw_history: Callable[[], list[dict[str, Any]]] = list  # ponytail: in-memory read, storage query if richer view needed
 
 
@@ -191,6 +192,9 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
 
     agent.set_stream_callback(lambda chunk, seq: _forward_stream_delta(emit, chunk, seq))
 
+    # ponytail: orchestrator sub-agent spawns read provider/profiles from here; without it every delegation fails with "API key required"
+    agent.full_config = config
+
     def _on_usage(cumulative: int) -> None:
         emit(UsageUpdate(context_used_tokens=cumulative))
 
@@ -227,8 +231,8 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
         emit(
             BrainStateUpdate(
                 session_id=session_id,
-                provider=provider_name,
-                model=effective_model or "default",
+                provider=agent.provider.name,
+                model=agent.model or "default",
                 context_used_tokens=getattr(agent, "_context_used_tokens", 0),
                 context_max_tokens=128000,
                 memory=memory,
@@ -288,6 +292,21 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
             pass
         emit(RuntimeStatus(status="IDLE", detail="Runtime stopped."))
 
+    async def switch_model(provider_name: str, model: str) -> tuple[str, str]:
+        """Live-switch the loop's provider/model (no restart). Returns (old, new) labels."""
+        from clawlet.agent.provider_factory import build_provider
+
+        new_provider = build_provider(provider_name, config.provider, model=model)
+        old_label = f"{agent.provider.name}/{agent.model}"
+        close = getattr(agent.provider, "close", None)
+        if close is not None:
+            await close()
+        agent.provider = new_provider
+        agent.model = model
+        # ponytail: manual switch clears a tripped breaker, new model gets a clean slate
+        agent._provider_circuit_breaker.record_success()
+        return old_label, f"{new_provider.name}/{new_provider.get_default_model()}"
+
     return LocalRuntimeHandle(
         session_id=session_id,
         provider_name=provider_name,
@@ -296,5 +315,6 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
         poll_outbound=poll_outbound,
         stop=stop,
         emit_snapshot=emit_snapshot,
+        switch_model=switch_model,
         get_raw_history=get_raw_history,
     )
