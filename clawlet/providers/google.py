@@ -234,7 +234,6 @@ class GoogleProvider(BaseProvider):
             "generationConfig": {
                 "temperature": temperature,
                 "maxOutputTokens": max_tokens,
-                "stream": True,
                 **kwargs.get("generation_config", {})
             },
             **kwargs
@@ -243,20 +242,30 @@ class GoogleProvider(BaseProvider):
         logger.debug(f"Google stream request: model={model}")
         
         try:
-            async with client.stream("POST", f"/models/{model}:streamGenerateContent", json=payload, params={"key": self.api_key}) as response:
+            # alt=sse: one JSON object per "data:" line (default is a JSON
+            # array, which cannot be parsed line by line).
+            async with client.stream("POST", f"/models/{model}:streamGenerateContent", json=payload, params={"key": self.api_key, "alt": "sse"}) as response:
                 response.raise_for_status()
                 
                 async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
                     try:
                         import json
-                        data = json.loads(line)
+                        data = json.loads(data_str)
                         
                         # Handle Google streaming format
-                        if "candidates" in data and len(data["candidates"]) > 0:
-                            content_parts = data["candidates"][0]["content"]["parts"]
-                            for part in content_parts:
-                                if "text" in part:
-                                    yield part["text"]
+                        candidates = data.get("candidates") or []
+                        if not candidates:
+                            continue
+                        content_parts = (candidates[0].get("content") or {}).get("parts") or []
+                        for part in content_parts:
+                            text = part.get("text", "")
+                            if text:
+                                yield text
                                     
                     except json.JSONDecodeError:
                         continue
