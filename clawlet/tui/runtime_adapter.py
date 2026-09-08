@@ -25,6 +25,18 @@ from clawlet.workspace_layout import get_workspace_layout
 
 EventSink = Callable[[object], None]
 
+
+def _forward_stream_delta(emit: EventSink, chunk: str, seq: int) -> None:
+    """Forward a streamed token from the agent loop straight to the store.
+
+    Synchronous same-loop emit: deltas reduce in call order ahead of the
+    final assistant message, with no bus round-trip, no per-chunk task and
+    no rate-limiter exposure. Superseded calls are still fenced by `seq`
+    in the store.
+    """
+    if chunk:
+        emit(AssistantDelta(text=chunk, seq=seq))
+
 # Progress event types that surface in the thinking trace. `tool_failed` and
 # `approval_required` additionally produce a ToolLifecycle row (richer than the
 # registry path, which never fires for pre-execution rejections).
@@ -177,31 +189,7 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
 
     agent._publish_progress_update = MethodType(_progress_override, agent)
 
-    def _on_stream_delta(chunk: str, seq: int) -> None:
-        """Forward a streamed token from the agent loop to the TUI via the bus.
-
-        Bus messages are FIFO with the final assistant message, so the draft
-        always resolves in order; stale deltas carry a monotonic seq and are
-        dropped by the store if they arrive after a superseding call.
-        """
-        if not chunk:
-            return
-        run_id = getattr(agent, "_current_run_id", "") or session_id
-        try:
-            asyncio.create_task(
-                bus.publish_outbound(
-                    OutboundMessage(
-                        channel="cli",
-                        chat_id=session_id,
-                        content=chunk,
-                        metadata={"stream": True, "stream_seq": seq, "stream_run_id": run_id},
-                    )
-                )
-            )
-        except (RuntimeError, OSError):
-            pass  # best-effort forwarder: drop a delta on a closed/cancelled bus
-
-    agent.set_stream_callback(_on_stream_delta)
+    agent.set_stream_callback(lambda chunk, seq: _forward_stream_delta(emit, chunk, seq))
 
     def _on_usage(cumulative: int) -> None:
         emit(UsageUpdate(context_used_tokens=cumulative))
@@ -272,15 +260,6 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
         if message.chat_id != session_id:
             return message
         metadata = message.metadata or {}
-        if metadata.get("stream"):
-            emit(
-                AssistantDelta(
-                    text=message.content,
-                    seq=int(metadata.get("stream_seq") or 0),
-                    run_id=str(metadata.get("stream_run_id") or ""),
-                )
-            )
-            return message
         if metadata.get("telegram_pending_approval") or metadata.get("pending_confirmation"):
             pending = metadata.get("telegram_pending_approval") or metadata.get("pending_confirmation") or {}
             emit(

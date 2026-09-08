@@ -210,3 +210,16 @@ def test_heartbeat_task_rows_disabled_is_paused(tmp_path):
     rows = _heartbeat_task_rows(tmp_path, config)
     assert rows[0][2] == 'paused'
     assert rows[0][1] == 'manual'
+
+
+def test_stream_delta_forwards_to_draft():
+    from clawlet.tui.runtime_adapter import _forward_stream_delta
+    from clawlet.tui.state import TuiStore
+
+    store = TuiStore('/tmp/ws')
+    _forward_stream_delta(store.reduce, 'hello ', 1)
+    _forward_stream_delta(store.reduce, '', 1)
+    _forward_stream_delta(store.reduce, 'world', 1)
+    assert store.state.draft is not None
+    assert store.state.draft.text == 'hello world'
+    assert store.state.draft.seq == 1

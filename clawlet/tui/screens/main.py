@@ -95,6 +95,7 @@ class MainScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self._last_draft_text: str | None = None
+        self._last_chat_fp: tuple[int, object] = (-1, None)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -154,6 +155,10 @@ class MainScreen(Screen):
     def _request_chat_sync(self) -> None:
         state = self.app.controller.store.state
         transcript = list(state.transcript)
+        fp = (len(transcript), transcript[-1] if transcript else None)
+        if fp[0] == self._last_chat_fp[0] and fp[1] is self._last_chat_fp[1]:
+            return  # ponytail: streaming refreshes only move the draft bubble
+        self._last_chat_fp = fp
         scroll = self.query_one("#chat-scroll", VerticalScroll)
         stick = scroll.scroll_y >= scroll.max_scroll_y - 2
 
