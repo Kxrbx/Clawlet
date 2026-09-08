@@ -228,15 +228,15 @@ async def _select_model_interactive(
         return None
 
     if choice.startswith("Search models..."):
+        fallback_ids = fallback_ids or DEFAULT_OPENROUTER_MODELS
         return await _search_models(
-            models
-            if models
-            else [{"id": m} for m in (fallback_ids or DEFAULT_OPENROUTER_MODELS)],
-            model_ids if model_ids else (fallback_ids or DEFAULT_OPENROUTER_MODELS),
+            model_ids if model_ids else fallback_ids,
+            fallback_ids[0],
         )
     if choice.startswith("Show all ("):
         if model_ids:
-            return await _show_all_models(models, model_ids)
+            fallback_ids = fallback_ids or DEFAULT_OPENROUTER_MODELS
+            return await _show_all_models(model_ids, fallback_ids[0])
         return None
     if choice in (
         model_ids if model_ids else (fallback_ids or DEFAULT_OPENROUTER_MODELS)
