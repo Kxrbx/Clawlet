@@ -34,7 +34,6 @@ async def test_shell_tool_times_out(tmp_path: Path):
         timeout=0.01,
         allowed_commands=["python"],
         allow_dangerous=True,
-        use_rust_core=False,
     )
 
     result = await tool.execute('python -c "(__import__(\"time\").sleep(1.0))"')

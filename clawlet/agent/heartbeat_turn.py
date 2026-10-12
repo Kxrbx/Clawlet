@@ -11,7 +11,7 @@ class HeartbeatTurnHandler:
     agent: Any
 
     def maybe_accept_text_only_response(self, response_content: str, tool_calls_used: int) -> str | None:
-        final_text = self.agent._sanitize_final_response(response_content, tool_calls_used).strip()
+        final_text = self.agent._response_policy.sanitize_final_response(response_content, tool_calls_used).strip()
         if (
             final_text == "HEARTBEAT_OK"
             or final_text.startswith("HEARTBEAT_")

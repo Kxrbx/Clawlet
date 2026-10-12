@@ -60,6 +60,7 @@ class TurnExecutor:
         enable_tools = self.agent._should_enable_tools(user_message)
         tool_gate_promoted = False
         action_nudge_used = False
+        plain_retry_used = False
         commitment_followthrough_used = False
         post_tool_finalization_used = False
         tool_calls_used = 0
@@ -182,6 +183,18 @@ class TurnExecutor:
                         final_response = heartbeat_text
                         break
 
+                if (
+                    not tool_calls
+                    and not (response_content or "").strip()
+                    and enable_tools
+                    and not plain_retry_used
+                ):
+                    # ponytail: empty reply with tools on — one plain-text second chance, not a nudge loop
+                    logger.info("Empty model reply with tools enabled; retrying once without tools")
+                    plain_retry_used = True
+                    enable_tools = False
+                    continue
+
                 if enable_tools and action_intent and tool_calls_used == 0 and not action_nudge_used:
                     logger.info("Action intent detected with no tool calls; nudging model to use tools")
                     action_nudge_used = True
@@ -264,10 +277,16 @@ class TurnExecutor:
                     is_error = True
                     break
 
-                final_text = self.agent._sanitize_final_response(response_content, tool_calls_used)
-                convo.history.append(Message(role="assistant", content=final_text or response_content))
-                self.agent._queue_persist(convo.session_id, "assistant", final_text or response_content, persist_metadata)
-                final_response = final_text or response_content
+                final_text = self.agent._response_policy.sanitize_final_response(response_content, tool_calls_used)
+                deliver = (final_text or response_content or "").strip()
+                if deliver:
+                    convo.history.append(Message(role="assistant", content=final_text or response_content))
+                    self.agent._queue_persist(convo.session_id, "assistant", final_text or response_content, persist_metadata)
+                    final_response = final_text or response_content
+                    break
+                # ponytail: never persist empty assistant messages — they read as "unfinished action" next turn and poison follow-ups
+                logger.warning("Empty model reply with nothing to deliver; ending turn")
+                final_response = ""
                 break
             except Exception as e:
                 logger.error(f"Error in agent loop iteration {iteration}: {e}")
@@ -635,7 +654,7 @@ class TurnExecutor:
                 is_heartbeat=is_heartbeat,
             )
             response = await self.agent._call_provider_with_retry(messages, enable_tools=False)
-            response_content = self.agent._sanitize_final_response(response.content or "", tool_calls_used).strip()
+            response_content = self.agent._response_policy.sanitize_final_response(response.content or "", tool_calls_used).strip()
             if response_content:
                 convo.history.append(Message(role="assistant", content=response_content))
                 self.agent._queue_persist(convo.session_id, "assistant", response_content, persist_metadata)

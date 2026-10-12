@@ -11,7 +11,6 @@ from clawlet.cli.runtime_ui import (
     run_agent_command,
     run_agent_restart_command,
     run_agent_stop_command,
-    run_chat_command,
     run_logs_command,
 )
 
@@ -29,7 +28,6 @@ def register_agent_commands(
         ctx: typer.Context,
         workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
-        channel: str = typer.Option("telegram", "--channel", "-c", help="Channel to use"),
         daemon: bool = typer.Option(False, "--daemon", help="Run agent in background"),
         log_file: Optional[Path] = typer.Option(None, "--log-file", help="File to write logs to"),
         log_level: str = typer.Option("INFO", "--log-level", help="Logging level (DEBUG, INFO, WARNING, ERROR)"),
@@ -40,7 +38,6 @@ def register_agent_commands(
         run_agent_command(
             workspace=workspace,
             model=model,
-            channel=channel,
             log_file=log_file,
             log_level=log_level,
             daemon=daemon,
@@ -60,7 +57,6 @@ def register_agent_commands(
     def agent_restart(
         workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
-        channel: str = typer.Option("telegram", "--channel", "-c", help="Channel to use"),
         foreground: bool = typer.Option(False, "--foreground", help="Restart in foreground instead of background"),
         log_file: Optional[Path] = typer.Option(None, "--log-file", help="File to write logs to"),
         log_level: str = typer.Option("INFO", "--log-level", help="Logging level (DEBUG, INFO, WARNING, ERROR)"),
@@ -69,7 +65,6 @@ def register_agent_commands(
         run_agent_restart_command(
             workspace=workspace,
             model=model,
-            channel=channel,
             log_file=log_file,
             log_level=log_level,
             daemon=not foreground,
@@ -77,14 +72,6 @@ def register_agent_commands(
             print_sakura_banner_fn=print_sakura_banner_fn,
             sakura_light=sakura_light,
         )
-
-    @app.command()
-    def chat(
-        workspace: Path = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-        model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use"),
-    ):
-        """* Start a local interactive chat session in the terminal."""
-        run_chat_command(workspace=workspace, model=model, get_workspace_path_fn=get_workspace_path_fn)
 
     @app.command()
     def logs(

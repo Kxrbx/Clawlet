@@ -168,8 +168,7 @@ Persisted heartbeat files:
 - `.runtime/heartbeat_last.json`: last runner decision/prompt metadata
 - `memory/heartbeat-state.json`: long-lived heartbeat state, due checks, recent actions, blockers
 
-Migration:
-- `clawlet migrate-heartbeat --write` normalizes legacy `heartbeat.every` and `heartbeat.active_hours`.
+Legacy keys (`heartbeat.every`, `heartbeat.active_hours`) are no longer supported; use `interval_minutes` / `quiet_hours_*`.
 
 Retry object:
 - `max_attempts`: int, 1..10

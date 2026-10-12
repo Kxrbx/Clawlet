@@ -176,6 +176,7 @@ class OpenAIProvider(BaseProvider):
         """Stream a chat completion."""
         model = model or self.default_model
         client = await self._get_client()
+        self.last_stream_usage = {}
         
         payload = {
             "model": model,
@@ -185,6 +186,8 @@ class OpenAIProvider(BaseProvider):
             "stream": True,
             **kwargs
         }
+        if "stream_options" not in kwargs:
+            payload["stream_options"] = {"include_usage": True}
         
         logger.debug(f"OpenAI stream request: model={model}")
         
@@ -203,6 +206,12 @@ class OpenAIProvider(BaseProvider):
                             import json
                             data = json.loads(data_str)
                             
+                            usage = data.get("usage")
+                            if isinstance(usage, dict):
+                                self.last_stream_usage = {
+                                    k: usage.get(k, 0)
+                                    for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                                }
                             if "choices" in data and len(data["choices"]) > 0:
                                 delta = data["choices"][0].get("delta", {})
                                 content = delta.get("content", "")

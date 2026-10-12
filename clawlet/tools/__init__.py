@@ -34,13 +34,10 @@ from clawlet.tools.http_request import HttpRequestTool
 from clawlet.tools.web_search import WebSearchTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
 from clawlet.tools.memory import MemoryTools
-from clawlet.tools.notes import NotesTools
 from clawlet.tools.assembly import (
     register_file_and_shell_tools,
     register_memory_tools,
     register_network_tools,
-    register_notes_tools,
-    register_plugin_tools,
     register_skill_tools,
 )
 if TYPE_CHECKING:
@@ -53,28 +50,6 @@ FULL_EXEC_COMMANDS = [
     "make", "docker", "kubectl", "terraform",
     "rg",
 ]
-
-# Convenience alias for all file operations
-class FileTool:
-    """Composite tool providing all file operations."""
-    
-    def __init__(self, allowed_dir=None, use_rust_core: bool = True):
-        """Initialize all file tools."""
-        # Convert string to Path if needed
-        from pathlib import Path
-        if allowed_dir is not None and not isinstance(allowed_dir, Path):
-            allowed_dir = Path(allowed_dir)
-        
-        self.read = ReadFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.write = WriteFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.edit = EditFileTool(allowed_dir, use_rust_core=use_rust_core)
-        self.patch = ApplyPatchTool(allowed_dir, use_rust_core=use_rust_core)
-        self.list = ListDirTool(allowed_dir, use_rust_core=use_rust_core)
-    
-    @property
-    def tools(self) -> list:
-        """Get all file tools."""
-        return [self.read, self.write, self.edit, self.patch, self.list]
 
 def create_default_tool_registry(
     allowed_dir: str = None,
@@ -95,8 +70,6 @@ def create_default_tool_registry(
     register_network_tools(registry, allowed_dir=allowed_dir, config=config)
     register_skill_tools(registry, skill_registry=skill_registry)
     register_memory_tools(registry, memory_manager=memory_manager)
-    register_notes_tools(registry, workspace=allowed_dir)
-    register_plugin_tools(registry, allowed_dir=allowed_dir, config=config)
     return registry
 
 __all__ = [
@@ -107,7 +80,6 @@ __all__ = [
     "WriteFileTool",
     "EditFileTool",
     "ListDirTool",
-    "FileTool",
     "ShellTool",
     "ApplyPatchTool",
     "FetchUrlTool",
@@ -116,6 +88,5 @@ __all__ = [
     "InstallSkillTool",
     "ListSkillsTool",
     "MemoryTools",
-    "NotesTools",
     "create_default_tool_registry",
 ]

@@ -23,9 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_runtime_modules_do_not_hardcode_global_workspace_paths():
     protected_files = [
-        REPO_ROOT / "clawlet" / "channels" / "telegram.py",
         REPO_ROOT / "clawlet" / "cli" / "runtime_ui.py",
-        REPO_ROOT / "clawlet" / "dashboard" / "api.py",
         REPO_ROOT / "clawlet" / "health.py",
         REPO_ROOT / "clawlet" / "providers" / "models_cache.py",
         REPO_ROOT / "clawlet" / "skills" / "__init__.py",
@@ -40,25 +38,10 @@ def test_runtime_modules_do_not_hardcode_global_workspace_paths():
             assert literal not in text, f"{path} still contains forbidden workspace literal: {literal}"
 
 
-def test_channels_do_not_use_generic_outbound_consumer():
-    channels_dir = REPO_ROOT / "clawlet" / "channels"
-    for path in channels_dir.glob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        assert "consume_outbound(" not in text, f"{path} should use consume_outbound_for(channel)"
-
-
 def test_skill_registry_no_longer_stores_private_tool_registry_state():
     text = (REPO_ROOT / "clawlet" / "skills" / "registry.py").read_text(encoding="utf-8")
     assert "_tool_registry =" not in text
     assert "tool_registry or self._tool_registry" not in text
-
-
-def test_telegram_channel_delegates_callbacks_and_ui_helpers():
-    telegram_py = (REPO_ROOT / "clawlet" / "channels" / "telegram.py").read_text(encoding="utf-8")
-    assert "dispatch_callback_query" in telegram_py
-    assert "default_reply_keyboard" in telegram_py
-    assert "main_menu_markup" in telegram_py
-    assert "settings_menu_markup" in telegram_py
 
 
 def test_agent_loop_delegates_turn_execution():

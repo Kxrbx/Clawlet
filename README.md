@@ -1,77 +1,36 @@
-# 🌸 Clawlet
+# 🌸 Clawlet (`0.6.0a9`)
 
 <div align="center">
-<img width="256" height="256" alt="Clawlet logo" src="https://github.com/user-attachments/assets/de0343fb-ad04-4563-896b-686a375c9721" />
+
+![Clawlet — one loop, one registry, one SessionDB](docs/assets/clawlet-v2-banner.svg)
 
 **A lightweight AI agent framework with identity awareness**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub release](https://img.shields.io/github/v/release/Kxrbx/Clawlet?include_prereleases)](https://github.com/Kxrbx/Clawlet/releases)
+[![Version](https://img.shields.io/badge/version-0.6.0a9-magenta.svg)](CHANGELOG.md)
 
-*Build AI agents that know who they are and can act autonomously with durable memory*
+*Your agent picks the right brain, the right tools, and the right budget — for every single request.*
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Providers](#-llm-providers) • [Changelog](CHANGELOG.md)
+[Quick Start](#-quick-start) • [How it works](#-how-it-works) • [TUI](#-tui) • [Config](#-config) • [Commands](#-commands) • [Providers](#-providers) • [Docs](#-docs)
 
 </div>
 
 ---
 
-
-<div align="center">
-<img width="809" height="475" alt="{28F593B5-58B5-49E8-A1D7-5C88E563726B}" src="https://github.com/user-attachments/assets/1d01fabc-7ddc-4f64-8b35-a279e4ad981f" />
-</div>
-
-
 ## Why Clawlet?
 
-Clawlet is a **lightweight** agent framework designed for developers who want:
+Clawlet is a **lightweight** agent framework for developers who want an assistant that knows who it is and acts on its own — without a heavy platform:
 
-- 🏠 **Local-First** - Run Ollama or LM Studio, no cloud required
-- 🎭 **Identity Awareness** - Agents read SOUL.md, USER.md, MEMORY.md
-- 🔧 **Simple Setup** - Interactive onboarding in under 2 minutes
-- 📊 **Built-in Dashboard** - React UI for monitoring and management
-- 🔒 **Security-First** - Hardened shell tool, safe command execution
-- 🌐 **Web Search** - Brave Search API integration for up-to-date information
-- 🔌 **Skills System** - Modular capabilities with portable `SKILL.md`-based workflows
-
-## ✨ Features
-
-### Core
-- **Identity System** - Define your agent's personality, values, and memory
-- **18+ LLM Providers** - Cloud and local options for every budget
-- **Hybrid Memory** - SQLite-backed structured memory, curated `MEMORY.md`, and daily episodic notes
-- **Tool System** - File ops, shell commands, structured HTTP, web search
-- **Models Cache** - Daily auto-updating cache with disk persistence
-- **Skills System** - Extend agent capabilities with modular skills
-- **Heartbeat State** - `HEARTBEAT.md`-driven heartbeat loop with persisted state
-
-### Infrastructure
-- **Health Checks** - Monitor providers, storage, channels
-- **Rate Limiting** - Sliding window + token bucket algorithms
-- **Config Validation** - Pydantic-based with environment variable support
-- **Retry Logic** - Exponential backoff with circuit breaker
-- **Webhooks** - Receive events from GitHub, Stripe, and custom sources
-- **Scheduling** - Cron-based task scheduling with timezone support
-
-### Channels
-- **Telegram** - Bot integration
-- **Discord** - Bot integration
-- **WhatsApp** - Business API integration
-- **Slack** - Socket Mode and HTTP integration
-
-### Multi-Agent
-- **Workspace Management** - Isolated agent environments
-- **Message Routing** - Route messages to appropriate agents
-- **Specialized Agents** - Configure agents for specific tasks
-
-### Dashboard
-- **React + Tailwind UI** - Modern Sakura-themed design
-- **FastAPI Backend** - RESTful API with OpenAPI docs
-- **Real-time Monitoring** - Health history charts, console logs
-- **Agent Management** - Start/stop agents, view status
-- **Settings UI** - Full config editor with models browser
-
+- 🏠 **Local-first** — run Ollama or LM Studio, no cloud required
+- 🎭 **Identity awareness** — the agent reads `SOUL.md`, `USER.md`, `MEMORY.md`
+- 🧠 **A specialist per task** — strong model for code, cheap/fast model for chat, local model for memory
+- 🧰 **Least-privilege tools** — each task only sees the tools it needs
+- 💾 **Memory that maintains itself** — auto-consolidation every 24h, automatic history compression
+- 🌸 **Terminal-native console** — just type `clawlet`, no browser tab needed
+- 🔒 **Security-first** — hardened shell tool, secret masking, safe defaults
+- 🌐 **Web search** — Brave Search API integration for up-to-date answers
+- 🔌 **Skills** — modular capabilities loaded on demand, never stuffed into every prompt
 
 ---
 
@@ -80,267 +39,145 @@ Clawlet is a **lightweight** agent framework designed for developers who want:
 ### Install
 
 ```bash
-# Clone
 git clone https://github.com/Kxrbx/Clawlet.git
 cd Clawlet
+git checkout v2-revamp
 
-# Install
-pip install -e .
+uv sync                  # lean core — local-first
+# or
+uv sync --extra full    # core + monitoring
 
-# Optional: enable the dashboard CLI entrypoint
-pip install -e ".[dashboard]"
+uv tool install -e .    # expose bare `clawlet` everywhere (editable, tracks this repo)
 ```
 
-The dashboard backend dependencies are already included in the base install.
-If you want the web UI, also install the frontend dependencies separately:
+Then just type `clawlet` from any terminal — no activation, no `uv run` prefix.
+
+All commands below assume `clawlet` is on your PATH (via the tool install above).
+Otherwise activate the venv or prefix with `uv run`, e.g. `uv run clawlet onboard`.
+
+Pick extras à la carte instead:
 
 ```bash
-cd dashboard
-npm install
+uv sync --extra monitoring
 ```
 
-### Interactive Setup (Recommended)
+### Set up (recommended)
 
 ```bash
 clawlet onboard
 ```
 
-This 7-step wizard guides you through:
-1. **Choose Provider** - 18+ providers available
-2. **Configure** - API keys or local settings
-3. **Model Selection** - Choose your default model
-4. **Execution Mode** - Pick `safe` or `full_exec`
-5. **Channels** - Telegram/Discord setup
-6. **Identity** - Name and personality
-7. **Create Workspace** - All files generated
+The 7-step wizard walks you through:
 
-### Or Quick Init
+1. Provider choice (16+ options)
+2. API keys or local model settings
+3. Default model
+4. Web search (optional)
+5. Identity (name, personality)
+6. Execution mode (`safe` or `full_exec`)
+7. **Per-task models** — e.g. strong model for code, cheap for chat, local for memory
+
+Or go fast:
 
 ```bash
 clawlet init
-# Edit ~/.clawlet/config.yaml with your settings
+# then edit ~/.clawlet/config.yaml
 ```
 
-Default runtime behavior after init/onboard:
-- Heartbeat enabled by default
-- New `HEARTBEAT.md` starts comment-only, so heartbeat stays dormant until you add actionable tasks
-- Heartbeat cadence set to every 30 minutes
-- Quiet hours disabled by default
-- `max_iterations: 50`
-- `max_tool_calls_per_message: 20`
-- `runtime.engine: python`
-
-### Start Your Agent
+### Run
 
 ```bash
-# Validate your workspace first
 clawlet validate
+clawlet             # full-screen console — no subcommand needed
 
-# Start the local agent runtime
-clawlet agent
+# or headless:
+clawlet agent [--toolsets coding,browser]
 ```
 
-If you picked a cloud provider during onboarding but skipped the credential, `clawlet validate`
-will fail until you add the real key to `config.yaml`. Local providers like Ollama and LM Studio
-remain valid out of the box.
+Your workspace:
 
-Channel-specific startup comes after channel configuration. For example:
-
-```bash
-clawlet agent --channel telegram
 ```
-
-Only start the dashboard after installing the frontend dependencies in `dashboard/`:
-
-```bash
-clawlet dashboard
+~/.clawlet/
+├── config.yaml
+├── SOUL.md / USER.md / MEMORY.md / HEARTBEAT.md
+├── tasks/QUEUE.md
+└── memory/
+    └── clawlet.db   # sessions + messages + memory, one file
 ```
 
 ---
 
-## 📋 CLI Commands
+## 🧠 How it works
 
-| Command | Description |
-|---------|-------------|
-| `clawlet onboard` | Interactive guided setup ✨ |
-| `clawlet init` | Quick setup with defaults |
-| `clawlet agent` | Start the AI agent |
-| `clawlet dashboard` | Launch web dashboard |
-| `clawlet heartbeat status|last|enable|disable` | Inspect and control heartbeat behavior |
-| `clawlet status` | Show workspace status |
-| `clawlet health` | Run health checks |
-| `clawlet validate` | Validate configuration |
-| `clawlet config [key]` | View configuration |
-| `clawlet benchmark run` | Run latency/reliability benchmark gates |
-| `clawlet replay <run_id>` | Inspect deterministic runtime replay events |
-| `clawlet recovery list` | List interrupted runs with recovery checkpoints |
-| `clawlet plugin init/test/publish` | Manage Plugin SDK v2 extensions |
-| `clawlet --version` | Show version |
+```
+Inbound → Orchestrator (classify) → spawn(task kind) → sub-agent → synthesize → outbound
+```
 
----
+Every non-trivial message is classified and handed to an **isolated sub-agent** with its own provider, model, tools, and budget. Small talk ("thanks!", "ok 👍") skips the machinery via a fast traced fallback. Sub-agents get a clean slice of history — never your full log — and their lineage is recorded, so sessions and `replay` show parent → child.
 
-## 🤖 LLM Providers
+### One agent, many brains — per-task models
 
-Clawlet supports **18+ LLM providers** giving you flexibility in choice and pricing.
+Nine task kinds, fixed taxonomy, fully overridable:
 
-### Cloud Providers
-
-| Provider | API | Description |
-|----------|-----|-------------|
-| **OpenRouter** | [openrouter.ai](https://openrouter.ai) | Aggregates 100+ models, pay-as-you-go |
-| **OpenAI** | [openai.com](https://openai.com) | GPT-4o, GPT-4o mini, o1 series |
-| **Anthropic** | [anthropic.com](https://anthropic.com) | Claude 4 (Sonnet, Haiku) |
-| **Google Gemini** | [ai.google](https://ai.google.dev) | Gemini 2.0 Flash, Pro |
-| **MiniMax** | [minimax.chat](https://www.minimax.chat) | Chinese AI, competitive pricing |
-| **Moonshot (Kimi)** | [moonshot.ai](https://www.moonshot.ai) | Kimi k2.5, strong reasoning |
-| **Qwen (Alibaba)** | [qwen.ai](https://qwen.ai) | Open-source friendly |
-| **Z.AI (GLM)** | [zhipuai.cn](https://www.zhipuai.cn) | ChatGLM series |
-| **GitHub Copilot** | [github.com](https://github.com/features/copilot) | Code-focused models |
-| **Vercel AI** | [vercel.com](https://vercel.com/ai) | AI SDK Gateway |
-| **OpenCode Zen** | [opencode.com](https://opencode.com) | Code generation |
-| **Xiaomi** | [xiaomi.ai](https://xiaomi.ai) | Mi AI |
-| **Synthetic AI** | [synthetic.ai](https://synthetic.ai) | Specialized models |
-| **Venice AI** | [venice.ai](https://venice.ai) | Uncensored models |
-
-### Local Providers (Free)
-
-| Provider | Description |
-|----------|-------------|
-| **Ollama** | Run llama3.2, mistral, codellama locally |
-| **LM Studio** | Desktop app for loading GGUF models |
-
-### Example Configuration
-
-#### OpenRouter (Recommended for variety)
+`code · plan · research · browser · memory · review · ops-tool · chat · scheduled`
 
 ```yaml
 provider:
   primary: openrouter
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"
-    model: "anthropic/claude-sonnet-4-20250514"
+    model: "anthropic/claude-sonnet-4"
+
+task_profiles:
+  code:   {provider: anthropic, model: claude-sonnet-5-20260203, toolset: coding}
+  chat:   {provider: openrouter, model: anthropic/claude-haiku-4, toolset: minimal}
+  memory: {provider: ollama, model: llama3.2, toolset: memory-only}
 ```
 
-#### OpenAI (Direct)
+Resolution per request: `task_profiles[<kind>] → task_profiles.defaults → provider.primary`. Omit anything — sensible built-ins apply.
 
-```yaml
-provider:
-  primary: openai
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-    model: "gpt-4o"
-```
-
-#### Anthropic (Claude)
-
-```yaml
-provider:
-  primary: anthropic
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-    model: "claude-sonnet-5-20260203"
-```
-
-#### Ollama (Local - Free)
-
-```yaml
-provider:
-  primary: ollama
-  ollama:
-    base_url: "http://localhost:11434"
-    model: "llama3.2"
-```
+See exactly which brain handles what, offline:
 
 ```bash
-# Start Ollama
-ollama serve
-ollama pull llama3.2
+clawlet tasks list
+clawlet tasks show code
+clawlet tasks test-routing "fix the login bug"
 ```
 
-## Structured HTTP Auth
+### The right tools, nothing more
 
-`http_request` supports explicit local auth profiles configured in `config.yaml`:
+Named views over one registry — same tools, filtered per task:
 
-```yaml
-http_auth_profiles:
-  example_service:
-    bearer_token_path: ".config/example_service/credentials.json"
-    env_var: "EXAMPLE_SERVICE_TOKEN"
-    header_name: "Authorization"
-    header_prefix: "Bearer "
+| Toolset | Sees | Used for |
+|---|---|---|
+| `full` | everything (only one that auto-includes future tools) | ops, scheduled jobs |
+| `coding` | read + write/edit/shell/http + skills | `code` |
+| `browser` | fetch / web search / http | `research`, `browser` |
+| `minimal` | read-only + read memory + skill list | `plan`, `review`, `chat` |
+| `memory-only` | remember / recall / search / curate / status | `memory` |
+
+```bash
+clawlet agent --toolsets coding,browser
 ```
 
-The runtime only injects credentials when an explicit `auth_profile` is used. It does not infer
-credentials from hardcoded domains.
+Each profile already declares its toolset — configure once, forget it.
 
-#### LM Studio (Local - Free)
+### Memory that maintains itself
 
-```yaml
-provider:
-  primary: lmstudio
-  lmstudio:
-    base_url: "http://localhost:1234"
-```
+- **Auto-consolidation (24h):** recent daily notes (`memory/YYYY-MM-DD.md`) are promoted into durable memory on their own. Failures are logged, never break your heartbeat tick.
+- **Automatic compression:** history compresses by count *or* size (100 msgs / 200k chars). Big tool outputs are capped first, then a short summary + anchor is kept — no LLM call just to trim.
+- **Skills on demand:** the prompt carries a one-line-per-skill index (~630 tokens for 50 skills); full skill content loads only when matched.
+- **Searchable sessions:** one `clawlet.db` with a `sessions` table (parent lineage, task kind, profile snapshot) and instant full-text search.
 
-Enable the local server in LM Studio (port 1234).
+Same tools throughout: `remember / recall / search / recent / review / curate / status`.
 
----
+### Heartbeat & scheduling
 
-## 🌐 Web Search
+The autonomous loop is driven by `HEARTBEAT.md`:
 
-Clawlet integrates with **Brave Search API** for web search capabilities:
-
-```yaml
-web_search:
-  api_key: "${BRAVE_SEARCH_API_KEY}"
-  enabled: true
-```
-
-Get your API key at [brave.com/search/api](https://brave.com/search/api/).
-
----
-
-## 📁 Project Structure
-
-```
-~/.clawlet/              # Your workspace
-├── config.yaml          # Main configuration
-├── SOUL.md              # Agent personality
-├── USER.md              # Your information
-├── MEMORY.md            # Long-term memory
-├── HEARTBEAT.md         # Periodic tasks
-└── memory/
-    └── clawlet.db       # SQLite database
-```
-
-## Default Agent Settings
-
-New workspaces now start with these defaults in `config.yaml`:
-
-```yaml
-agent:
-  max_iterations: 50
-  max_tool_calls_per_message: 20
-
-heartbeat:
-  enabled: true
-  interval_minutes: 30
-  quiet_hours_start: 0
-  quiet_hours_end: 0
-```
-
-When `quiet_hours_start == quiet_hours_end`, quiet hours are effectively disabled.
-
----
-
-## Heartbeat And Memory
-
-Clawlet’s autonomous loop is now driven by `HEARTBEAT.md` with runtime guardrails:
-
-- Heartbeat checks `HEARTBEAT.md` on each tick
-- Empty/comment-only heartbeat files skip API work and stay quiet
-- Heartbeat state is persisted under `memory/heartbeat-state.json`
-- Operator commands:
+- Empty or comment-only file → heartbeat stays quiet, no API burn
+- State persisted under `memory/heartbeat-state.json`
+- Cron jobs for recurring work (`clawlet cron list / add / run-now / runs`)
 
 ```bash
 clawlet heartbeat status
@@ -349,202 +186,155 @@ clawlet heartbeat enable
 clawlet heartbeat disable
 ```
 
-Memory is hybrid by design:
-
-- `memory.db`: durable structured memories
-- `MEMORY.md`: curated human-readable projection
-- `memory/YYYY-MM-DD.md`: daily episodic notes
-
-The agent can review and curate recent daily notes back into durable memory over time.
-
 ---
 
-## 🎨 Examples of Customizing Your Agent
+## 🌸 TUI
 
-### SOUL.md - Agent Personality
+Bare `clawlet` opens the full-screen Sakura console: chat, sessions, command palette, replay views, approval prompts, log tail.
 
-```markdown
-# SOUL.md
-
-## Names
-MyAgent
-
-## Personality
-- Friendly and helpful
-- Good at explaining complex topics
-- Loves terrible puns
-
-## Values
-1. Helpfulness - Always try to be useful
-2. Honesty - Be clear about limitations
-3. Privacy - Respect user data
-```
-
-### USER.md - About You
-
-```markdown
-# USER.md
-
-## Name
-Alex
-
-## Timezone
-America/New_York
-
-## Notes
-- Working on Python projects
-- Prefers concise answers
-- Coffee enthusiast
-```
-
----
-
-## 📊 Dashboard (WIP)
-
-Launch the web dashboard:
+The agent console separates four layers: your prompt, live agent activity (an expandable **thinking trace** of sanitized steps plus a **drafting** bubble that streams the answer as the model writes it), the answer itself (with compact expandable **tool rows**), and actions (approval card, status rail with context meter, heartbeat task rows). Interaction patterns adapted from [Beautiful UI](https://www.beautifului.dev/) (MIT).
 
 ```bash
-clawlet dashboard
+clawlet
+clawlet tui --workspace ~/.clawlet --model anthropic/claude-sonnet-4-20250514
+clawlet logs
 ```
 
-**URLs:**
-- Frontend: http://localhost:5173
-- API: http://localhost:8000
-- Docs: http://localhost:8000/docs
+---
 
-**Features:**
-- System health overview with history charts
-- Real-time agent management
-- Live console logs
-- Settings configuration UI
-- Full config.yaml editor
-- Models browser with cache info
+## ⚙️ Config
+
+Minimal complete example:
+
+```yaml
+provider:
+  primary: openrouter
+  openrouter: {api_key: "${OPENROUTER_API_KEY}", model: "anthropic/claude-sonnet-4"}
+
+orchestrator:
+  max_iterations: 5
+  allow_direct_fallback: true
+  trivial_max_chars: 200
+  classifier_mode: hybrid   # rules | llm | hybrid
+  max_depth: 1
+
+task_profiles:
+  code: {provider: anthropic, model: claude-sonnet-5-20260203, toolset: coding}
+
+runtime: {engine: python}
+heartbeat: {enabled: true, interval_minutes: 30}
+```
+
+```bash
+clawlet validate   # catches bad keys, missing credentials, bad task kinds
+clawlet config     # view (secrets redacted)
+```
+
+### Customizing your agent
+
+`SOUL.md` — personality, values, tone. `USER.md` — your name, timezone, preferences. Plain Markdown, no code changes. See [QUICKSTART.md](QUICKSTART.md) for examples.
+
+---
+
+## 📋 Commands
+
+| Command | What it does |
+|---|---|
+| `clawlet` / `clawlet tui` | Full-screen terminal console |
+| `clawlet onboard` / `init` | Guided / quick setup |
+| `clawlet agent [--toolsets coding,browser]` | Run the runtime headless |
+| `clawlet tasks list / show <kind> / test-routing "<text>"` | Inspect and test routing offline |
+| `clawlet sessions` | List / export stored sessions |
+| `clawlet heartbeat status\|last\|enable\|disable` | Heartbeat ops |
+| `clawlet replay <run_id>` / `recovery list` | Replay events / resume interrupted runs |
+| `clawlet cron list / add / run-now / runs` | Scheduling |
+| `clawlet benchmark run` | Perf gates |
+| `clawlet models [--list\|--current]` | Browse / switch models |
+| `clawlet health [--deep]` / `validate` / `config` | Diagnostics |
+
+---
+
+## 🤖 Providers
+
+16+ providers, one shared codebase, one HTTP pool, global secret masking:
+
+**Cloud** — OpenRouter (100+ models, recommended for variety), OpenAI, Anthropic, Google Gemini, MiniMax, Moonshot (Kimi), Qwen, Z.AI (GLM), GitHub Copilot, Vercel AI, OpenCode Zen, Xiaomi, Synthetic, Venice (uncensored).
+
+**Local (free)** — Ollama, LM Studio.
+
+```yaml
+# OpenRouter
+provider:
+  primary: openrouter
+  openrouter: {api_key: "${OPENROUTER_API_KEY}", model: "anthropic/claude-sonnet-4-20250514"}
+
+# Local
+provider:
+  primary: ollama
+  ollama: {base_url: "http://localhost:11434", model: "llama3.2"}
+```
+
+Web search via Brave: `web_search: {api_key: "${BRAVE_SEARCH_API_KEY}", enabled: true}`. Structured API calls go through `http_request` with explicit `http_auth_profiles` — credentials are never inferred or logged. See [QUICKSTART.md](QUICKSTART.md) for every provider.
 
 ---
 
 ## 🔒 Security
 
-Clawlet takes security seriously:
-
-- **Shell Tool Hardening** - 15+ dangerous patterns blocked
-- **Safe Execution** - Uses `create_subprocess_exec()` not shell
-- **Command Parsing** - `shlex.split()` for safe arguments
-- **Rate Limiting** - Prevent API overload
-- **Config Validation** - Pydantic ensures safe configs
-
-Blocked patterns: `|`, `>`, `<`, `$()`, `&&`, `||`, `;`, backticks, and more.
+- Hardened shell tool (15+ dangerous patterns blocked, `shlex`-parsed, no raw shell)
+- Secrets masked in logs, redacted in `clawlet config`, stored with `0600` config permissions
+- Least-privilege toolsets per task; approvals for dangerous commands
+- Rate limiting + circuit breaker + exponential-backoff retries on providers
 
 ---
 
-## 🏗️ Architecture
+## 📚 Docs
 
+| Doc | For |
+|---|---|
+| [QUICKSTART.md](QUICKSTART.md) | Provider-by-provider setup, troubleshooting |
+| `docs/runtime-v2.md` | Canonical runtime (pipeline, profiles, toolsets, SessionDB) |
+| `clawlet/ARCHITECTURE.md` | Components + data flow deep dive |
+| `docs/skills.md`, `docs/skills-api.md` | Skills system |
+| `docs/scheduling.md` | Cron |
+| `DEPLOYMENT.md` | Production deployment |
+| [CHANGELOG.md](CHANGELOG.md) | Full version history |
+
+---
+
+## 🔄 Coming from v1?
+
+Short version — four breaking changes, no data loss:
+
+1. **Python 3.11+** required (was 3.10+).
+2. **`runtime.engine: hybrid_rust` removed** — only `python` is accepted; edit the one line by hand.
+3. **Channels, Postgres and the plugin SDK removed.** The surfaces are the TUI and headless `clawlet agent`; storage is SQLite only. Legacy `channels:`/`postgres:`/`plugins:` config keys are ignored — delete them from config.yaml.
+4. **Web dashboard and webhooks removed.** The Sakura **TUI** (`clawlet`) replaces the React dashboard; `http_request` + `cron` cover webhook use cases. ~13k lines deleted deliberately — one console, one stack.
+5. **Database: nothing to do.** New tables sit next to the existing `messages`; history survives. Missing `orchestrator` / `task_profiles` keys fall back to built-ins.
+
+```bash
+clawlet validate   # run after editing config.yaml — it catches all of the above
 ```
-clawlet/
-├── agent/           # Identity, loop, memory, router, workspace
-├── bus/             # Message bus
-├── channels/        # Telegram, Discord, WhatsApp, Slack
-├── providers/       # 18+ LLM providers
-├── skills/          # Skills system with bundled skills and templates
-├── webhooks/        # GitHub, Stripe, custom webhooks
-├── heartbeat/       # Scheduling and periodic tasks
-├── storage/         # SQLite, PostgreSQL
-├── tools/           # Files, shell, web search
-├── dashboard/       # React + FastAPI
-├── config.py        # Pydantic validation
-├── health.py        # Health checks
-├── rate_limit.py    # Rate limiting
-├── exceptions.py    # Custom exceptions
-└── retry.py         # Retry + circuit breaker
-```
 
----
-
-## 📈 Features Overview
-
-| Feature | Description |
-|---------|-------------|
-| LLM Providers | 18+ cloud and local providers |
-| Local LLMs | Ollama, LM Studio (free) |
-| Dashboard | React + FastAPI with Sakura theme | WIP
-| Identity System | SOUL/USER/MEMORY files |
-| Health Checks | Monitor providers, storage, channels |
-| Rate Limiting | Sliding window + token bucket |
-| Storage | SQLite + PostgreSQL |
-| Web Search | Brave Search API |
-| Models Cache | Daily auto-updating with disk persistence |
-| Interactive Onboarding | 7-step guided setup |
-| Skills System | Modular capabilities with SKILL.md |
-| Webhooks | GitHub, Stripe, custom integrations |
-| Scheduling | Cron-based task automation |
-| Multi-Agent | Workspace isolation and routing |
-
----
-
-## 📚 Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Skills Documentation](docs/skills.md) | Create and manage modular skills |
-| [Skills API Reference](docs/skills-api.md) | Technical API documentation |
-| [Channels Documentation](docs/channels.md) | Telegram, Discord, WhatsApp, Slack |
-| [Webhooks Documentation](docs/webhooks.md) | GitHub, Stripe, custom webhooks |
-| [Scheduling Documentation](docs/scheduling.md) | Cron expressions and task scheduling |
-| [Multi-Agent Documentation](docs/multi-agent.md) | Workspace management and routing |
-| [Quick Start Guide](QUICKSTART.md) | Get started quickly |
-| [Deployment Guide](DEPLOYMENT.md) | Production deployment |
+Full per-alpha history: [CHANGELOG.md](CHANGELOG.md) (`0.6.0a1` → `0.6.0a9`). Out of scope for now (v2.1 backlog): 30+ platform gateway, kanban-swarm multi-agents, natural-language cron, Tauri Desktop.
 
 ---
 
 ## 🤝 Contributing
 
-Contributions welcome!
-
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feature/amazing`)
-3. Commit (`git commit -m 'Add amazing feature'`)
-4. Push (`git push origin feature/amazing`)
-5. Open a Pull Request
-
-Minimal release smoke check:
-
-```bash
-python scripts/release_smoke.py
-```
+1. Fork → feature branch → commit → push → PR
+2. Checks: `pytest` · `python scripts/release_smoke.py` · `python scripts/release_regression.py`
 
 ---
 
----
+## 📄 License & support
 
-## 📝 Latest Changes
+MIT — see [LICENSE](LICENSE).
 
-### 0.4.7 Highlights
-- **Heartbeat Route Retention**: internal scheduler heartbeats no longer overwrite the last real user route when `target=last`, keeping proactive runs aligned with the intended destination
-- **Heartbeat Budget Tuning**: heartbeat wall-time allowance is less aggressive, reducing false `execution time budget` blockers on useful multi-step checks
-- **Runtime Heartbeat Stability**: the recent heartbeat hardening remains in place, including degraded-provider classification and blocked self-mutation of the heartbeat spec
-- **Release Checks Revalidated**: smoke and regression release checks pass on the current `0.4.7` tree
-
-### Previous Versions
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
-
----
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE)
-
----
-
-## 💬 Support
-
-- **Issues**: [GitHub Issues](https://github.com/Kxrbx/Clawlet/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/Kxrbx/Clawlet/discussions)
-
----
+- Issues: [GitHub Issues](https://github.com/Kxrbx/Clawlet/issues)
+- Chat: [GitHub Discussions](https://github.com/Kxrbx/Clawlet/discussions)
 
 <div align="center">
 
-Built with 💕 by the Clawlet team
-
-[⬆ Back to Top](#-clawlet)
+Built with 💕 by the Clawlet team · one loop, one registry, one SessionDB.
 
 </div>

@@ -64,6 +64,7 @@ PLAN_STATUS.md
 .DS_Store
 Thumbs.db
 .kilocode/mcp.json
+.kilo/
 plans/openclaw-vs-clawlet-comparison.md
 plans/first-contact-profile-collection.md
 # Development-only memory/audit artifacts

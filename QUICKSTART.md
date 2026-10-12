@@ -15,9 +15,9 @@ clawlet onboard
 ```
 
 This will guide you through:
-1. Choosing your AI provider (18+ options)
+1. Choosing your AI provider (16+ options)
 2. Configuring API keys or local models
-3. Setting up messaging channels
+3. Enabling web search (optional)
 4. Customizing your agent's personality
 5. Creating your workspace
 
@@ -191,43 +191,16 @@ web_search:
 
 ---
 
-## Channel Setup
-
-### Telegram
-
-1. Open Telegram and search for @BotFather
-2. Send `/newbot` and follow the instructions
-3. Copy the bot token
-4. Run `clawlet onboard` and enable Telegram
-
-### Discord
-
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application
-3. Go to "Bot" and create a bot
-4. Copy the token
-5. Run `clawlet onboard` and enable Discord
-
----
-
 ## Running Your Agent
 
 ```bash
-# Start with default channel
 clawlet agent
-
-# Start with a specific channel after configuring it
-clawlet agent --channel telegram
-clawlet agent --channel discord
 
 # Use a different model
 clawlet agent --model anthropic/claude-sonnet-4-20250514
 
 # Validate setup before starting optional surfaces
 clawlet validate
-
-# Start dashboard after installing frontend deps in dashboard/
-clawlet dashboard
 ```
 
 ---
@@ -239,8 +212,6 @@ clawlet dashboard
 | `clawlet onboard` | Interactive guided setup |
 | `clawlet init` | Quick setup with defaults |
 | `clawlet agent` | Start the agent |
-| `clawlet dashboard` | Launch web dashboard |
-| `clawlet status` | Show workspace status |
 | `clawlet health` | Run health checks |
 | `clawlet validate` | Validate config |
 | `clawlet config` | View configuration |
@@ -250,7 +221,6 @@ clawlet dashboard
 | `clawlet cron pause/resume` | Pause/resume scheduler job |
 | `clawlet cron run-now` | Execute a scheduler job immediately |
 | `clawlet cron runs` | Inspect scheduler run history |
-| `clawlet migrate-heartbeat` | Normalize legacy heartbeat keys |
 | `clawlet --help` | Show all commands |
 
 ---

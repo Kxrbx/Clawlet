@@ -7,11 +7,6 @@ import re
 from typing import Optional
 from loguru import logger
 
-from clawlet.runtime.rust_bridge import (
-    list_dir_entries as rust_list_dir_entries,
-    read_text_file as rust_read_text_file,
-    write_text_file as rust_write_text_file,
-)
 from clawlet.tools.registry import BaseTool, ToolResult
 
 
@@ -104,9 +99,8 @@ def _secure_resolve(
 class ReadFileTool(BaseTool):
     """Tool to read file contents."""
     
-    def __init__(self, allowed_dir: Optional[Path] = None, use_rust_core: bool = True):
+    def __init__(self, allowed_dir: Optional[Path] = None):
         self.allowed_dir = allowed_dir
-        self.use_rust_core = use_rust_core
     
     @property
     def name(self) -> str:
@@ -143,19 +137,6 @@ class ReadFileTool(BaseTool):
                     error=error
                 )
             
-            if self.use_rust_core:
-                rust_result = rust_read_text_file(str(resolved_path))
-                if rust_result is not None:
-                    ok, content, error = rust_result
-                    if not ok:
-                        return ToolResult(success=False, output="", error=error or "Read error")
-                    safe_content = _redact_sensitive_content(resolved_path, content)
-                    return ToolResult(
-                        success=True,
-                        output=safe_content,
-                        data={"path": str(resolved_path), "size": len(content), "engine": "rust"},
-                    )
-
             content = resolved_path.read_text(encoding="utf-8")
             safe_content = _redact_sensitive_content(resolved_path, content)
             return ToolResult(
@@ -170,9 +151,8 @@ class ReadFileTool(BaseTool):
 class WriteFileTool(BaseTool):
     """Tool to write file contents."""
     
-    def __init__(self, allowed_dir: Optional[Path] = None, use_rust_core: bool = True):
+    def __init__(self, allowed_dir: Optional[Path] = None):
         self.allowed_dir = allowed_dir
-        self.use_rust_core = use_rust_core
     
     @property
     def name(self) -> str:
@@ -218,18 +198,6 @@ class WriteFileTool(BaseTool):
             # Create parent directories
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
             
-            if self.use_rust_core:
-                rust_result = rust_write_text_file(str(resolved_path), content)
-                if rust_result is not None:
-                    ok, size, error = rust_result
-                    if not ok:
-                        return ToolResult(success=False, output="", error=error or "Write error")
-                    return ToolResult(
-                        success=True,
-                        output=f"Successfully wrote {size} bytes to {path}",
-                        data={"path": str(resolved_path), "size": int(size), "engine": "rust"},
-                    )
-
             resolved_path.write_text(content, encoding="utf-8")
             
             return ToolResult(
@@ -246,9 +214,8 @@ class WriteFileTool(BaseTool):
 class EditFileTool(BaseTool):
     """Tool to edit file contents with search/replace."""
     
-    def __init__(self, allowed_dir: Optional[Path] = None, use_rust_core: bool = True):
+    def __init__(self, allowed_dir: Optional[Path] = None):
         self.allowed_dir = allowed_dir
-        self.use_rust_core = use_rust_core
     
     @property
     def name(self) -> str:
@@ -284,7 +251,7 @@ class EditFileTool(BaseTool):
         try:
             from loguru import logger
             engine_used = "python"
-            
+
             file_path = _normalize_user_path(path)
             
             # Security check - use secure resolve to prevent symlink attacks
@@ -296,17 +263,7 @@ class EditFileTool(BaseTool):
                     error=error
                 )
             
-            if self.use_rust_core:
-                rust_result = rust_read_text_file(str(resolved_path))
-                if rust_result is not None:
-                    ok, content, error = rust_result
-                    if not ok:
-                        return ToolResult(success=False, output="", error=error or "Read error")
-                    engine_used = "rust"
-                else:
-                    content = resolved_path.read_text()
-            else:
-                content = resolved_path.read_text()
+            content = resolved_path.read_text()
             
             if old_text not in content:
                 return ToolResult(
@@ -316,17 +273,7 @@ class EditFileTool(BaseTool):
                 )
             
             new_content = content.replace(old_text, new_text, 1)
-            if self.use_rust_core:
-                rust_result = rust_write_text_file(str(resolved_path), new_content)
-                if rust_result is not None:
-                    ok, _, error = rust_result
-                    if not ok:
-                        return ToolResult(success=False, output="", error=error or "Write error")
-                    engine_used = "rust"
-                else:
-                    resolved_path.write_text(new_content)
-            else:
-                resolved_path.write_text(new_content)
+            resolved_path.write_text(new_content)
             
             return ToolResult(
                 success=True,
@@ -342,9 +289,8 @@ class EditFileTool(BaseTool):
 class ListDirTool(BaseTool):
     """Tool to list directory contents."""
     
-    def __init__(self, allowed_dir: Optional[Path] = None, use_rust_core: bool = True):
+    def __init__(self, allowed_dir: Optional[Path] = None):
         self.allowed_dir = allowed_dir
-        self.use_rust_core = use_rust_core
     
     @property
     def name(self) -> str:
@@ -390,24 +336,9 @@ class ListDirTool(BaseTool):
                 )
             
             items = []
-            if self.use_rust_core:
-                rust_result = rust_list_dir_entries(str(resolved_path))
-                if rust_result is not None:
-                    ok, entries, error = rust_result
-                    if not ok:
-                        return ToolResult(success=False, output="", error=error or "List error")
-                    engine_used = "rust"
-                    for name, is_dir in entries:
-                        item_type = "dir" if is_dir else "file"
-                        items.append(f"{name} ({item_type})")
-                else:
-                    for item in sorted(resolved_path.iterdir()):
-                        item_type = "dir" if item.is_dir() else "file"
-                        items.append(f"{item.name} ({item_type})")
-            else:
-                for item in sorted(resolved_path.iterdir()):
-                    item_type = "dir" if item.is_dir() else "file"
-                    items.append(f"{item.name} ({item_type})")
+            for item in sorted(resolved_path.iterdir()):
+                item_type = "dir" if item.is_dir() else "file"
+                items.append(f"{item.name} ({item_type})")
             
             output = "\n".join(items) if items else "(empty directory)"
             return ToolResult(

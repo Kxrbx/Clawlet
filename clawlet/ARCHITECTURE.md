@@ -8,7 +8,7 @@ _Deep dive into the core components and data flows._
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Channels (Telegram, Discord, ...)          │
+│              Surfaces (TUI, headless CLI, cron/heartbeat)           │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │ inbound/outbound messages
                                 ▼
@@ -16,15 +16,21 @@ _Deep dive into the core components and data flows._
 │                         MessageBus (async queues)                  │
 ├─────────────────────────────────────────────────────────────────────┤
 │   inbound_queue  │  outbound_queue  │  max_size=1000                │
-└─────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────┬─────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         AgentLoop                                   │
+│   Orchestrator (classify → spawn sub-agent → synthesize)           │
+│   trivial messages use a traced direct fallback                     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │ isolated sub-agent per task-kind
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         AgentLoop (classic pipeline)               │
 ├─────────────────────────────────────────────────────────────────────┤
 │  - History (RAM, capped MAX_HISTORY=100)                          │
 │  - MemoryManager (SQLite + MEMORY.md projection + daily notes)   │
-│  - Storage (SQLite/Postgres for message history)                 │
+│  - Storage (SQLite for message history)                          │
 │  - Provider (OpenRouter/Ollama/LMStudio)                          │
 │  - Tools (registry)                                               │
 │  - Circuit breaker + retry/backoff                               │
@@ -35,7 +41,7 @@ _Deep dive into the core components and data flows._
                 ▼                               ▼
      ┌───────────────────┐       ┌────────────────────────┐
      │  LLM Provider     │       │   Storage Backend      │
-     │  (OpenRouter)     │       │   (SQLite/Postgres)    │
+     │  (OpenRouter)     │       │   (SQLite)             │
      └───────────────────┘       └────────────────────────┘
                 │                               │
                 └───────────────┬───────────────┘
@@ -64,9 +70,12 @@ Simple async queue for decoupling channels from the agent.
 
 ---
 
-### 2. AgentLoop
+### 2. AgentLoop (classic pipeline, driven by the orchestrator)
 
-The heart of Clawlet. Runs a continuous loop:
+Every non-trivial inbound message is first classified by the orchestrator
+(`agent/orchestrator.py` + `task_router.py`) into a task-kind, then executed
+by a freshly spawned `AgentLoop` (see "v2 runtime" below) with its own
+provider/model/toolset/budget. The loop itself runs a continuous cycle:
 
 1. Wait for inbound message
 2. Build context (system prompt + recent history)
@@ -120,8 +129,7 @@ When SQLite FTS5 is available, free-text memory search uses it before falling ba
 
 Abstract `StorageBackend` interface with implementations:
 
-- `SQLiteStorage` (default): file-based, uses `aiosqlite`
-- `PostgresStorage`: full PostgreSQL (not fully implemented yet)
+- `SQLiteStorage`: file-based, uses `aiosqlite` — the only backend
 
 **Schema (SQLite):**
 
@@ -158,9 +166,8 @@ AgentLoop stores every inbound/outbound message here, enabling session reconstru
 **Configuration** (`config.yaml`) loaded via `Config` (Pydantic). Supports:
 
 - Provider selection (`openrouter`, `ollama`, `lmstudio`)
-- Channel tokens (Telegram, Discord)
 - Explicit `http_auth_profiles` for structured HTTP credential injection
-- Storage backend (sqlite/postgres)
+- Storage path (SQLite)
 - Agent settings (max_iterations, context_window, temperature)
 - Heartbeat interval
 
@@ -168,15 +175,9 @@ AgentLoop stores every inbound/outbound message here, enabling session reconstru
 
 ---
 
-### 6. Channels
+### 6. Surfaces
 
-Each channel implements `BaseChannel`:
-
-- `start()` – connect to service (e.g., Telegram bot polling)
-- `stop()` – disconnect
-- `send(OutboundMessage)` – transmit reply
-
-Channels publish inbound messages to the bus and consume outbound messages to send them.
+The TUI, the headless `clawlet agent` CLI and the cron/heartbeat scheduler all feed the same loop through the bus. There are no external messaging integrations in v2 — future multi-platform gateways would re-introduce them as thin publishers on top of `MessageBus`.
 
 ---
 
@@ -195,7 +196,7 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 ## Data Flow Example
 
 1. User sends "What's the weather?"
-2. TelegramChannel receives update → `InboundMessage` → `bus.publish_inbound()`
+2. TUI converts input → `InboundMessage` → `bus.publish_inbound()`
 3. AgentLoop `consume_inbound()` → `_process_message()`
 4. Add user message to `_history` + `storage.store_message()` + `memory.remember()`
 5. Build context (system prompt + last 20 messages)
@@ -205,7 +206,7 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 9. Tool result appended to history + persisted
 10. Loop continues → LLM generates final response "It's 20°C in Paris."
 11. Final response appended to history + persisted, sent to `bus.publish_outbound()`
-12. TelegramChannel consumes outbound → `send_message(chat_id, text)`
+12. TUI consumes outbound → renders the reply
 
 ---
 
@@ -220,9 +221,8 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 
 ## Extensibility Points
 
-- Add new channels: subclass `BaseChannel`, register in CLI
 - Add new tools: create function, decorate with `@tool`, register in `ToolRegistry`
-- Add new storage backends: implement `StorageBackend` abstract methods
+- Add new surfaces: publish `InboundMessage` / consume `OutboundMessage` on `MessageBus`
 - Custom identity: edit `SOUL.md` and `USER.md` without code changes
 - Custom provider: implement `BaseProvider` (methods `complete`, `stream`, `close`)
 
@@ -231,8 +231,8 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 ## Security Considerations
 
 - Config file checked for world-readable permissions (`chmod 600 ~/.clawlet/config.yaml`)
-- Secrets masked in logs (`mask_secrets()` utility) – currently used in OpenRouter provider
-- No authentication on dashboard (if enabled) – should be bound to localhost only in production
+- Secrets masked in logs (`mask_secrets()` utility, applied across all providers)
+- No inbound network ports in v2 (web dashboard removed; Sakura TUI is local-only)
 - Input validation: user messages truncated at 10 000 characters
 
 ---
@@ -247,9 +247,48 @@ For authenticated API calls, the preferred path is structured `http_request` wit
 
 ---
 
+## v2 runtime (current)
+
+One loop, one registry, one SessionDB. The v2 runtime keeps the pipeline
+above but changes who runs it:
+
+```
+Inbound -> RunOrchestrator -> Orchestrator (classify)
+  -> trivial? parent turn directly (traced fallback)
+  -> else SubagentSpec(kind, instruction, context slice)
+  -> spawn fresh AgentLoop (profile provider/model/toolset/budget,
+     filtered ToolRegistry view, child session w/ parent_session_id lineage)
+  -> RunOrchestrator(child).process_message (classic pipeline, no re-delegation)
+  -> outbound (+ task_kind/child_session_id metadata)
+```
+
+Key modules:
+
+- `agent/orchestrator.py` — always-on dispatch (`decide/dispatch_single/
+  process_message`), exception-safe fallback.
+- `agent/task_profiles.py` — fixed taxonomy (`code/plan/research/browser/
+  memory/review/ops-tool/chat/scheduled`) with per-field inheritance
+  `profiles[kind] -> user defaults -> kind built-ins -> global primary`.
+- `agent/task_router.py` — hybrid rules-first classifier, injected LLM
+  fallback, never raises.
+- `agent/provider_factory.py` — single `(name, model, ProviderConfig)`
+  construction path shared by CLI, orchestrator and TUI.
+- `agent/subagent.py` — fresh-loop spawning, depth guard (`max_depth=1`).
+- `tools/toolsets.py` — `minimal/coding/browser/memory-only/full` views
+  over the tool registry.
+- `storage/session_db.py` — `sessions` table + FTS5 `session_search`
+  (LIKE fallback) in the same `clawlet.db`; delegation lineage recorded
+  best-effort on every spawn.
+- `skills/index.py` — progressive-disclosure index (`name: description`,
+  token budget, keyword match) for the stable prompt tier.
+- `clawlet/paths.py` — CLI-independent path helpers (import-cycle fix);
+  `clawlet.agent` package is lazy for the same reason.
+
+---
+
 ## Future Improvements (Out of Scope for Current Phases)
 
-- Dashboard authentication (API key / JWT)
+- TUI per-task model picker
 - Metrics endpoint (Prometheus format)
 - Structured JSON logging
 - Rate limiting per user

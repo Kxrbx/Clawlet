@@ -26,6 +26,63 @@ GOOGLE_MODELS = [
 _API_KEY_PLACEHOLDER = "your_api_key_here"
 
 
+def _convert_messages(messages: list[dict]) -> tuple[list[dict], str]:
+    """Convert OpenAI-style messages to Google format.
+
+    Returns (contents, system_text). System-role contents are collected and
+    joined with "\\n\\n"; caller sends them as top-level `systemInstruction`.
+    """
+    system_parts = []
+    contents = []
+    current_content = {"parts": [], "role": ""}
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        if role == "system":
+            if content:
+                system_parts.append(content if isinstance(content, str) else str(content))
+            continue
+
+        # Map OpenAI roles to Google roles
+        google_role = "model" if role == "assistant" else "user"
+
+        # Start new content if role changes
+        if current_content["role"] and current_content["role"] != google_role:
+            contents.append(current_content)
+            current_content = {"parts": [], "role": google_role}
+        else:
+            current_content["role"] = google_role
+
+        current_content["parts"].append({"text": content})
+
+    # Append last content
+    if current_content["parts"]:
+        contents.append(current_content)
+
+    return contents, "\n\n".join(system_parts)
+
+
+def _translate_tools(kwargs: dict) -> dict:
+    """Pop OpenAI-format tools/tool_choice; return Google equivalents."""
+    tools = kwargs.pop("tools", None)
+    kwargs.pop("tool_choice", None)
+    extra: dict = {}
+    if tools:
+        declarations = [
+            {
+                "name": t.get("function", {}).get("name", ""),
+                "description": t.get("function", {}).get("description", ""),
+                "parameters": t.get("function", {}).get("parameters", {}),
+            }
+            for t in tools
+        ]
+        extra["tools"] = [{"functionDeclarations": declarations}]
+        extra["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
+    return extra
+
+
 class GoogleProvider(BaseProvider):
     """Google Generative AI provider."""
     
@@ -63,6 +120,7 @@ class GoogleProvider(BaseProvider):
         self.default_model = default_model
         self.base_url = base_url or self.BASE_URL
         self._client: Optional[httpx.AsyncClient] = None
+        self.last_stream_usage: dict = {}
         
         logger.info(f"Google provider initialized with model={default_model}")
     
@@ -99,33 +157,8 @@ class GoogleProvider(BaseProvider):
         
         # Convert OpenAI-style messages to Google format
         # Google uses a single content field with parts
-        contents = []
-        current_content = {"parts": [], "role": ""}
-        
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # Map OpenAI roles to Google roles
-            google_role = "user"
-            if role == "assistant":
-                google_role = "model"
-            elif role == "system":
-                # Google doesn't have a system role, prepend to first user message
-                continue
-            
-            # Start new content if role changes
-            if current_content["role"] and current_content["role"] != google_role:
-                contents.append(current_content)
-                current_content = {"parts": [], "role": google_role}
-            else:
-                current_content["role"] = google_role
-            
-            current_content["parts"].append({"text": content})
-        
-        # Append last content
-        if current_content["parts"]:
-            contents.append(current_content)
+        contents, system_text = _convert_messages(messages)
+        tool_params = _translate_tools(kwargs)
         
         # Build the payload for Google's REST API
         payload = {
@@ -135,8 +168,11 @@ class GoogleProvider(BaseProvider):
                 "maxOutputTokens": max_tokens,
                 **kwargs.get("generation_config", {})
             },
-            **kwargs
+            **kwargs,
+            **tool_params,
         }
+        if system_text:
+            payload["systemInstruction"] = {"parts": [{"text": system_text}]}
         
         logger.info(f"Google request: model={model}, messages={len(messages)}")
         
@@ -203,60 +239,60 @@ class GoogleProvider(BaseProvider):
         """Stream a chat completion using Google's Generative Language API."""
         model = model or self.default_model
         client = await self._get_client()
+        self.last_stream_usage = {}
         
         # Convert messages to Google format
-        contents = []
-        current_content = {"parts": [], "role": ""}
-        
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            google_role = "user"
-            if role == "assistant":
-                google_role = "model"
-            elif role == "system":
-                continue
-            
-            if current_content["role"] and current_content["role"] != google_role:
-                contents.append(current_content)
-                current_content = {"parts": [], "role": google_role}
-            else:
-                current_content["role"] = google_role
-            
-            current_content["parts"].append({"text": content})
-        
-        if current_content["parts"]:
-            contents.append(current_content)
+        contents, system_text = _convert_messages(messages)
+        tool_params = _translate_tools(kwargs)
         
         payload = {
             "contents": contents,
             "generationConfig": {
                 "temperature": temperature,
                 "maxOutputTokens": max_tokens,
-                "stream": True,
                 **kwargs.get("generation_config", {})
             },
-            **kwargs
+            **kwargs,
+            **tool_params,
         }
+        if system_text:
+            payload["systemInstruction"] = {"parts": [{"text": system_text}]}
         
         logger.debug(f"Google stream request: model={model}")
         
         try:
-            async with client.stream("POST", f"/models/{model}:streamGenerateContent", json=payload, params={"key": self.api_key}) as response:
+            # alt=sse: one JSON object per "data:" line (default is a JSON
+            # array, which cannot be parsed line by line).
+            async with client.stream("POST", f"/models/{model}:streamGenerateContent", json=payload, params={"key": self.api_key, "alt": "sse"}) as response:
                 response.raise_for_status()
                 
                 async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
                     try:
                         import json
-                        data = json.loads(line)
+                        data = json.loads(data_str)
                         
                         # Handle Google streaming format
-                        if "candidates" in data and len(data["candidates"]) > 0:
-                            content_parts = data["candidates"][0]["content"]["parts"]
-                            for part in content_parts:
-                                if "text" in part:
-                                    yield part["text"]
+                        usage_metadata = data.get("usageMetadata") or {}
+                        if usage_metadata:
+                            if "promptTokenCount" in usage_metadata:
+                                self.last_stream_usage["prompt_tokens"] = usage_metadata["promptTokenCount"]
+                            if "candidatesTokenCount" in usage_metadata:
+                                self.last_stream_usage["completion_tokens"] = usage_metadata["candidatesTokenCount"]
+                            if "totalTokenCount" in usage_metadata:
+                                self.last_stream_usage["total_tokens"] = usage_metadata["totalTokenCount"]
+                        candidates = data.get("candidates") or []
+                        if not candidates:
+                            continue
+                        content_parts = (candidates[0].get("content") or {}).get("parts") or []
+                        for part in content_parts:
+                            text = part.get("text", "")
+                            if text:
+                                yield text
                                     
                     except json.JSONDecodeError:
                         continue

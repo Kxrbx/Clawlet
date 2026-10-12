@@ -121,7 +121,9 @@ def _make_heartbeat_context_loader(workspace: Path, hb_cfg):
             return str(cache["value"])
 
         raw = heartbeat_path.read_text(encoding="utf-8")
-        value = _build_effective_heartbeat_context(f"## Periodic Tasks\n\n{raw}", hb_cfg)
+        value = _build_effective_heartbeat_context(
+            f"## Periodic Tasks\n\n{raw}", hb_cfg
+        )
         cache["mtime_ns"] = mtime_ns
         cache["value"] = value
         return value
@@ -132,7 +134,6 @@ def _make_heartbeat_context_loader(workspace: Path, hb_cfg):
 def run_agent_command(
     workspace: Optional[Path],
     model: Optional[str],
-    channel: str,
     log_file: Optional[Path],
     log_level: str,
     daemon: bool,
@@ -144,12 +145,16 @@ def run_agent_command(
     workspace_path = workspace or get_workspace_path_fn()
 
     if not workspace_path.exists():
-        console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
+        console.print(
+            "[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]"
+        )
         raise typer.Exit(1)
 
     existing_pid = _read_agent_pid(workspace_path)
     if existing_pid and _pid_is_running(existing_pid):
-        console.print(f"[red]Error: Agent already running with PID {existing_pid}[/red]")
+        console.print(
+            f"[red]Error: Agent already running with PID {existing_pid}[/red]"
+        )
         raise typer.Exit(1)
 
     effective_log_file = log_file or (workspace_path / "agent.log")
@@ -162,8 +167,6 @@ def run_agent_command(
             "agent",
             "--workspace",
             str(workspace_path),
-            "--channel",
-            channel,
             "--log-level",
             log_level,
             "--log-file",
@@ -212,13 +215,15 @@ def run_agent_command(
 
     if os.environ.get("CLAWLET_AGENT_DAEMON_CHILD") != "1":
         print_sakura_banner_fn()
-        console.print(f"\n[{sakura_light}]Starting agent with {channel} channel...[/{sakura_light}]")
+        console.print(
+            f"\n[{sakura_light}]Starting agent...[/{sakura_light}]"
+        )
         console.print("[dim]Press Ctrl+C to stop[/dim]")
 
     _write_agent_pid(workspace_path)
 
     try:
-        asyncio.run(run_agent(workspace_path, model, channel))
+        asyncio.run(run_agent(workspace_path, model))
     except KeyboardInterrupt:
         console.print("\n[yellow]Agent stopped.[/yellow]")
     except Exception as e:
@@ -228,7 +233,9 @@ def run_agent_command(
         _remove_agent_pid(workspace_path)
 
 
-def run_agent_stop_command(workspace: Optional[Path], get_workspace_path_fn, timeout_seconds: float = 10.0) -> None:
+def run_agent_stop_command(
+    workspace: Optional[Path], get_workspace_path_fn, timeout_seconds: float = 10.0
+) -> None:
     """Stop a running background agent."""
     workspace_path = workspace or get_workspace_path_fn()
     pid = _read_agent_pid(workspace_path)
@@ -280,7 +287,6 @@ def run_agent_stop_command(workspace: Optional[Path], get_workspace_path_fn, tim
 def run_agent_restart_command(
     workspace: Optional[Path],
     model: Optional[str],
-    channel: str,
     log_file: Optional[Path],
     log_level: str,
     daemon: bool,
@@ -289,11 +295,12 @@ def run_agent_restart_command(
     sakura_light: str,
 ) -> None:
     """Restart the agent runtime."""
-    run_agent_stop_command(workspace=workspace, get_workspace_path_fn=get_workspace_path_fn)
+    run_agent_stop_command(
+        workspace=workspace, get_workspace_path_fn=get_workspace_path_fn
+    )
     run_agent_command(
         workspace=workspace,
         model=model,
-        channel=channel,
         log_file=log_file,
         log_level=log_level,
         daemon=daemon,
@@ -301,21 +308,6 @@ def run_agent_restart_command(
         print_sakura_banner_fn=print_sakura_banner_fn,
         sakura_light=sakura_light,
     )
-
-
-def run_chat_command(workspace: Optional[Path], model: Optional[str], get_workspace_path_fn) -> None:
-    """Run local chat command orchestration."""
-    workspace_path = workspace or get_workspace_path_fn()
-    if not workspace_path.exists():
-        console.print("[red]Error: Workspace not initialized. Run 'clawlet init' first.[/red]")
-        raise typer.Exit(1)
-    try:
-        asyncio.run(run_chat(workspace_path, model))
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Chat stopped.[/yellow]")
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
 
 
 def run_logs_command(log_file: Path, lines: int, follow: bool) -> None:
@@ -332,7 +324,9 @@ def run_logs_command(log_file: Path, lines: int, follow: bool) -> None:
                 subprocess.run(["tail", "-f", str(log_file)], check=True)
             except FileNotFoundError:
                 # tail command not available (e.g., on Windows), use Python implementation
-                console.print("[dim]tail command not found, using Python implementation...[/dim]")
+                console.print(
+                    "[dim]tail command not found, using Python implementation...[/dim]"
+                )
                 _follow_logs_python(log_file)
             except subprocess.CalledProcessError as e:
                 console.print(f"[red]Error running tail command: {e}[/red]")
@@ -352,7 +346,8 @@ def run_logs_command(log_file: Path, lines: int, follow: bool) -> None:
 def _follow_logs_python(log_file: Path) -> None:
     """Follow logs using Python (cross-platform alternative to tail -f)."""
     import time
-    with open(log_file, 'r') as f:
+
+    with open(log_file, "r") as f:
         # Seek to end of file
         f.seek(0, 2)
         while True:
@@ -365,54 +360,18 @@ def _follow_logs_python(log_file: Path) -> None:
 
 def _create_provider(config, model: Optional[str]):
     """Create provider from config primary setting."""
+    from clawlet.agent.provider_factory import build_provider
+
     primary = config.provider.primary
-    effective_model = model
-    api_key = ""
-
-    if primary == "openrouter":
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not api_key:
-            api_key = config.provider.openrouter.api_key if config.provider.openrouter else ""
-        effective_model = model or (config.provider.openrouter.model if config.provider.openrouter else None)
-        from clawlet.providers.openrouter import OpenRouterProvider
-
-        return OpenRouterProvider(api_key=api_key, default_model=effective_model), effective_model
-    if primary == "ollama":
-        effective_model = model or (config.provider.ollama.model if config.provider.ollama else None)
-        from clawlet.providers.ollama import OllamaProvider
-
-        return OllamaProvider(base_url=config.provider.ollama.base_url, default_model=effective_model), effective_model
-    if primary == "lmstudio":
-        effective_model = model or (config.provider.lmstudio.model if config.provider.lmstudio else None)
-        from clawlet.providers.lmstudio import LMStudioProvider
-
-        return LMStudioProvider(base_url=config.provider.lmstudio.base_url, default_model=effective_model), effective_model
-    if primary == "openai":
-        api_key = os.environ.get("OPENAI_API_KEY", "") or (config.provider.openai.api_key if config.provider.openai else "")
-        effective_model = model or (config.provider.openai.model if config.provider.openai else None)
-        from clawlet.providers.openai import OpenAIProvider
-
-        return OpenAIProvider(api_key=api_key, default_model=effective_model), effective_model
-    if primary == "anthropic":
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "") or (
-            config.provider.anthropic.api_key if config.provider.anthropic else ""
-        )
-        effective_model = model or (config.provider.anthropic.model if config.provider.anthropic else None)
-        from clawlet.providers.anthropic import AnthropicProvider
-
-        return AnthropicProvider(api_key=api_key, default_model=effective_model), effective_model
-
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not api_key and config.provider.openrouter:
-        api_key = config.provider.openrouter.api_key
-    effective_model = model or (config.provider.openrouter.model if config.provider.openrouter else None)
-    from clawlet.providers.openrouter import OpenRouterProvider
-
-    return OpenRouterProvider(api_key=api_key, default_model=effective_model), effective_model
+    try:
+        provider = build_provider(primary, config.provider, model=model or "")
+    except ValueError:
+        provider = build_provider("openrouter", config.provider, model=model or "")
+    return provider, provider.get_default_model()
 
 
-async def run_agent(workspace: Path, model: Optional[str], channel: str):
-    """Run the agent loop with explicit channel routing."""
+async def run_agent(workspace: Path, model: Optional[str]):
+    """Run the agent loop."""
     from clawlet.agent.identity import IdentityLoader
     from clawlet.agent.loop import AgentLoop
     from clawlet.bus.queue import MessageBus
@@ -447,6 +406,8 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         storage_config=config.storage,
         runtime_config=config.runtime,
     )
+    # ponytail: orchestrator sub-agent spawns read provider/profiles from here; without it every delegation fails with "API key required"
+    agent.full_config = config
 
     heartbeat_runner = None
     heartbeat_task = None
@@ -487,6 +448,12 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
             await scheduler.on_heartbeat_tick(now)
         if proactive_worker is not None:
             await proactive_worker.on_heartbeat_tick(now)
+        if getattr(hb_cfg, "memory_maintenance", True):
+            from clawlet.agent.memory_maintenance import maybe_run_memory_maintenance
+
+            await maybe_run_memory_maintenance(
+                memory_manager, workspace_layout.memory_dir, now=now
+            )
 
     heartbeat_loader = _make_heartbeat_context_loader(workspace, hb_cfg)
     workspace_layout = get_workspace_layout(workspace)
@@ -508,60 +475,14 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
         heartbeat_task = asyncio.create_task(heartbeat_runner.start())
         logger.info("Heartbeat runner initialized")
 
-    runtime_channel = None
-    if channel == "telegram":
-        telegram_cfg = config.channels.get("telegram")
-        token = telegram_cfg.get("token", "") if isinstance(telegram_cfg, dict) else getattr(telegram_cfg, "token", "")
-        enabled = telegram_cfg.get("enabled", False) if isinstance(telegram_cfg, dict) else getattr(telegram_cfg, "enabled", False)
-        if not enabled:
-            raise ValueError("Telegram channel is disabled in config")
-        if not token:
-            raise ValueError("Telegram token is missing in config")
-        from clawlet.channels.telegram import TelegramChannel
-        if isinstance(telegram_cfg, dict):
-            telegram_channel_config = dict(telegram_cfg)
-        else:
-            telegram_channel_config = {
-                "enabled": getattr(telegram_cfg, "enabled", False),
-                "token": getattr(telegram_cfg, "token", ""),
-                "stream_mode": getattr(telegram_cfg, "stream_mode", "progress"),
-                "stream_update_interval_seconds": getattr(telegram_cfg, "stream_update_interval_seconds", 1.5),
-                "disable_web_page_preview": getattr(telegram_cfg, "disable_web_page_preview", True),
-                "use_reply_keyboard": getattr(telegram_cfg, "use_reply_keyboard", True),
-                "register_commands": getattr(telegram_cfg, "register_commands", True),
-            }
-        telegram_channel_config["heartbeat"] = {
-            "enabled": getattr(hb_cfg, "enabled", False),
-            "interval_minutes": getattr(hb_cfg, "interval_minutes", 30),
-            "quiet_hours_start": getattr(hb_cfg, "quiet_hours_start", 0),
-            "quiet_hours_end": getattr(hb_cfg, "quiet_hours_end", 0),
-            "target": getattr(hb_cfg, "target", "last"),
-            "ack_max_chars": getattr(hb_cfg, "ack_max_chars", 24),
-            "proactive_enabled": getattr(hb_cfg, "proactive_enabled", False),
-        }
-        runtime_channel = TelegramChannel(bus, telegram_channel_config, agent)
-        await runtime_channel.start()
-    elif channel == "discord":
-        discord_cfg = config.channels.get("discord")
-        token = discord_cfg.get("token", "") if isinstance(discord_cfg, dict) else getattr(discord_cfg, "token", "")
-        enabled = discord_cfg.get("enabled", False) if isinstance(discord_cfg, dict) else getattr(discord_cfg, "enabled", False)
-        if not enabled:
-            raise ValueError("Discord channel is disabled in config")
-        if not token:
-            raise ValueError("Discord token is missing in config")
-        from clawlet.channels.discord import DiscordChannel
-
-        runtime_channel = DiscordChannel(bus, {"token": token}, agent)
-        await runtime_channel.start()
-    else:
-        raise ValueError(f"Unsupported channel '{channel}'. Supported: telegram, discord")
-
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(
             sig,
             lambda s=sig: asyncio.create_task(
-                shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_task, s)
+                shutdown_agent(
+                    agent, heartbeat_runner, heartbeat_task, s
+                )
             ),
         )
 
@@ -586,7 +507,9 @@ async def run_agent(workspace: Path, model: Optional[str], channel: str):
                 pass
 
 
-async def shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_task, signum):
+async def shutdown_agent(
+    agent, heartbeat_runner, heartbeat_task, signum
+):
     """Shutdown agent gracefully on signal."""
     logger.info(f"Received signal {signum}, shutting down...")
 
@@ -601,38 +524,5 @@ async def shutdown_agent(agent, runtime_channel, heartbeat_runner, heartbeat_tas
         except asyncio.CancelledError:
             pass
 
-    if runtime_channel is not None:
-        try:
-            logger.info("Stopping Telegram channel...")
-            await runtime_channel.stop()
-            logger.info("Telegram channel stopped")
-        except Exception as e:
-            logger.error(f"Error stopping Telegram channel: {e}")
-
     await agent.close()
     logger.info("Agent shutdown complete")
-
-
-async def run_chat(workspace: Path, model: Optional[str]) -> None:
-    """Run local terminal chat using the shared local runtime bootstrap."""
-    from clawlet.tui.runtime_adapter import create_local_runtime
-
-    def _emit(_event: object) -> None:
-        return None
-
-    runtime = await create_local_runtime(workspace, model, emit=_emit, session_id="local")
-    runtime.emit_snapshot()
-    console.print("[dim]Local chat mode. Type 'exit' to quit.[/dim]")
-    try:
-        while True:
-            user_text = await asyncio.to_thread(input, "\nYou> ")
-            if user_text.strip().lower() in {"exit", "quit"}:
-                break
-            await runtime.send_text(user_text)
-            while True:
-                out = await runtime.poll_outbound()
-                if out.chat_id == runtime.session_id and not (out.metadata or {}).get("progress"):
-                    console.print(f"Clawlet> {out.content}")
-                    break
-    finally:
-        await runtime.stop()

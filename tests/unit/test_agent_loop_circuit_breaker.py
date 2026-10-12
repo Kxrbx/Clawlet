@@ -68,3 +68,91 @@ async def test_agent_loop_uses_provider_circuit_breaker(tmp_workspace: Path, mon
     assert agent._provider_circuit_breaker.state == agent._provider_circuit_breaker.CLOSED
 
     await agent.close()
+
+
+class _StreamingProvider:
+    name = "streaming"
+
+    def __init__(self, chunks: list[str]) -> None:
+        self.chunks = chunks
+
+    def get_default_model(self) -> str:
+        return "mock"
+
+    async def complete(self, *args, **kwargs):
+        raise AssertionError("streaming callback must use provider.stream()")
+
+    async def stream(self, *args, **kwargs):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_stream_callback_forwards_deltas_with_seq(tmp_workspace: Path):
+    provider = _StreamingProvider(chunks=["Hel", "lo ", "world"])
+    received: list[tuple[str, int]] = []
+    agent = AgentLoop(
+        bus=MessageBus(),
+        workspace=tmp_workspace,
+        identity=Identity(),
+        provider=provider,
+        storage_config=StorageConfig(sqlite=SQLiteConfig(path=str(tmp_workspace / "loop.db"))),
+        stream_callback=lambda chunk, seq: received.append((chunk, seq)),
+    )
+
+    response = await agent._call_provider_with_retry([], enable_tools=False)
+
+    assert response.content == "Hello world"
+    assert received == [("Hel", 1), ("lo ", 1), ("world", 1)]
+    assert agent._stream_call_seq == 1
+
+    # A second call bumps the sequence so consumers can drop stale deltas.
+    await agent._call_provider_with_retry([], enable_tools=False)
+    assert agent._stream_call_seq == 2
+
+    await agent.close()
+
+
+class _UsageReportingProvider:
+    name = "usage"
+
+    def __init__(self, usage: dict) -> None:
+        self.usage = usage
+
+    def get_default_model(self) -> str:
+        return "mock"
+
+    async def complete(self, *args, **kwargs):
+        return LLMResponse(content="ok", model="mock", usage=self.usage)
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_usage_callback_tracks_latest_prompt_tokens(tmp_workspace: Path):
+    # prompt_tokens already includes conversation history, so the meter must
+    # show the latest call's value — never a running sum (double-counts).
+    provider = _UsageReportingProvider(usage={"prompt_tokens": 100, "completion_tokens": 50})
+    reported: list[int] = []
+    agent = AgentLoop(
+        bus=MessageBus(),
+        workspace=tmp_workspace,
+        identity=Identity(),
+        provider=provider,
+        storage_config=StorageConfig(sqlite=SQLiteConfig(path=str(tmp_workspace / "loop.db"))),
+    )
+    agent.set_usage_callback(reported.append)
+
+    await agent._call_provider_with_retry([], enable_tools=False)
+    await agent._call_provider_with_retry([], enable_tools=False)
+
+    assert reported == [100, 100]  # growing conversation would raise the number
+    assert agent._context_used_tokens == 100
+
+    await agent.close()

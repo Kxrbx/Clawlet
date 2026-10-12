@@ -7,7 +7,6 @@ import stat
 import tempfile
 from pathlib import Path
 
-from clawlet.cli.onboard import _merge_channel_tokens_into_config
 from clawlet.config import Config, ProviderConfig, OllamaConfig
 from clawlet.tools.http_request import HttpRequestTool
 
@@ -16,21 +15,8 @@ def main() -> int:
     workspace_dir = Path(tempfile.mkdtemp(prefix="clawlet-release-regression-"))
     try:
         config = Config(provider=ProviderConfig(primary="ollama", ollama=OllamaConfig()))
-        _merge_channel_tokens_into_config(
-            config,
-            telegram_token="test-telegram-token",
-            discord_token="test-discord-token",
-        )
         config_path = workspace_dir / "config.yaml"
         config.save(config_path)
-
-        loaded = Config.from_yaml(config_path)
-        telegram = loaded.channels.get("telegram", {})
-        discord = loaded.channels.get("discord", {})
-        if not bool(getattr(telegram, "enabled", telegram.get("enabled", False))):
-            raise SystemExit("Onboarding channel merge did not enable telegram in canonical channels config")
-        if not bool(getattr(discord, "enabled", discord.get("enabled", False))):
-            raise SystemExit("Onboarding channel merge did not enable discord in canonical channels config")
 
         mode = stat.S_IMODE(config_path.stat().st_mode)
         if mode != 0o600:
@@ -49,7 +35,7 @@ def main() -> int:
                 }
             },
         )
-        explicit_headers = tool._apply_local_auth(
+        explicit_headers, _ = tool._apply_local_auth(
             "https://api.example.com/v1/status",
             {},
             auth_profile="example_service",
@@ -57,7 +43,7 @@ def main() -> int:
         if explicit_headers.get("Authorization") != "Bearer example-token":
             raise SystemExit("Explicit auth_profile did not inject the configured bearer token")
 
-        implicit_headers = tool._apply_local_auth("https://api.example.com/v1/status", {}, auth_profile=None)
+        implicit_headers, _ = tool._apply_local_auth("https://api.example.com/v1/status", {}, auth_profile=None)
         if "Authorization" in implicit_headers:
             raise SystemExit("http_request injected credentials without an explicit auth_profile")
 
@@ -69,7 +55,7 @@ def main() -> int:
         try:
             moltbook_creds_path.write_text('{"api_key":"moltbook-test-token"}', encoding="utf-8")
             os.environ.pop("MOLTBOOK_API_KEY", None)
-            moltbook_headers = tool._apply_local_auth(
+            moltbook_headers, _ = tool._apply_local_auth(
                 "https://www.moltbook.com/api/v1/home",
                 {},
                 auth_profile="moltbook",

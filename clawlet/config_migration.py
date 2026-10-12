@@ -40,14 +40,6 @@ class ConfigMigrationReport:
         return bool(self.errors)
 
 
-@dataclass(slots=True)
-class ConfigMigrationApplyResult:
-    config_path: str
-    changed: bool
-    actions: list[str] = field(default_factory=list)
-    backup_path: str = ""
-
-
 def analyze_config_migration(config_path: Path) -> ConfigMigrationReport:
     """Analyze config for legacy keys and migration opportunities."""
     report = ConfigMigrationReport(config_path=str(config_path))
@@ -89,7 +81,6 @@ def analyze_config_migration(config_path: Path) -> ConfigMigrationReport:
         )
         return report
 
-    _check_legacy_channel_shape(raw, report)
     _check_legacy_agent_keys(raw, report)
     _check_provider_shape(raw, report)
     _check_unknown_top_level(raw, report)
@@ -101,49 +92,10 @@ def summarize_migration_hints(report: ConfigMigrationReport, max_items: int = 10
     """Create short user-facing migration hint lines from an analysis report."""
     hints: list[str] = []
     for issue in report.issues[: max(1, int(max_items))]:
-        auto = " (autofixable)" if issue.can_autofix else ""
-        hints.append(f"{issue.severity.upper()} {issue.path}: {issue.message}{auto}. Hint: {issue.hint}")
+        hints.append(f"{issue.severity.upper()} {issue.path}: {issue.message}. Hint: {issue.hint}")
     return hints
 
 
-def apply_config_migration_autofix(
-    config_path: Path,
-    *,
-    write: bool = False,
-    create_backup: bool = True,
-) -> ConfigMigrationApplyResult:
-    """Apply safe, backward-compatible config migration fixes."""
-    actions: list[str] = []
-    raw, _ = _load_raw(config_path)
-    if not isinstance(raw, dict):
-        return ConfigMigrationApplyResult(
-            config_path=str(config_path),
-            changed=False,
-            actions=["Config is missing/invalid; no autofix applied"],
-            backup_path="",
-        )
-
-    changed = False
-    changed |= _autofix_channels(raw, actions)
-    changed |= _autofix_agent_legacy_keys(raw, actions)
-
-    backup_path = ""
-    if write and changed:
-        if create_backup:
-            backup = config_path.with_suffix(config_path.suffix + ".bak")
-            backup.write_text(config_path.read_text(encoding="utf-8"), encoding="utf-8")
-            backup_path = str(backup)
-        config_path.write_text(
-            yaml.safe_dump(raw, sort_keys=False, default_flow_style=False),
-            encoding="utf-8",
-        )
-
-    return ConfigMigrationApplyResult(
-        config_path=str(config_path),
-        changed=changed,
-        actions=actions,
-        backup_path=backup_path,
-    )
 
 
 def _load_raw(config_path: Path) -> tuple[Any, str]:
@@ -156,81 +108,6 @@ def _load_raw(config_path: Path) -> tuple[Any, str]:
     return raw, ""
 
 
-def _autofix_channels(raw: dict[str, Any], actions: list[str]) -> bool:
-    changed = False
-    channels = raw.get("channels")
-    if channels is None:
-        channels = {}
-        raw["channels"] = channels
-        changed = True
-        actions.append("Created `channels` section")
-    if not isinstance(channels, dict):
-        return changed
-
-    for key in ("telegram", "discord", "whatsapp", "slack"):
-        if key not in raw:
-            continue
-        if key not in channels:
-            channels[key] = raw[key]
-            actions.append(f"Moved root `{key}` -> `channels.{key}`")
-            changed = True
-        del raw[key]
-        changed = True
-    return changed
-
-
-def _autofix_agent_legacy_keys(raw: dict[str, Any], actions: list[str]) -> bool:
-    agent = raw.get("agent")
-    if not isinstance(agent, dict):
-        return False
-
-    changed = False
-    if "mode" not in agent and "full_exec" in agent:
-        full_exec = bool(agent.get("full_exec"))
-        agent["mode"] = "full_exec" if full_exec else "safe"
-        actions.append("Mapped `agent.full_exec` -> `agent.mode`")
-        changed = True
-    if "full_exec" in agent:
-        del agent["full_exec"]
-        actions.append("Removed deprecated key `agent.full_exec`")
-        changed = True
-
-    if "mode" not in agent and "execution_mode" in agent:
-        agent["mode"] = str(agent.get("execution_mode") or "safe")
-        actions.append("Mapped `agent.execution_mode` -> `agent.mode`")
-        changed = True
-    if "execution_mode" in agent:
-        del agent["execution_mode"]
-        actions.append("Removed deprecated key `agent.execution_mode`")
-        changed = True
-    return changed
-
-
-def _check_legacy_channel_shape(raw: dict[str, Any], report: ConfigMigrationReport) -> None:
-    legacy_channel_keys = ("telegram", "discord", "whatsapp", "slack")
-    for key in legacy_channel_keys:
-        if key in raw:
-            report.issues.append(
-                MigrationIssue(
-                    severity="warning",
-                    path=key,
-                    message=f"Legacy root-level channel key `{key}` detected",
-                    hint=f"Move `{key}` under `channels.{key}`",
-                    can_autofix=True,
-                )
-            )
-
-    channels = raw.get("channels")
-    if channels is not None and not isinstance(channels, dict):
-        report.issues.append(
-            MigrationIssue(
-                severity="error",
-                path="channels",
-                message="`channels` must be an object",
-                hint="Set `channels` to a map with keys like telegram/discord",
-                can_autofix=False,
-            )
-        )
 
 
 def _check_legacy_agent_keys(raw: dict[str, Any], report: ConfigMigrationReport) -> None:
@@ -303,7 +180,6 @@ def _check_provider_shape(raw: dict[str, Any], report: ConfigMigrationReport) ->
 def _check_unknown_top_level(raw: dict[str, Any], report: ConfigMigrationReport) -> None:
     known = {
         "provider",
-        "channels",
         "storage",
         "agent",
         "heartbeat",
@@ -311,12 +187,11 @@ def _check_unknown_top_level(raw: dict[str, Any], report: ConfigMigrationReport)
         "web_search",
         "runtime",
         "benchmarks",
-        "plugins",
-        # legacy keys handled separately
-        "telegram",
-        "discord",
-        "whatsapp",
-        "slack",
+        "orchestrator",
+        "task_profiles",
+        "rate_limit",
+        "http_auth_profiles",
+        "config_path",
     }
     unknown = sorted(k for k in raw.keys() if k not in known)
     for key in unknown:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 from clawlet.tools.files import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
@@ -11,7 +10,6 @@ from clawlet.tools.patch import ApplyPatchTool
 from clawlet.tools.fetch_url import FetchUrlTool
 from clawlet.tools.http_request import HttpRequestTool
 from clawlet.tools.memory import MemoryTools
-from clawlet.tools.notes import NotesTools
 from clawlet.tools.registry import ToolRegistry
 from clawlet.tools.shell import ShellTool
 from clawlet.tools.skills import InstallSkillTool, ListSkillsTool
@@ -34,15 +32,14 @@ def register_file_and_shell_tools(
 ) -> None:
     agent_mode = getattr(getattr(config, "agent", None), "mode", "safe") if config is not None else "safe"
     allow_dangerous = bool(getattr(getattr(config, "agent", None), "shell_allow_dangerous", False)) if config is not None else False
-    use_rust_core = False
     effective_allowed_dir = None if agent_mode == "full_exec" else allowed_dir
 
     tools = [
-        ReadFileTool(allowed_dir, use_rust_core=use_rust_core),
-        WriteFileTool(allowed_dir, use_rust_core=use_rust_core),
-        EditFileTool(allowed_dir, use_rust_core=use_rust_core),
-        ApplyPatchTool(allowed_dir, use_rust_core=use_rust_core),
-        ListDirTool(allowed_dir, use_rust_core=use_rust_core),
+        ReadFileTool(allowed_dir),
+        WriteFileTool(allowed_dir),
+        EditFileTool(allowed_dir),
+        ApplyPatchTool(allowed_dir),
+        ListDirTool(allowed_dir),
     ]
     for tool in tools:
         registry.register(tool)
@@ -50,7 +47,6 @@ def register_file_and_shell_tools(
     shell_tool = ShellTool(
         workspace=effective_allowed_dir,
         allow_dangerous=allow_dangerous,
-        use_rust_core=use_rust_core,
     )
     if agent_mode == "full_exec":
         shell_tool.add_allowed(*FULL_EXEC_COMMANDS)
@@ -113,38 +109,3 @@ def register_memory_tools(
     registry.register_alias("daily_notes", "review_daily_notes")
     registry.register_alias("memory_maintenance", "curate_memory")
     registry.register_alias("memory_overview", "memory_status")
-
-
-def register_notes_tools(
-    registry: ToolRegistry,
-    *,
-    workspace: str | None,
-) -> None:
-    if not workspace:
-        return
-    notes_tools = NotesTools(workspace)
-    for tool in notes_tools.all_tools():
-        registry.register(tool)
-
-
-def register_plugin_tools(
-    registry: ToolRegistry,
-    *,
-    allowed_dir: str | None,
-    config: Any = None,
-) -> None:
-    plugin_cfg = getattr(config, "plugins", None) if config is not None else None
-    if not plugin_cfg or not plugin_cfg.auto_load:
-        return
-    base_dir = Path(allowed_dir).expanduser() if allowed_dir else Path.cwd()
-    plugin_dirs = []
-    for raw_dir in plugin_cfg.directories:
-        candidate = Path(raw_dir).expanduser()
-        if not candidate.is_absolute():
-            candidate = base_dir / candidate
-        plugin_dirs.append(candidate)
-    from clawlet.plugins.loader import PluginLoader
-
-    loader = PluginLoader(plugin_dirs)
-    for tool in loader.load_tools():
-        registry.register(tool)

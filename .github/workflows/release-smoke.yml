@@ -8,25 +8,39 @@ on:
   pull_request:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Clawlet
+        run: uv sync --extra dev
+
+      - name: Run unit tests with coverage (report only, non-blocking threshold)
+        run: uv run pytest -q --cov=clawlet --cov-report=term-missing
+
   smoke:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
 
-      - name: Upgrade packaging tools
-        run: python -m pip install --upgrade pip setuptools wheel
-
       - name: Install Clawlet
-        run: python -m pip install -e .
+        run: uv sync --extra dev
 
       - name: Run release smoke checks
-        run: python scripts/release_smoke.py
+        run: uv run python scripts/release_smoke.py
 
       - name: Run release regression checks
-        run: python scripts/release_regression.py
+        run: uv run python scripts/release_regression.py

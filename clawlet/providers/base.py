@@ -147,6 +147,7 @@ class BaseProvider(ABC):
     
     def __init__(self):
         self._http_manager: Optional[HTTPClientManager] = None
+        self.last_stream_usage: Dict[str, Any] = {}
     
     @property
     @abstractmethod
@@ -175,7 +176,12 @@ class BaseProvider(ABC):
         max_tokens: int = 4096,
         **kwargs
     ) -> AsyncIterator[str]:
-        """Stream a chat completion."""
+        """Stream a chat completion.
+
+        Implementations SHOULD record OpenAI-style usage seen during the
+        stream on ``self.last_stream_usage`` (keys prompt_tokens /
+        completion_tokens / total_tokens, default {}).
+        """
         pass
     
     @abstractmethod
@@ -212,11 +218,15 @@ class BaseProvider(ABC):
             An httpx.AsyncClient configured for this provider
         """
         manager = get_http_client_manager()
-        
-        # Get limits from the shared client if it exists
-        limits: Optional[httpx.Limits] = None
-        if manager._client is not None:
-            limits = cast(Optional[httpx.Limits], getattr(manager._client, "_limits", None))
+
+        # Reuse the shared pool sizing (public config — never reach into
+        # another object's private client). Per-provider base_url/headers
+        # still require a dedicated client instance.
+        limits = httpx.Limits(
+            max_connections=manager.config.max_connections,
+            max_keepalive_connections=manager.config.max_keepalive_connections,
+            keepalive_expiry=manager.config.keepalive_expiry,
+        )
 
         client_kwargs: Dict[str, Any] = {
             "headers": headers,

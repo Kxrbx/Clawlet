@@ -28,6 +28,51 @@ _API_KEY_PLACEHOLDER = "your_api_key_here"
 ANTHROPIC_VERSION = "2023-06-01"
 
 
+def _convert_messages(messages: list[dict]) -> tuple[list[dict], str]:
+    """Convert OpenAI-style messages to Anthropic format.
+
+    Returns (anthropic_messages, system_text). System-role contents are
+    collected and joined with "\\n\\n"; caller sends them as top-level `system`.
+    """
+    system_parts = []
+    anthropic_messages = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            if content:
+                system_parts.append(content if isinstance(content, str) else str(content))
+            continue
+        # Anthropic only supports 'user' and 'assistant' roles
+        if role in ("user", "assistant"):
+            anthropic_messages.append({
+                "role": role,
+                "content": content
+            })
+    return anthropic_messages, "\n\n".join(system_parts)
+
+
+def _translate_tools(kwargs: dict) -> dict:
+    """Pop OpenAI-format tools/tool_choice; return Anthropic equivalents."""
+    tools = kwargs.pop("tools", None)
+    tool_choice = kwargs.pop("tool_choice", None)
+    extra: dict = {}
+    if tools:
+        extra["tools"] = [
+            {
+                "name": t.get("function", {}).get("name", ""),
+                "description": t.get("function", {}).get("description", ""),
+                "input_schema": t.get("function", {}).get("parameters", {}),
+            }
+            for t in tools
+        ]
+        if tool_choice == "auto":
+            extra["tool_choice"] = {"type": "auto"}
+        elif isinstance(tool_choice, dict):
+            extra["tool_choice"] = tool_choice
+    return extra
+
+
 class AnthropicProvider(BaseProvider):
     """Anthropic API provider."""
     
@@ -68,6 +113,7 @@ class AnthropicProvider(BaseProvider):
         self.base_url = base_url or self.BASE_URL
         self.api_version = api_version
         self._client: Optional[httpx.AsyncClient] = None
+        self.last_stream_usage: dict = {}
         
         logger.info(f"Anthropic provider initialized with model={default_model}")
     
@@ -107,25 +153,19 @@ class AnthropicProvider(BaseProvider):
         
         # Anthropic uses a different message format
         # Convert OpenAI-style messages to Anthropic format
-        anthropic_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # Anthropic only supports 'user' and 'assistant' roles
-            if role in ("user", "assistant"):
-                anthropic_messages.append({
-                    "role": role,
-                    "content": content
-                })
+        anthropic_messages, system_text = _convert_messages(messages)
+        tool_params = _translate_tools(kwargs)
         
         payload = {
             "model": model,
             "messages": anthropic_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            **kwargs
+            **kwargs,
+            **tool_params,
         }
+        if system_text:
+            payload["system"] = system_text
         
         logger.info(f"Anthropic request: model={model}, messages={len(messages)}")
         
@@ -173,18 +213,11 @@ class AnthropicProvider(BaseProvider):
         """Stream a chat completion using Anthropic's Messages API."""
         model = model or self.default_model
         client = await self._get_client()
+        self.last_stream_usage = {}
         
         # Convert messages to Anthropic format
-        anthropic_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role in ("user", "assistant"):
-                anthropic_messages.append({
-                    "role": role,
-                    "content": content
-                })
+        anthropic_messages, system_text = _convert_messages(messages)
+        tool_params = _translate_tools(kwargs)
         
         payload = {
             "model": model,
@@ -192,8 +225,11 @@ class AnthropicProvider(BaseProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
-            **kwargs
+            **kwargs,
+            **tool_params,
         }
+        if system_text:
+            payload["system"] = system_text
         
         logger.debug(f"Anthropic stream request: model={model}")
         
@@ -214,7 +250,15 @@ class AnthropicProvider(BaseProvider):
                             
                             # Handle Anthropic streaming format
                             if "type" in data:
-                                if data["type"] == "content_block_delta":
+                                if data["type"] == "message_start":
+                                    usage = (data.get("message") or {}).get("usage") or {}
+                                    if "input_tokens" in usage:
+                                        self.last_stream_usage["prompt_tokens"] = usage["input_tokens"]
+                                elif data["type"] == "message_delta":
+                                    usage = data.get("usage") or {}
+                                    if "output_tokens" in usage:
+                                        self.last_stream_usage["completion_tokens"] = usage["output_tokens"]
+                                elif data["type"] == "content_block_delta":
                                     delta = data.get("delta", {})
                                     if delta.get("type") == "text_delta":
                                         content = delta.get("text", "")
