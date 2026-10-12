@@ -132,6 +132,12 @@ def spawn_child_loop(
         storage_config=getattr(parent_loop, "storage_config", None),
         runtime_config=getattr(parent_loop, "runtime_config", None),
     )
+    # The parent owns shared persistence and approvals beyond this child's turn.
+    child.storage = parent_loop.storage
+    child._storage_ready = parent_loop._storage_ready
+    child._persist_message = parent_loop._persist_message
+    child._persist_tasks = parent_loop._persist_tasks
+    child._approval_service = parent_loop._approval_service
     # Lineage for SessionDB / replay (consumed in Phase 2, stored meanwhile).
     child._parent_session_id = spec.parent_session_id
     child._task_kind = spec.kind

@@ -303,6 +303,8 @@ async def create_local_runtime(workspace: Path, model: str | None, emit: EventSi
             await close()
         agent.provider = new_provider
         agent.model = model
+        config.provider.primary = provider_name
+        getattr(config.provider, provider_name).model = model
         # ponytail: manual switch clears a tripped breaker, new model gets a clean slate
         agent._provider_circuit_breaker.record_success()
         return old_label, f"{new_provider.name}/{new_provider.get_default_model()}"

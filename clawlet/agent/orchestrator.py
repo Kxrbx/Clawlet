@@ -25,6 +25,7 @@ from typing import Any
 from loguru import logger
 
 from clawlet.agent import task_router
+from clawlet.agent.models import ConversationState, Message
 from clawlet.agent.subagent import (
     SubagentSpec,
     build_instruction,
@@ -191,15 +192,18 @@ class Orchestrator:
             )
         try:
             child = spawn_child_loop(self.agent, spec, profile)
+            child._conversations[f"{msg.channel}:{msg.chat_id}"] = ConversationState(
+                session_id=spec.session_id
+            )
         except Exception as e:
             logger.error(f"Sub-agent spawn failed for kind={decision.kind}: {e}")
             return DelegationResult(
                 kind=decision.kind, output=None, profile=profile, error=str(e)
             )
-        await self._record_lineage(
-            spec, profile, source=str(getattr(msg, "channel", "") or "")
-        )
         try:
+            await self._record_lineage(
+                spec, profile, source=str(getattr(msg, "channel", "") or "")
+            )
             child_msg = self._child_message(msg, spec, profile)
             result = await asyncio.wait_for(
                 RunOrchestrator(child).process_message(child_msg),
@@ -221,6 +225,13 @@ class Orchestrator:
             return DelegationResult(
                 kind=decision.kind, output=None, profile=profile, error=str(e)
             )
+        finally:
+            close = getattr(child.provider, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception as e:
+                    logger.warning(f"Sub-agent provider close failed: {e}")
 
     # -- entry point ----------------------------------------------------
     async def process_message(
@@ -236,6 +247,13 @@ class Orchestrator:
         returns ``None`` so the caller can run its default path.
         """
         text = str(getattr(msg, "content", "") or "")
+        approvals = getattr(self.agent, "_approval_service", None)
+        if (
+            approvals is not None
+            and approvals.get(f"{msg.channel}:{msg.chat_id}") is not None
+            and fallback_runner is not None
+        ):
+            return await fallback_runner(msg)
         decision = await self.decide(text)
         logger.info(
             f"Orchestrator decision: kind={decision.kind} fallback={decision.direct_fallback} ({decision.reason})"
@@ -247,6 +265,11 @@ class Orchestrator:
         result = await self.dispatch_single(msg, decision)
         if result.output is not None:
             self._tag_output(result)
+            convo = await self.agent._get_conversation_state(msg.channel, msg.chat_id)
+            for role, content in (("user", text), ("assistant", result.output.content)):
+                convo.history.append(Message(role=role, content=content))
+                self.agent._queue_persist(convo.session_id, role, content, msg.metadata)
+            self.agent._trim_history(convo.history)
             return result.output
         # Child failed and no fallback runner configured -> surface the error
         # as a normal reply so the user is never left hanging.
@@ -302,7 +325,10 @@ class Orchestrator:
             }
         )
         try:
-            return dataclasses.replace(msg, metadata=metadata)
+            content = spec.instruction
+            if spec.context_slice:
+                content = f"Recent conversation context:\n{spec.context_slice}\n\n{content}"
+            return dataclasses.replace(msg, content=content, metadata=metadata)
         except Exception:
             return msg
 
